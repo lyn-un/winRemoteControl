@@ -1,0 +1,285 @@
+#include "capture/captureworker.h"
+
+#include "capture/captureframe.h"
+#include "capture/dxgidesktopduplicator.h"
+#include "codec/h264decoder.h"
+#include "codec/h264encoder.h"
+
+#include <QtCore/QThread>
+#include <QtCore/QElapsedTimer>
+
+#include <algorithm>
+#include <cstring>
+#include <cmath>
+#include <vector>
+
+#include <libyuv.h>
+
+KCaptureWorker::KCaptureWorker(WorkMode mode, QObject *pParent)
+	: QObject(pParent)
+	, m_mode(mode)
+{
+}
+
+KCaptureWorker::~KCaptureWorker()
+{
+	stopWork();
+}
+
+void KCaptureWorker::startWork()
+{
+	if (m_bRunning.exchange(true))
+		return;
+
+	emit statusChanged(QStringLiteral("Capturing"));
+
+	KDxgiDesktopDuplicator duplicator;
+	KH264Encoder h264Encoder;
+	KH264Decoder h264Decoder;
+	bool bCodecOpen = false;
+	bool bDecodeOk = true;
+	QString strError;
+	QElapsedTimer frameTimer;
+	if (!duplicator.initialize(&strError))
+	{
+		m_bRunning = false;
+		emit captureError(strError);
+		emit statusChanged(QStringLiteral("Error"));
+		emit workFinished();
+		return;
+	}
+
+	if (m_mode == LocalPreviewWorkMode && !h264Decoder.open(&strError))
+	{
+		m_bRunning = false;
+		emit captureError(strError);
+		emit statusChanged(QStringLiteral("Error"));
+		duplicator.shutdown();
+		emit workFinished();
+		return;
+	}
+
+	while (m_bRunning)
+	{
+		frameTimer.restart();
+		const KStreamConfig currentConfig = streamConfig();
+		KCaptureFrame frame;
+		strError.clear();
+		const KDxgiDesktopDuplicator::CaptureResult result = duplicator.captureNextFrame(&frame, &strError);
+		if (result == KDxgiDesktopDuplicator::TimeoutCaptureResult)
+			continue;
+		if (result == KDxgiDesktopDuplicator::ErrorCaptureResult)
+		{
+			m_bRunning = false;
+			emit captureError(strError);
+			emit statusChanged(QStringLiteral("Error"));
+			break;
+		}
+
+		if (m_mode == WebRtcSourceWorkMode)
+		{
+			KWebRtcVideoFrame videoFrame;
+			if (!convertBgraToI420(frame, currentConfig, &videoFrame))
+			{
+				m_bRunning = false;
+				emit captureError(QStringLiteral("Convert BGRA to I420 failed"));
+				emit statusChanged(QStringLiteral("Error"));
+				break;
+			}
+
+			emit webRtcFrameReady(videoFrame);
+			emit frameReady(frame.nWidth, frame.nHeight, frame.nFrameIndex, frame.nTimestampMs);
+			const int nFrameIntervalMs = std::max(1, 1000 / std::max(1, currentConfig.nFps));
+			const qint64 nSleepMs = static_cast<qint64>(nFrameIntervalMs) - frameTimer.elapsed();
+			if (nSleepMs > 0)
+				QThread::msleep(static_cast<unsigned long>(nSleepMs));
+			continue;
+		}
+
+		quint64 nCurrentFrameIndex = frame.nFrameIndex;
+		qint64 nCurrentTimestampMs = frame.nTimestampMs;
+		bDecodeOk = true;
+		if (!bCodecOpen)
+		{
+			strError.clear();
+			if (h264Encoder.openStream(frame.nWidth,
+					frame.nHeight,
+					10,
+					[this, &h264Decoder, &strError, &nCurrentFrameIndex, &nCurrentTimestampMs, &bDecodeOk](
+						const QByteArray &videoData)
+					{
+						std::vector<KDecodedVideoFrame> vecDecodedFrames;
+						if (!h264Decoder.decode(videoData,
+								nCurrentFrameIndex,
+								nCurrentTimestampMs,
+								&vecDecodedFrames,
+								&strError))
+						{
+							bDecodeOk = false;
+							return;
+						}
+
+						for (const KDecodedVideoFrame &decodedFrame : vecDecodedFrames)
+							emit decodedFrameReady(decodedFrame);
+					},
+					&strError))
+			{
+				bCodecOpen = true;
+			}
+			else
+			{
+				m_bRunning = false;
+				emit captureError(strError);
+				emit statusChanged(QStringLiteral("Error"));
+				break;
+			}
+		}
+
+		strError.clear();
+		if (!h264Encoder.encodeBgraFrame(frame.vecBgraBuffer.data(),
+				frame.nWidth,
+				frame.nHeight,
+				frame.nTimestampMs,
+				&strError))
+		{
+			m_bRunning = false;
+			emit captureError(strError.isEmpty() ? QStringLiteral("H.264 encode/decode failed") : strError);
+			emit statusChanged(QStringLiteral("Error"));
+			break;
+		}
+		if (!bDecodeOk)
+		{
+			m_bRunning = false;
+			emit captureError(strError.isEmpty() ? QStringLiteral("H.264 decode failed") : strError);
+			emit statusChanged(QStringLiteral("Error"));
+			break;
+		}
+
+		emit frameReady(frame.nWidth, frame.nHeight, frame.nFrameIndex, frame.nTimestampMs);
+
+		const int nFrameIntervalMs = std::max(1, 1000 / std::max(1, currentConfig.nFps));
+		const qint64 nSleepMs = static_cast<qint64>(nFrameIntervalMs) - frameTimer.elapsed();
+		if (nSleepMs > 0)
+			QThread::msleep(static_cast<unsigned long>(nSleepMs));
+	}
+
+	if (bCodecOpen)
+		h264Encoder.close(nullptr);
+	if (m_mode == LocalPreviewWorkMode)
+		h264Decoder.close();
+
+	duplicator.shutdown();
+	emit workFinished();
+}
+
+void KCaptureWorker::stopWork()
+{
+	m_bRunning = false;
+}
+
+void KCaptureWorker::setStreamConfig(const KStreamConfig &config)
+{
+	std::lock_guard<std::mutex> guard(m_configMutex);
+	m_streamConfig = normalizeStreamConfig(config);
+}
+
+KStreamConfig KCaptureWorker::streamConfig() const
+{
+	std::lock_guard<std::mutex> guard(m_configMutex);
+	return m_streamConfig;
+}
+
+KStreamConfig KCaptureWorker::normalizeStreamConfig(const KStreamConfig &config)
+{
+	KStreamConfig normalizedConfig = config;
+	normalizedConfig.nFps = std::clamp(normalizedConfig.nFps, 1, 60);
+	normalizedConfig.nWidth = std::max(0, normalizedConfig.nWidth);
+	normalizedConfig.nHeight = std::max(0, normalizedConfig.nHeight);
+	normalizedConfig.nBitrateKbps = std::max(500, normalizedConfig.nBitrateKbps);
+	return normalizedConfig;
+}
+
+bool KCaptureWorker::convertBgraToI420(const KCaptureFrame &captureFrame,
+	const KStreamConfig &config,
+	KWebRtcVideoFrame *pVideoFrame)
+{
+	if (pVideoFrame == nullptr || captureFrame.nWidth < 2 || captureFrame.nHeight < 2
+		|| captureFrame.vecBgraBuffer.empty())
+	{
+		return false;
+	}
+
+	int nWidth = captureFrame.nWidth & ~1;
+	int nHeight = captureFrame.nHeight & ~1;
+	std::vector<unsigned char> scaledBgraBuffer;
+	const unsigned char *pSrc = captureFrame.vecBgraBuffer.data();
+	int nSrcStride = captureFrame.nWidth * 4;
+	if (config.nWidth > 0 && config.nHeight > 0)
+	{
+		const double fScaleX = static_cast<double>(config.nWidth) / static_cast<double>(captureFrame.nWidth);
+		const double fScaleY = static_cast<double>(config.nHeight) / static_cast<double>(captureFrame.nHeight);
+		const double fScale = std::min({ fScaleX, fScaleY, 1.0 });
+		nWidth = std::max(2, static_cast<int>(std::floor(captureFrame.nWidth * fScale)) & ~1);
+		nHeight = std::max(2, static_cast<int>(std::floor(captureFrame.nHeight * fScale)) & ~1);
+		if ((nWidth != (captureFrame.nWidth & ~1) || nHeight != (captureFrame.nHeight & ~1))
+			&& !resizeBgraFrame(captureFrame, nWidth, nHeight, &scaledBgraBuffer))
+		{
+			return false;
+		}
+		if (!scaledBgraBuffer.empty())
+		{
+			pSrc = scaledBgraBuffer.data();
+			nSrcStride = nWidth * 4;
+		}
+	}
+
+	pVideoFrame->nWidth = nWidth;
+	pVideoFrame->nHeight = nHeight;
+	pVideoFrame->nFrameIndex = captureFrame.nFrameIndex;
+	pVideoFrame->nTimestampMs = captureFrame.nTimestampMs;
+	pVideoFrame->nStrideY = nWidth;
+	pVideoFrame->nStrideU = nWidth / 2;
+	pVideoFrame->nStrideV = nWidth / 2;
+	pVideoFrame->yPlane.resize(nWidth * nHeight);
+	pVideoFrame->uPlane.resize((nWidth / 2) * (nHeight / 2));
+	pVideoFrame->vPlane.resize((nWidth / 2) * (nHeight / 2));
+
+	unsigned char *pYPlane = reinterpret_cast<unsigned char *>(pVideoFrame->yPlane.data());
+	unsigned char *pUPlane = reinterpret_cast<unsigned char *>(pVideoFrame->uPlane.data());
+	unsigned char *pVPlane = reinterpret_cast<unsigned char *>(pVideoFrame->vPlane.data());
+
+	const int nConvertResult = libyuv::ARGBToI420(pSrc,
+		nSrcStride,
+		pYPlane,
+		pVideoFrame->nStrideY,
+		pUPlane,
+		pVideoFrame->nStrideU,
+		pVPlane,
+		pVideoFrame->nStrideV,
+		nWidth,
+		nHeight);
+	return nConvertResult == 0;
+}
+
+bool KCaptureWorker::resizeBgraFrame(const KCaptureFrame &captureFrame,
+	int nTargetWidth,
+	int nTargetHeight,
+	std::vector<unsigned char> *pScaledBgraBuffer)
+{
+	if (pScaledBgraBuffer == nullptr || nTargetWidth <= 0 || nTargetHeight <= 0)
+		return false;
+
+	pScaledBgraBuffer->resize(static_cast<size_t>(nTargetWidth) * static_cast<size_t>(nTargetHeight) * 4);
+	const unsigned char *pSrc = captureFrame.vecBgraBuffer.data();
+	unsigned char *pDst = pScaledBgraBuffer->data();
+	const int nScaleResult = libyuv::ARGBScale(pSrc,
+		captureFrame.nWidth * 4,
+		captureFrame.nWidth,
+		captureFrame.nHeight,
+		pDst,
+		nTargetWidth * 4,
+		nTargetWidth,
+		nTargetHeight,
+		libyuv::kFilterBox);
+	return nScaleResult == 0;
+}

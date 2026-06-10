@@ -1,0 +1,36 @@
+# Build outputs
+/build/
+/build_*/
+/out/
+
+# Runtime logs and generated captures
+/logs/
+*.log
+*.old
+/recordings/
+
+# Frontend generated/dependency files
+/frontend/node_modules/
+/frontend/dist/
+
+# Third-party SDKs and local dependency checkouts are kept outside git history.
+# They are large, machine-specific, and already live in the workspace.
+/third_party/
+
+# Local project notes and helper scripts that are not part of the source snapshot.
+/AGENTS.md
+/D3D11_TO_WEBRTC_FLOW.md
+/PROJECT_FLOW.md
+/TODO.md
+/build_webrtc_msvcstl.bat
+/run_release.bat
+
+# Local editor and OS files
+.vs/
+.vscode/
+*.user
+*.suo
+*.VC.db
+*.VC.VC.opendb
+Thumbs.db
+Desktop.ini
