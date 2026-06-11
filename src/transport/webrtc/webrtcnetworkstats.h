@@ -11,6 +11,13 @@ struct KWebRtcNetworkStats
 	double fPacketLossRate = 0.0;
 	int nBitrateKbps = 0;
 	int nFps = 0;
+	int nDataChannelRttMs = -1;
+	int nJitterBufferDelayMs = -1;
+	int nJitterBufferTargetDelayMs = -1;
+	int nDecodeTimeMs = -1;
+	int nFramesDecoded = 0;
+	int nKeyFramesDecoded = 0;
+	int nFramesDropped = 0;
 	QString strQuality = QStringLiteral("unknown");
 };
 

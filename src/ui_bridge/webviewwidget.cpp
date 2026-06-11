@@ -105,6 +105,13 @@ void KWebViewWidget::sendNetworkStatsChanged(const KWebRtcNetworkStats &stats)
 	object.insert(QStringLiteral("packetLossRate"), stats.fPacketLossRate);
 	object.insert(QStringLiteral("bitrateKbps"), stats.nBitrateKbps);
 	object.insert(QStringLiteral("fps"), stats.nFps);
+	object.insert(QStringLiteral("dataChannelRttMs"), stats.nDataChannelRttMs);
+	object.insert(QStringLiteral("jitterBufferDelayMs"), stats.nJitterBufferDelayMs);
+	object.insert(QStringLiteral("jitterBufferTargetDelayMs"), stats.nJitterBufferTargetDelayMs);
+	object.insert(QStringLiteral("decodeTimeMs"), stats.nDecodeTimeMs);
+	object.insert(QStringLiteral("framesDecoded"), stats.nFramesDecoded);
+	object.insert(QStringLiteral("keyFramesDecoded"), stats.nKeyFramesDecoded);
+	object.insert(QStringLiteral("framesDropped"), stats.nFramesDropped);
 	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
 }
 

@@ -39,6 +39,7 @@
 #include <cstring>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <optional>
 
 class KStatsCallback : public webrtc::RTCStatsCollectorCallback
@@ -102,6 +103,10 @@ namespace
 	constexpr char kInputSeq[] = "seq";
 	constexpr char kInputTrace[] = "trace";
 	constexpr char kInputClientSendMs[] = "clientSendMs";
+	constexpr char kLatencyPing[] = "latencyPing";
+	constexpr char kLatencyPong[] = "latencyPong";
+	constexpr char kLatencyId[] = "id";
+	constexpr char kLatencySendMs[] = "sendMs";
 
 	static int secondsToMs(double fSeconds)
 	{
@@ -161,6 +166,12 @@ namespace
 	static bool shouldTraceInputMessage(const QJsonObject &object)
 	{
 		return object.value(QString::fromLatin1(kInputTrace)).toBool(false);
+	}
+
+	static bool isLatencyMessageType(const QString &strType)
+	{
+		return strType == QString::fromLatin1(kLatencyPing)
+			|| strType == QString::fromLatin1(kLatencyPong);
 	}
 
 	static QString inputTraceExtra(const QJsonObject &object)
@@ -499,6 +510,64 @@ void KWebRtcPeer::sendInputMessage(const QString &strMessage)
 	m_spInputDataChannel->Send(buffer);
 }
 
+void KWebRtcPeer::sendLatencyPing()
+{
+	if (m_role != ControllerRole
+		|| !m_spInputDataChannel
+		|| m_spInputDataChannel->state() != webrtc::DataChannelInterface::kOpen)
+	{
+		return;
+	}
+
+	QJsonObject object;
+	object.insert(QString::fromLatin1(kInputType), QString::fromLatin1(kLatencyPing));
+	object.insert(QString::fromLatin1(kLatencyId), QString::number(++m_nLatencyPingId));
+	object.insert(QString::fromLatin1(kLatencySendMs), QDateTime::currentMSecsSinceEpoch());
+
+	const QByteArray utf8Message = QJsonDocument(object).toJson(QJsonDocument::Compact);
+	webrtc::DataBuffer buffer(std::string(utf8Message.constData(),
+			static_cast<size_t>(utf8Message.size())));
+	m_spInputDataChannel->Send(buffer);
+}
+
+void KWebRtcPeer::handleLatencyPing(const QJsonObject &object)
+{
+	if (m_role != ControlledRole
+		|| !m_spInputDataChannel
+		|| m_spInputDataChannel->state() != webrtc::DataChannelInterface::kOpen)
+	{
+		return;
+	}
+
+	QJsonObject response;
+	response.insert(QString::fromLatin1(kInputType), QString::fromLatin1(kLatencyPong));
+	response.insert(QString::fromLatin1(kLatencyId), object.value(QString::fromLatin1(kLatencyId)));
+	response.insert(QString::fromLatin1(kLatencySendMs), object.value(QString::fromLatin1(kLatencySendMs)));
+
+	const QByteArray utf8Message = QJsonDocument(response).toJson(QJsonDocument::Compact);
+	webrtc::DataBuffer buffer(std::string(utf8Message.constData(),
+			static_cast<size_t>(utf8Message.size())));
+	m_spInputDataChannel->Send(buffer);
+}
+
+void KWebRtcPeer::handleLatencyPong(const QJsonObject &object)
+{
+	if (m_role != ControllerRole)
+		return;
+
+	const qint64 nSendMs =
+		static_cast<qint64>(object.value(QString::fromLatin1(kLatencySendMs)).toDouble(-1));
+	if (nSendMs < 0)
+		return;
+
+	m_nDataChannelRttMs = static_cast<int>(QDateTime::currentMSecsSinceEpoch() - nSendMs);
+	KLatencyTraceLogger::write(QStringLiteral("controller"),
+		QStringLiteral("datachannel_rtt"),
+		QStringLiteral("id=%1 rttMs=%2")
+			.arg(object.value(QString::fromLatin1(kLatencyId)).toString())
+			.arg(m_nDataChannelRttMs));
+}
+
 void KWebRtcPeer::sendSessionMessage(const QString &strMessage)
 {
 	if (!m_spSessionDataChannel || m_spSessionDataChannel->state() != webrtc::DataChannelInterface::kOpen)
@@ -573,6 +642,8 @@ void KWebRtcPeer::requestStats()
 	if (m_role != ControllerRole || !m_spPeerConnection || !m_spSignalingThread)
 		return;
 
+	sendLatencyPing();
+
 	webrtc::scoped_refptr<KStatsCallback> spCallback =
 		webrtc::make_ref_counted<KStatsCallback>(this);
 	webrtc::scoped_refptr<webrtc::PeerConnectionInterface> spPeerConnection = m_spPeerConnection;
@@ -591,6 +662,14 @@ void KWebRtcPeer::resetStatsHistory()
 	m_nPreviousBytesReceived = 0;
 	m_nPreviousPacketsReceived = 0;
 	m_nPreviousPacketsLost = 0;
+	m_fPreviousJitterBufferDelay = 0.0;
+	m_fPreviousJitterBufferTargetDelay = 0.0;
+	m_nPreviousJitterBufferEmittedCount = 0;
+	m_fPreviousTotalDecodeTime = 0.0;
+	m_nPreviousFramesDecoded = 0;
+	m_nPreviousKeyFramesDecoded = 0;
+	m_nPreviousFramesDropped = 0;
+	m_nDataChannelRttMs = -1;
 }
 
 void KWebRtcPeer::handleStatsReport(webrtc::scoped_refptr<const webrtc::RTCStatsReport> spReport)
@@ -604,6 +683,13 @@ void KWebRtcPeer::handleStatsReport(webrtc::scoped_refptr<const webrtc::RTCStats
 	quint64 nBytesReceived = 0;
 	qint64 nPacketsReceived = 0;
 	qint64 nPacketsLost = 0;
+	double fJitterBufferDelay = 0.0;
+	double fJitterBufferTargetDelay = 0.0;
+	quint64 nJitterBufferEmittedCount = 0;
+	double fTotalDecodeTime = 0.0;
+	qint64 nFramesDecoded = 0;
+	qint64 nKeyFramesDecoded = 0;
+	qint64 nFramesDropped = 0;
 	bool bHasInboundVideo = false;
 
 	for (const webrtc::RTCInboundRtpStreamStats *pInbound :
@@ -623,6 +709,20 @@ void KWebRtcPeer::handleStatsReport(webrtc::scoped_refptr<const webrtc::RTCStats
 			stats.nJitterMs = secondsToMs(*pInbound->jitter);
 		if (pInbound->frames_per_second)
 			stats.nFps = static_cast<int>(std::round(*pInbound->frames_per_second));
+		if (pInbound->jitter_buffer_delay)
+			fJitterBufferDelay = *pInbound->jitter_buffer_delay;
+		if (pInbound->jitter_buffer_target_delay)
+			fJitterBufferTargetDelay = *pInbound->jitter_buffer_target_delay;
+		if (pInbound->jitter_buffer_emitted_count)
+			nJitterBufferEmittedCount = *pInbound->jitter_buffer_emitted_count;
+		if (pInbound->total_decode_time)
+			fTotalDecodeTime = *pInbound->total_decode_time;
+		if (pInbound->frames_decoded)
+			nFramesDecoded = *pInbound->frames_decoded;
+		if (pInbound->key_frames_decoded)
+			nKeyFramesDecoded = *pInbound->key_frames_decoded;
+		if (pInbound->frames_dropped)
+			nFramesDropped = *pInbound->frames_dropped;
 		break;
 	}
 
@@ -655,6 +755,28 @@ void KWebRtcPeer::handleStatsReport(webrtc::scoped_refptr<const webrtc::RTCStats
 		if (nTotalPacketsDelta > 0)
 			stats.fPacketLossRate = static_cast<double>(std::max<qint64>(0, nLostDelta))
 				/ static_cast<double>(nTotalPacketsDelta);
+
+		const quint64 nJitterEmittedDelta =
+			nJitterBufferEmittedCount >= m_nPreviousJitterBufferEmittedCount
+			? nJitterBufferEmittedCount - m_nPreviousJitterBufferEmittedCount
+			: 0;
+		if (nJitterEmittedDelta > 0)
+		{
+			stats.nJitterBufferDelayMs = secondsToMs(
+				std::max(0.0, fJitterBufferDelay - m_fPreviousJitterBufferDelay)
+				/ static_cast<double>(nJitterEmittedDelta));
+			stats.nJitterBufferTargetDelayMs = secondsToMs(
+				std::max(0.0, fJitterBufferTargetDelay - m_fPreviousJitterBufferTargetDelay)
+				/ static_cast<double>(nJitterEmittedDelta));
+		}
+
+		const qint64 nFramesDecodedDelta = nFramesDecoded - m_nPreviousFramesDecoded;
+		if (nFramesDecodedDelta > 0)
+		{
+			stats.nDecodeTimeMs = secondsToMs(
+				std::max(0.0, fTotalDecodeTime - m_fPreviousTotalDecodeTime)
+				/ static_cast<double>(nFramesDecodedDelta));
+		}
 	}
 
 	if (bHasInboundVideo)
@@ -664,11 +786,34 @@ void KWebRtcPeer::handleStatsReport(webrtc::scoped_refptr<const webrtc::RTCStats
 		m_nPreviousBytesReceived = nBytesReceived;
 		m_nPreviousPacketsReceived = nPacketsReceived;
 		m_nPreviousPacketsLost = nPacketsLost;
+		m_fPreviousJitterBufferDelay = fJitterBufferDelay;
+		m_fPreviousJitterBufferTargetDelay = fJitterBufferTargetDelay;
+		m_nPreviousJitterBufferEmittedCount = nJitterBufferEmittedCount;
+		m_fPreviousTotalDecodeTime = fTotalDecodeTime;
+		m_nPreviousFramesDecoded = nFramesDecoded;
+		m_nPreviousKeyFramesDecoded = nKeyFramesDecoded;
+		m_nPreviousFramesDropped = nFramesDropped;
 	}
 
 	if (stats.nJitterMs < 0)
 		stats.nJitterMs = 0;
+	stats.nDataChannelRttMs = m_nDataChannelRttMs;
+	stats.nFramesDecoded = static_cast<int>(std::min<qint64>(nFramesDecoded, std::numeric_limits<int>::max()));
+	stats.nKeyFramesDecoded = static_cast<int>(std::min<qint64>(nKeyFramesDecoded, std::numeric_limits<int>::max()));
+	stats.nFramesDropped = static_cast<int>(std::min<qint64>(nFramesDropped, std::numeric_limits<int>::max()));
 	stats.strQuality = evaluateNetworkQuality(stats);
+	if (bHasInboundVideo)
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controller"),
+			QStringLiteral("video_stats"),
+			QStringLiteral("jitterBufferMs=%1 targetMs=%2 decodeMs=%3 framesDecoded=%4 keyFramesDecoded=%5 dropped=%6")
+				.arg(stats.nJitterBufferDelayMs)
+				.arg(stats.nJitterBufferTargetDelayMs)
+				.arg(stats.nDecodeTimeMs)
+				.arg(stats.nFramesDecoded)
+				.arg(stats.nKeyFramesDecoded)
+				.arg(stats.nFramesDropped));
+	}
 	emit networkStatsReady(stats);
 }
 
@@ -780,9 +925,17 @@ void KWebRtcPeer::OnMessage(const webrtc::DataBuffer &buffer)
 
 	const char *pData = reinterpret_cast<const char *>(buffer.data.data());
 	const QString strMessage = QString::fromUtf8(pData, static_cast<int>(buffer.data.size()));
-	if (isMouseInputMessage(strMessage))
+	const QJsonObject object = jsonObjectFromMessage(strMessage);
+	const QString strMessageType = object.value(QString::fromLatin1(kInputType)).toString();
+	if (isLatencyMessageType(strMessageType))
 	{
-		const QJsonObject object = jsonObjectFromMessage(strMessage);
+		if (strMessageType == QString::fromLatin1(kLatencyPing))
+			handleLatencyPing(object);
+		else if (strMessageType == QString::fromLatin1(kLatencyPong))
+			handleLatencyPong(object);
+	}
+	else if (isMouseInputMessage(strMessage))
+	{
 		if (shouldTraceInputMessage(object))
 		{
 			const qint64 nClientSendMs =

@@ -113,6 +113,9 @@ private:
 	void stopStatsPolling();
 	void requestStats();
 	void resetStatsHistory();
+	void sendLatencyPing();
+	void handleLatencyPing(const QJsonObject &object);
+	void handleLatencyPong(const QJsonObject &object);
 	static QString rtcErrorMessage(const QString &strPrefix, const webrtc::RTCError &error);
 
 	Role m_role = ControllerRole;
@@ -133,6 +136,15 @@ private:
 	quint64 m_nPreviousBytesReceived = 0;
 	qint64 m_nPreviousPacketsReceived = 0;
 	qint64 m_nPreviousPacketsLost = 0;
+	double m_fPreviousJitterBufferDelay = 0.0;
+	double m_fPreviousJitterBufferTargetDelay = 0.0;
+	quint64 m_nPreviousJitterBufferEmittedCount = 0;
+	double m_fPreviousTotalDecodeTime = 0.0;
+	qint64 m_nPreviousFramesDecoded = 0;
+	qint64 m_nPreviousKeyFramesDecoded = 0;
+	qint64 m_nPreviousFramesDropped = 0;
+	quint64 m_nLatencyPingId = 0;
+	int m_nDataChannelRttMs = -1;
 
 	friend class KCreateSessionDescriptionObserver;
 	friend class KStatsCallback;
