@@ -25,6 +25,8 @@ qt_add_executable(winRemoteControl WIN32
 	src/app/mainwindow.h
 	src/app/remotedesktopwindow.cpp
 	src/app/remotedesktopwindow.h
+	src/common/latencytracelogger.cpp
+	src/common/latencytracelogger.h
 	src/common/sessiontracelogger.cpp
 	src/common/sessiontracelogger.h
 	src/common/streamconfig.h

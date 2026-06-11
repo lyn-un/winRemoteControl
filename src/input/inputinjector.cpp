@@ -1,5 +1,8 @@
 #include "input/inputinjector.h"
 
+#include "common/latencytracelogger.h"
+
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 
@@ -18,6 +21,17 @@ namespace
 	constexpr char kX[] = "x";
 	constexpr char kY[] = "y";
 	constexpr char kDelta[] = "delta";
+	constexpr char kSeq[] = "seq";
+	constexpr char kTrace[] = "trace";
+
+	static QString inputTraceExtra(const QJsonObject &object)
+	{
+		return QStringLiteral("seq=%1 type=%2 x=%3 y=%4")
+			.arg(object.value(QString::fromLatin1(kSeq)).toString())
+			.arg(object.value(QString::fromLatin1(kType)).toString())
+			.arg(object.value(QString::fromLatin1(kX)).toInt())
+			.arg(object.value(QString::fromLatin1(kY)).toInt());
+	}
 }
 
 KInputInjector::KInputInjector(QObject *pParent)
@@ -39,9 +53,19 @@ void KInputInjector::handleInputMessage(const QString &strMessage)
 	const QString strType = object.value(QString::fromLatin1(kType)).toString();
 	const int nX = object.value(QString::fromLatin1(kX)).toInt();
 	const int nY = object.value(QString::fromLatin1(kY)).toInt();
+	const bool bTrace = object.value(QString::fromLatin1(kTrace)).toBool(false);
 
 	QString strError;
 	bool bOk = true;
+	QElapsedTimer timer;
+	if (bTrace)
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controlled"),
+			QStringLiteral("inject_begin"),
+			inputTraceExtra(object));
+		timer.start();
+	}
+
 	if (strType == QString::fromLatin1(kMouseMove))
 	{
 		bOk = sendMouseMove(nX, nY, &strError);
@@ -64,6 +88,16 @@ void KInputInjector::handleInputMessage(const QString &strMessage)
 
 	if (!bOk && !strError.isEmpty())
 		emit inputError(strError);
+
+	if (bTrace)
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controlled"),
+			QStringLiteral("inject_end"),
+			QStringLiteral("%1 costMs=%2 ok=%3")
+				.arg(inputTraceExtra(object))
+				.arg(timer.isValid() ? timer.elapsed() : -1)
+				.arg(bOk ? 1 : 0));
+	}
 }
 
 bool KInputInjector::sendMouseMove(int nX, int nY, QString *pErrorMessage)

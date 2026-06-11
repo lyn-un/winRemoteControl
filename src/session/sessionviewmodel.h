@@ -5,6 +5,8 @@
 #include "common/streamconfig.h"
 #include "transport/webrtc/webrtcnetworkstats.h"
 
+#include <QtCore/QElapsedTimer>
+#include <QtCore/QJsonObject>
 #include <QtCore/QObject>
 #include <QtCore/QString>
 
@@ -60,9 +62,13 @@ private slots:
 
 private:
 	void initConnections();
+	void sendInputJsonMessage(QJsonObject object, bool bTrace);
+	bool shouldTraceMouseMove();
 
 	KCaptureService *m_pCaptureService = nullptr;
 	KWebRtcSessionService *m_pWebRtcSessionService = nullptr;
+	quint64 m_nInputSequence = 0;
+	QElapsedTimer m_inputMoveTraceTimer;
 };
 
 #endif // _WINREMOTECONTROL_SESSIONVIEWMODEL_H_

@@ -1,7 +1,9 @@
 #include "transport/webrtc/webrtcpeer.h"
 
+#include "common/latencytracelogger.h"
 #include "common/sessiontracelogger.h"
 
+#include <QtCore/QDateTime>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QMetaObject>
@@ -92,6 +94,14 @@ namespace
 	constexpr int kMsPerSecond = 1000;
 	constexpr int kBitsPerKilobit = 1000;
 	constexpr double kSecondsToMilliseconds = 1000.0;
+	constexpr quint64 kVideoTraceFrameInterval = 30;
+	constexpr char kInputMouseMove[] = "mouseMove";
+	constexpr char kInputMouseButton[] = "mouseButton";
+	constexpr char kInputMouseWheel[] = "mouseWheel";
+	constexpr char kInputType[] = "type";
+	constexpr char kInputSeq[] = "seq";
+	constexpr char kInputTrace[] = "trace";
+	constexpr char kInputClientSendMs[] = "clientSendMs";
 
 	static int secondsToMs(double fSeconds)
 	{
@@ -140,6 +150,24 @@ namespace
 
 		const QString strType = document.object().value(QStringLiteral("type")).toString();
 		return strType.isEmpty() ? QStringLiteral("unknown") : strType;
+	}
+
+	static QJsonObject jsonObjectFromMessage(const QString &strMessage)
+	{
+		const QJsonDocument document = QJsonDocument::fromJson(strMessage.toUtf8());
+		return document.isObject() ? document.object() : QJsonObject();
+	}
+
+	static bool shouldTraceInputMessage(const QJsonObject &object)
+	{
+		return object.value(QString::fromLatin1(kInputTrace)).toBool(false);
+	}
+
+	static QString inputTraceExtra(const QJsonObject &object)
+	{
+		return QStringLiteral("seq=%1 type=%2")
+			.arg(object.value(QString::fromLatin1(kInputSeq)).toString())
+			.arg(object.value(QString::fromLatin1(kInputType)).toString());
 	}
 
 	class KWebRtcRawVideoSource : public webrtc::VideoSourceInterface<webrtc::VideoFrame>
@@ -434,6 +462,17 @@ void KWebRtcPeer::handleSignalingMessage(const QString &strMessage)
 
 void KWebRtcPeer::pushVideoFrame(const KWebRtcVideoFrame &frame)
 {
+	if (frame.nFrameIndex > 0 && frame.nFrameIndex % kVideoTraceFrameInterval == 0)
+	{
+		KLatencyTraceLogger::write(roleToString(m_role),
+			QStringLiteral("webrtc_push"),
+			QStringLiteral("frame=%1 width=%2 height=%3 timestampMs=%4")
+				.arg(frame.nFrameIndex)
+				.arg(frame.nWidth)
+				.arg(frame.nHeight)
+				.arg(frame.nTimestampMs));
+	}
+
 	if (m_spVideoSource)
 		m_spVideoSource->pushFrame(frame);
 }
@@ -444,6 +483,17 @@ void KWebRtcPeer::sendInputMessage(const QString &strMessage)
 		return;
 
 	const QByteArray utf8Message = strMessage.toUtf8();
+	const QJsonObject object = jsonObjectFromMessage(strMessage);
+	if (shouldTraceInputMessage(object))
+	{
+		KLatencyTraceLogger::write(roleToString(m_role),
+			QStringLiteral("input_send"),
+			QStringLiteral("%1 size=%2 buffered=%3")
+				.arg(inputTraceExtra(object))
+				.arg(utf8Message.size())
+				.arg(static_cast<qulonglong>(m_spInputDataChannel->buffered_amount())));
+	}
+
 	webrtc::DataBuffer buffer(std::string(utf8Message.constData(),
 			static_cast<size_t>(utf8Message.size())));
 	m_spInputDataChannel->Send(buffer);
@@ -732,6 +782,22 @@ void KWebRtcPeer::OnMessage(const webrtc::DataBuffer &buffer)
 	const QString strMessage = QString::fromUtf8(pData, static_cast<int>(buffer.data.size()));
 	if (isMouseInputMessage(strMessage))
 	{
+		const QJsonObject object = jsonObjectFromMessage(strMessage);
+		if (shouldTraceInputMessage(object))
+		{
+			const qint64 nClientSendMs =
+				static_cast<qint64>(object.value(QString::fromLatin1(kInputClientSendMs)).toDouble(-1));
+			const qint64 nClientDelayMs = nClientSendMs >= 0
+				? QDateTime::currentMSecsSinceEpoch() - nClientSendMs
+				: -1;
+			KLatencyTraceLogger::write(roleToString(m_role),
+				QStringLiteral("input_recv"),
+				QStringLiteral("%1 size=%2 clientDelayMs=%3")
+					.arg(inputTraceExtra(object))
+					.arg(static_cast<int>(buffer.data.size()))
+					.arg(nClientDelayMs));
+		}
+
 		emit inputMessageReceived(strMessage);
 	}
 	else
@@ -789,6 +855,16 @@ void KWebRtcPeer::handleRemoteDescriptionFailure(webrtc::RTCError error)
 
 void KWebRtcPeer::OnFrame(const webrtc::VideoFrame &frame)
 {
+	const quint64 nNextFrameIndex = m_nRemoteFrameIndex + 1;
+	if (nNextFrameIndex % kVideoTraceFrameInterval == 0)
+	{
+		KLatencyTraceLogger::write(roleToString(m_role),
+			QStringLiteral("remote_frame_recv"),
+			QStringLiteral("frame=%1 timestampMs=%2")
+				.arg(nNextFrameIndex)
+				.arg(frame.timestamp_us() / 1000));
+	}
+
 	webrtc::scoped_refptr<webrtc::I420BufferInterface> spI420 = frame.video_frame_buffer()->ToI420();
 	if (!spI420)
 		return;

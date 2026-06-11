@@ -1,8 +1,10 @@
 #include "session/sessionviewmodel.h"
 
 #include "capture/captureservice.h"
+#include "common/latencytracelogger.h"
 #include "transport/webrtc/webrtcsessionservice.h"
 
+#include <QtCore/QDateTime>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 
@@ -10,14 +12,13 @@ namespace
 {
 	constexpr int kRemoteMouseButtonLeft = 1;
 	constexpr int kRemoteMouseButtonRight = 2;
-
-	static void sendJsonMessage(KWebRtcSessionService *pService, const QJsonObject &object)
-	{
-		if (pService == nullptr)
-			return;
-
-		pService->sendInputMessage(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
-	}
+	constexpr qint64 kInputMoveTraceIntervalMs = 500;
+	constexpr char kType[] = "type";
+	constexpr char kX[] = "x";
+	constexpr char kY[] = "y";
+	constexpr char kSeq[] = "seq";
+	constexpr char kClientSendMs[] = "clientSendMs";
+	constexpr char kTrace[] = "trace";
 }
 
 KSessionViewModel::KSessionViewModel(QObject *pParent)
@@ -92,7 +93,7 @@ void KSessionViewModel::sendRemoteMouseMove(int nX, int nY)
 	object.insert(QStringLiteral("type"), QStringLiteral("mouseMove"));
 	object.insert(QStringLiteral("x"), nX);
 	object.insert(QStringLiteral("y"), nY);
-	sendJsonMessage(m_pWebRtcSessionService, object);
+	sendInputJsonMessage(object, shouldTraceMouseMove());
 }
 
 void KSessionViewModel::sendRemoteMouseButton(int nX, int nY, int nButton, bool bPressed)
@@ -111,7 +112,7 @@ void KSessionViewModel::sendRemoteMouseButton(int nX, int nY, int nButton, bool 
 	object.insert(QStringLiteral("pressed"), bPressed);
 	object.insert(QStringLiteral("x"), nX);
 	object.insert(QStringLiteral("y"), nY);
-	sendJsonMessage(m_pWebRtcSessionService, object);
+	sendInputJsonMessage(object, true);
 }
 
 void KSessionViewModel::sendRemoteMouseWheel(int nX, int nY, int nDelta)
@@ -121,7 +122,7 @@ void KSessionViewModel::sendRemoteMouseWheel(int nX, int nY, int nDelta)
 	object.insert(QStringLiteral("delta"), nDelta);
 	object.insert(QStringLiteral("x"), nX);
 	object.insert(QStringLiteral("y"), nY);
-	sendJsonMessage(m_pWebRtcSessionService, object);
+	sendInputJsonMessage(object, true);
 }
 
 void KSessionViewModel::sendStreamConfig(const KStreamConfig &config)
@@ -178,4 +179,48 @@ void KSessionViewModel::initConnections()
 		this, &KSessionViewModel::frameReady);
 	connect(m_pWebRtcSessionService, &KWebRtcSessionService::networkStatsReady,
 		this, &KSessionViewModel::networkStatsReady);
+}
+
+void KSessionViewModel::sendInputJsonMessage(QJsonObject object, bool bTrace)
+{
+	if (m_pWebRtcSessionService == nullptr)
+		return;
+
+	const quint64 nSeq = ++m_nInputSequence;
+	object.insert(QString::fromLatin1(kSeq), QString::number(nSeq));
+	object.insert(QString::fromLatin1(kClientSendMs), QDateTime::currentMSecsSinceEpoch());
+	if (bTrace)
+		object.insert(QString::fromLatin1(kTrace), true);
+
+	if (bTrace)
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controller"),
+			QStringLiteral("input_prepare"),
+			QStringLiteral("seq=%1 type=%2 x=%3 y=%4")
+				.arg(nSeq)
+				.arg(object.value(QString::fromLatin1(kType)).toString())
+				.arg(object.value(QString::fromLatin1(kX)).toInt())
+				.arg(object.value(QString::fromLatin1(kY)).toInt()));
+	}
+
+	m_pWebRtcSessionService->sendInputMessage(
+		QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+bool KSessionViewModel::shouldTraceMouseMove()
+{
+	if (!KLatencyTraceLogger::isEnabled())
+		return false;
+
+	if (!m_inputMoveTraceTimer.isValid())
+	{
+		m_inputMoveTraceTimer.start();
+		return true;
+	}
+
+	if (m_inputMoveTraceTimer.elapsed() < kInputMoveTraceIntervalMs)
+		return false;
+
+	m_inputMoveTraceTimer.restart();
+	return true;
 }

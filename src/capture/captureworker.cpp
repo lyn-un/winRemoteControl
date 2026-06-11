@@ -4,6 +4,7 @@
 #include "capture/dxgidesktopduplicator.h"
 #include "codec/h264decoder.h"
 #include "codec/h264encoder.h"
+#include "common/latencytracelogger.h"
 
 #include <QtCore/QThread>
 #include <QtCore/QElapsedTimer>
@@ -14,6 +15,11 @@
 #include <vector>
 
 #include <libyuv.h>
+
+namespace
+{
+	constexpr quint64 kVideoTraceFrameInterval = 30;
+}
 
 KCaptureWorker::KCaptureWorker(WorkMode mode, QObject *pParent)
 	: QObject(pParent)
@@ -78,6 +84,17 @@ void KCaptureWorker::startWork()
 
 		if (m_mode == WebRtcSourceWorkMode)
 		{
+			if (frame.nFrameIndex > 0 && frame.nFrameIndex % kVideoTraceFrameInterval == 0)
+			{
+				KLatencyTraceLogger::write(QStringLiteral("controlled"),
+					QStringLiteral("capture_ready"),
+					QStringLiteral("frame=%1 width=%2 height=%3 timestampMs=%4")
+						.arg(frame.nFrameIndex)
+						.arg(frame.nWidth)
+						.arg(frame.nHeight)
+						.arg(frame.nTimestampMs));
+			}
+
 			KWebRtcVideoFrame videoFrame;
 			if (!convertBgraToI420(frame, currentConfig, &videoFrame))
 			{
@@ -85,6 +102,17 @@ void KCaptureWorker::startWork()
 				emit captureError(QStringLiteral("Convert BGRA to I420 failed"));
 				emit statusChanged(QStringLiteral("Error"));
 				break;
+			}
+
+			if (videoFrame.nFrameIndex > 0 && videoFrame.nFrameIndex % kVideoTraceFrameInterval == 0)
+			{
+				KLatencyTraceLogger::write(QStringLiteral("controlled"),
+					QStringLiteral("frame_converted"),
+					QStringLiteral("frame=%1 width=%2 height=%3 timestampMs=%4")
+						.arg(videoFrame.nFrameIndex)
+						.arg(videoFrame.nWidth)
+						.arg(videoFrame.nHeight)
+						.arg(videoFrame.nTimestampMs));
 			}
 
 			emit webRtcFrameReady(videoFrame);

@@ -1,5 +1,8 @@
 #include "render/videorenderwidget.h"
 
+#include "common/latencytracelogger.h"
+
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QMetaObject>
 #include <QtCore/QString>
 #include <QtGui/QMouseEvent>
@@ -18,6 +21,7 @@ namespace
 	constexpr int kRemoteMouseButtonLeft = 1;
 	constexpr int kRemoteMouseButtonRight = 2;
 	constexpr qint64 kMouseMoveThrottleMs = 16;
+	constexpr quint64 kVideoTraceFrameInterval = 30;
 
 	const char *kVertexShaderSource =
 		"struct VSInput { float2 position : POSITION; float2 texcoord : TEXCOORD0; };"
@@ -110,6 +114,20 @@ void KVideoRenderWidget::presentFrame(const KDecodedVideoFrame &frame)
 	if (frame.vecBgraBuffer.empty() || frame.nWidth <= 0 || frame.nHeight <= 0)
 		return;
 
+	const bool bTraceFrame = frame.nFrameIndex > 0 && frame.nFrameIndex % kVideoTraceFrameInterval == 0;
+	QElapsedTimer renderTimer;
+	if (bTraceFrame)
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controller"),
+			QStringLiteral("render_begin"),
+			QStringLiteral("frame=%1 width=%2 height=%3 timestampMs=%4")
+				.arg(frame.nFrameIndex)
+				.arg(frame.nWidth)
+				.arg(frame.nHeight)
+				.arg(frame.nTimestampMs));
+		renderTimer.start();
+	}
+
 	QString strError;
 	if (!initializeD3d(&strError) ||
 		!ensureFrameTexture(frame.nWidth, frame.nHeight, &strError) ||
@@ -135,6 +153,17 @@ void KVideoRenderWidget::presentFrame(const KDecodedVideoFrame &frame)
 		0);
 
 	render();
+
+	if (bTraceFrame)
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controller"),
+			QStringLiteral("render_end"),
+			QStringLiteral("frame=%1 width=%2 height=%3 costMs=%4")
+				.arg(frame.nFrameIndex)
+				.arg(frame.nWidth)
+				.arg(frame.nHeight)
+				.arg(renderTimer.isValid() ? renderTimer.elapsed() : -1));
+	}
 }
 
 void KVideoRenderWidget::clearFrame()
