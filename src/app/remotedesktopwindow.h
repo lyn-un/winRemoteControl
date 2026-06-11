@@ -26,6 +26,7 @@ public:
 	void loadFrontend(const QString &strFrontendPath);
 
 public slots:
+	void setRemoteScreenSize(int nWidth, int nHeight);
 	void handleFrameReady(int nWidth, int nHeight, quint64 nFrameIndex, qint64 nTimestampMs);
 
 signals:

@@ -101,6 +101,10 @@ void KMainWindow::closeRemoteDesktopWindow()
 
 void KMainWindow::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWindow)
 {
+	const QSize remoteScreenSize = m_pSessionViewModel->remoteScreenSize();
+	if (!remoteScreenSize.isEmpty())
+		pWindow->setRemoteScreenSize(remoteScreenSize.width(), remoteScreenSize.height());
+
 	connect(pWindow, &KRemoteDesktopWindow::desktopCloseRequested,
 		this, &KMainWindow::closeRemoteDesktopWindow);
 	connect(m_pSessionViewModel, &KSessionViewModel::statusChanged,
@@ -119,6 +123,12 @@ void KMainWindow::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWindow)
 		pWindow->webViewWidget(), &KWebViewWidget::sendWebRtcStateChanged);
 	connect(m_pSessionViewModel, &KSessionViewModel::remoteDeviceInfoChanged,
 		pWindow->webViewWidget(), &KWebViewWidget::sendDeviceInfoChanged);
+	connect(m_pSessionViewModel, &KSessionViewModel::remoteDeviceInfoChanged,
+		pWindow,
+		[pWindow](const QString &, const QString &, const QString &, int nScreenWidth, int nScreenHeight)
+		{
+			pWindow->setRemoteScreenSize(nScreenWidth, nScreenHeight);
+		});
 	connect(pWindow->webViewWidget(), &KWebViewWidget::streamConfigRequested,
 		m_pSessionViewModel, &KSessionViewModel::sendStreamConfig);
 	connect(pWindow, &KRemoteDesktopWindow::streamConfigRequested,

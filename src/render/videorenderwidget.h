@@ -26,6 +26,7 @@ public:
 	KVideoRenderWidget &operator=(const KVideoRenderWidget &) = delete;
 
 public slots:
+	void setRemoteScreenSize(int nWidth, int nHeight);
 	void enqueueFrame(const KDecodedVideoFrame &frame);
 	void presentFrame(const KDecodedVideoFrame &frame);
 	void clearFrame();
@@ -78,6 +79,8 @@ private:
 	bool m_bInitialized = false;
 	int m_nFrameWidth = 0;
 	int m_nFrameHeight = 0;
+	int m_nRemoteScreenWidth = 0;
+	int m_nRemoteScreenHeight = 0;
 	QRectF m_frameDisplayRect;
 	Microsoft::WRL::ComPtr<ID3D11Device> m_spDevice;
 	Microsoft::WRL::ComPtr<ID3D11DeviceContext> m_spContext;

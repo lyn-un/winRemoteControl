@@ -39,6 +39,11 @@ KVideoRenderWidget *KRemoteDesktopWindow::videoRenderWidget() const
 	return m_pVideoRenderWidget;
 }
 
+void KRemoteDesktopWindow::setRemoteScreenSize(int nWidth, int nHeight)
+{
+	m_pVideoRenderWidget->setRemoteScreenSize(nWidth, nHeight);
+}
+
 void KRemoteDesktopWindow::handleFrameReady(int nWidth,
 	int nHeight,
 	quint64 nFrameIndex,

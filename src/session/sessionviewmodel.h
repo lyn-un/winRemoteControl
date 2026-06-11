@@ -8,6 +8,7 @@
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QJsonObject>
 #include <QtCore/QObject>
+#include <QtCore/QSize>
 #include <QtCore/QString>
 
 class KCaptureService;
@@ -23,6 +24,8 @@ public:
 
 	KSessionViewModel(const KSessionViewModel &) = delete;
 	KSessionViewModel &operator=(const KSessionViewModel &) = delete;
+
+	QSize remoteScreenSize() const;
 
 public slots:
 	void startLocalPreview();
@@ -59,6 +62,11 @@ signals:
 private slots:
 	void handleCaptureStatusChanged(const QString &strStatus);
 	void handleWebRtcStateChanged(const QString &strState);
+	void handleRemoteDeviceInfoChanged(const QString &strComputerName,
+		const QString &strWallpaperMime,
+		const QString &strWallpaperData,
+		int nScreenWidth,
+		int nScreenHeight);
 
 private:
 	void initConnections();
@@ -68,6 +76,7 @@ private:
 	KCaptureService *m_pCaptureService = nullptr;
 	KWebRtcSessionService *m_pWebRtcSessionService = nullptr;
 	quint64 m_nInputSequence = 0;
+	QSize m_remoteScreenSize;
 	QElapsedTimer m_inputMoveTraceTimer;
 };
 

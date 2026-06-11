@@ -233,6 +233,12 @@ QPaintEngine *KVideoRenderWidget::paintEngine() const
 	return nullptr;
 }
 
+void KVideoRenderWidget::setRemoteScreenSize(int nWidth, int nHeight)
+{
+	m_nRemoteScreenWidth = qMax(0, nWidth);
+	m_nRemoteScreenHeight = qMax(0, nHeight);
+}
+
 void KVideoRenderWidget::mouseMoveEvent(QMouseEvent *pEvent)
 {
 	QPoint remotePoint;
@@ -646,10 +652,12 @@ bool KVideoRenderWidget::mapToRemotePoint(const QPointF &localPoint, QPoint *pRe
 	if (!m_frameDisplayRect.contains(localPoint))
 		return false;
 
+	const int nTargetWidth = m_nRemoteScreenWidth > 0 ? m_nRemoteScreenWidth : m_nFrameWidth;
+	const int nTargetHeight = m_nRemoteScreenHeight > 0 ? m_nRemoteScreenHeight : m_nFrameHeight;
 	const double fRelativeX = (localPoint.x() - m_frameDisplayRect.left()) / m_frameDisplayRect.width();
 	const double fRelativeY = (localPoint.y() - m_frameDisplayRect.top()) / m_frameDisplayRect.height();
-	const int nRemoteX = std::clamp(static_cast<int>(fRelativeX * m_nFrameWidth), 0, m_nFrameWidth - 1);
-	const int nRemoteY = std::clamp(static_cast<int>(fRelativeY * m_nFrameHeight), 0, m_nFrameHeight - 1);
+	const int nRemoteX = std::clamp(static_cast<int>(fRelativeX * nTargetWidth), 0, nTargetWidth - 1);
+	const int nRemoteY = std::clamp(static_cast<int>(fRelativeY * nTargetHeight), 0, nTargetHeight - 1);
 	*pRemotePoint = QPoint(nRemoteX, nRemoteY);
 	return true;
 }

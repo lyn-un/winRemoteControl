@@ -35,6 +35,11 @@ KSessionViewModel::~KSessionViewModel()
 	m_pCaptureService->stopCapture();
 }
 
+QSize KSessionViewModel::remoteScreenSize() const
+{
+	return m_remoteScreenSize;
+}
+
 void KSessionViewModel::startLocalPreview()
 {
 	m_pCaptureService->startCapture();
@@ -62,6 +67,7 @@ void KSessionViewModel::connectSignaling(const QString &strHost, quint16 nPort)
 
 void KSessionViewModel::disconnectSession()
 {
+	m_remoteScreenSize = QSize();
 	m_pWebRtcSessionService->disconnectSession();
 	emit clearPreviewRequested();
 }
@@ -144,6 +150,20 @@ void KSessionViewModel::handleWebRtcStateChanged(const QString &strState)
 		emit clearPreviewRequested();
 }
 
+void KSessionViewModel::handleRemoteDeviceInfoChanged(const QString &strComputerName,
+	const QString &strWallpaperMime,
+	const QString &strWallpaperData,
+	int nScreenWidth,
+	int nScreenHeight)
+{
+	m_remoteScreenSize = QSize(qMax(0, nScreenWidth), qMax(0, nScreenHeight));
+	emit remoteDeviceInfoChanged(strComputerName,
+		strWallpaperMime,
+		strWallpaperData,
+		nScreenWidth,
+		nScreenHeight);
+}
+
 void KSessionViewModel::initConnections()
 {
 	connect(m_pCaptureService, &KCaptureService::statusChanged,
@@ -170,7 +190,7 @@ void KSessionViewModel::initConnections()
 	connect(m_pWebRtcSessionService, &KWebRtcSessionService::sessionChannelChanged,
 		this, &KSessionViewModel::sessionChannelChanged);
 	connect(m_pWebRtcSessionService, &KWebRtcSessionService::remoteDeviceInfoChanged,
-		this, &KSessionViewModel::remoteDeviceInfoChanged);
+		this, &KSessionViewModel::handleRemoteDeviceInfoChanged);
 	connect(m_pWebRtcSessionService, &KWebRtcSessionService::sessionError,
 		this, &KSessionViewModel::errorOccurred);
 	connect(m_pWebRtcSessionService, &KWebRtcSessionService::remoteFrameReady,
