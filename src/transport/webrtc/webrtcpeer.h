@@ -109,7 +109,7 @@ private:
 	void sendSessionDescription(const webrtc::SessionDescriptionInterface *pDescription);
 	void handleSessionDescription(const QString &strType, const QString &strSdp);
 	void handleIceCandidate(const QString &strSdpMid, int nSdpMLineIndex, const QString &strCandidate);
-	void startStatsPolling();
+	void startStatsPolling(const QString &strReason);
 	void stopStatsPolling();
 	void requestStats();
 	void resetStatsHistory();

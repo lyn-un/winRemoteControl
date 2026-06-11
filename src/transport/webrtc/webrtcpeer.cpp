@@ -610,7 +610,7 @@ void KWebRtcPeer::setStreamConfig(const KStreamConfig &config)
 		emit peerError(rtcErrorMessage(QStringLiteral("Set video stream parameters failed"), result));
 }
 
-void KWebRtcPeer::startStatsPolling()
+void KWebRtcPeer::startStatsPolling(const QString &strReason)
 {
 	if (m_role != ControllerRole)
 		return;
@@ -623,7 +623,12 @@ void KWebRtcPeer::startStatsPolling()
 	}
 
 	if (!m_pStatsTimer->isActive())
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controller"),
+			QStringLiteral("stats_polling_start"),
+			QStringLiteral("reason=%1").arg(strReason));
 		m_pStatsTimer->start(kStatsPollingIntervalMs);
+	}
 	requestStats();
 }
 
@@ -833,6 +838,7 @@ void KWebRtcPeer::OnAddTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterface>
 	m_spRemoteVideoTrack = static_cast<webrtc::VideoTrackInterface *>(receiver->track().get());
 	m_spRemoteVideoTrack->AddOrUpdateSink(this, webrtc::VideoSinkWants());
 	emit stateChanged(QStringLiteral("RemoteVideoTrack"));
+	startStatsPolling(QStringLiteral("remote_video_track"));
 }
 
 void KWebRtcPeer::OnRemoveTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterface>)
@@ -865,7 +871,7 @@ void KWebRtcPeer::OnIceConnectionChange(webrtc::PeerConnectionInterface::IceConn
 	if (new_state == webrtc::PeerConnectionInterface::kIceConnectionConnected
 		|| new_state == webrtc::PeerConnectionInterface::kIceConnectionCompleted)
 	{
-		startStatsPolling();
+		startStatsPolling(QStringLiteral("ice_connected"));
 	}
 	else if (new_state == webrtc::PeerConnectionInterface::kIceConnectionDisconnected
 		|| new_state == webrtc::PeerConnectionInterface::kIceConnectionFailed
@@ -916,6 +922,9 @@ void KWebRtcPeer::OnStateChange()
 	emit inputChannelChanged(bInputOpen);
 	emit sessionChannelChanged(bSessionOpen);
 	emit stateChanged(bSessionOpen ? QStringLiteral("SessionChannelOpen") : QStringLiteral("SessionChannelClosed"));
+
+	if (bInputOpen)
+		startStatsPolling(QStringLiteral("input_channel_open"));
 }
 
 void KWebRtcPeer::OnMessage(const webrtc::DataBuffer &buffer)
