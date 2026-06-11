@@ -8,6 +8,7 @@
 #include <QtCore/QJsonObject>
 #include <QtCore/QMetaObject>
 #include <QtCore/QPointer>
+#include <QtCore/QThread>
 #include <QtCore/QTimer>
 
 #include <api/audio_codecs/builtin_audio_decoder_factory.h>
@@ -612,6 +613,17 @@ void KWebRtcPeer::setStreamConfig(const KStreamConfig &config)
 
 void KWebRtcPeer::startStatsPolling(const QString &strReason)
 {
+	if (QThread::currentThread() != thread())
+	{
+		QMetaObject::invokeMethod(this,
+			[this, strReason]()
+			{
+				startStatsPolling(strReason);
+			},
+			Qt::QueuedConnection);
+		return;
+	}
+
 	if (m_role != ControllerRole)
 		return;
 
@@ -634,6 +646,17 @@ void KWebRtcPeer::startStatsPolling(const QString &strReason)
 
 void KWebRtcPeer::stopStatsPolling()
 {
+	if (QThread::currentThread() != thread())
+	{
+		QMetaObject::invokeMethod(this,
+			[this]()
+			{
+				stopStatsPolling();
+			},
+			Qt::QueuedConnection);
+		return;
+	}
+
 	if (m_pStatsTimer != nullptr)
 		m_pStatsTimer->stop();
 
