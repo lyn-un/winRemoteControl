@@ -120,11 +120,14 @@ void KVideoRenderWidget::presentFrame(const KDecodedVideoFrame &frame)
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controller"),
 			QStringLiteral("render_begin"),
-			QStringLiteral("frame=%1 width=%2 height=%3 timestampMs=%4")
+			QStringLiteral("frame=%1 sourceFrame=%2 width=%3 height=%4 timestampMs=%5 lastInputSeq=%6 inputAgeMs=%7")
 				.arg(frame.nFrameIndex)
+				.arg(frame.nSourceFrameIndex)
 				.arg(frame.nWidth)
 				.arg(frame.nHeight)
-				.arg(frame.nTimestampMs));
+				.arg(frame.nTimestampMs)
+				.arg(frame.nLastInputSeq)
+				.arg(frame.nInputAgeMs));
 		renderTimer.start();
 	}
 
@@ -158,10 +161,13 @@ void KVideoRenderWidget::presentFrame(const KDecodedVideoFrame &frame)
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controller"),
 			QStringLiteral("render_end"),
-			QStringLiteral("frame=%1 width=%2 height=%3 costMs=%4")
+			QStringLiteral("frame=%1 sourceFrame=%2 width=%3 height=%4 lastInputSeq=%5 inputAgeMs=%6 costMs=%7")
 				.arg(frame.nFrameIndex)
+				.arg(frame.nSourceFrameIndex)
 				.arg(frame.nWidth)
 				.arg(frame.nHeight)
+				.arg(frame.nLastInputSeq)
+				.arg(frame.nInputAgeMs)
 				.arg(renderTimer.isValid() ? renderTimer.elapsed() : -1));
 	}
 }

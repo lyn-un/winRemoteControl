@@ -20,6 +20,7 @@ public slots:
 
 signals:
 	void inputError(const QString &strMessage);
+	void inputInjected(quint64 nSeq, qint64 nInjectedMs);
 
 private:
 	bool sendMouseMove(int nX, int nY, QString *pErrorMessage);

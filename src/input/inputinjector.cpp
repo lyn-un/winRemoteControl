@@ -3,6 +3,7 @@
 #include "common/latencytracelogger.h"
 
 #include <QtCore/QElapsedTimer>
+#include <QtCore/QDateTime>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 
@@ -88,6 +89,10 @@ void KInputInjector::handleInputMessage(const QString &strMessage)
 
 	if (!bOk && !strError.isEmpty())
 		emit inputError(strError);
+
+	const quint64 nSeq = object.value(QString::fromLatin1(kSeq)).toString().toULongLong();
+	if (bTrace && bOk && nSeq > 0)
+		emit inputInjected(nSeq, QDateTime::currentMSecsSinceEpoch());
 
 	if (bTrace)
 	{
