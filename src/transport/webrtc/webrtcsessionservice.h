@@ -10,7 +10,6 @@
 #include <QtCore/QObject>
 #include <QtCore/QJsonObject>
 #include <QtCore/QString>
-#include <QtCore/QQueue>
 
 class KWebRtcSignaling;
 class KInputInjector;
@@ -57,26 +56,17 @@ signals:
 	void streamConfigChanged(const KStreamConfig &config);
 	void inputChannelChanged(bool bOpen);
 	void sessionChannelChanged(bool bOpen);
+	void inputTraceUpdated(quint64 nSeq, qint64 nInjectedMs);
 
 private:
-	struct KFrameTraceInfo
-	{
-		quint64 nSourceFrameIndex = 0;
-		quint64 nLastInputSeq = 0;
-		qint64 nInputAgeMs = -1;
-	};
-
 	bool initializePeer(KWebRtcPeer::Role role, QString *pErrorMessage);
 	void wirePeer();
 	void handleSessionChannelChanged(bool bOpen);
 	void handleSessionMessage(const QString &strMessage);
-	void handleRemoteFrameReady(const KDecodedVideoFrame &frame);
 	void handleInputInjected(quint64 nSeq, qint64 nInjectedMs);
 	void sendDeviceInfoMessage();
-	void sendFrameTraceMessage(const KWebRtcVideoFrame &frame);
 	QString createDeviceInfoMessage(const QString &strWallpaperMime, const QString &strWallpaperData) const;
 	QString createControlMessage(const QString &strType) const;
-	QString createFrameTraceMessage(const KWebRtcVideoFrame &frame) const;
 	QString createStreamConfigMessage(const KStreamConfig &config) const;
 	static KStreamConfig streamConfigFromJson(const QJsonObject &object);
 	static QString readWallpaperBase64(QString *pMimeType);
@@ -85,7 +75,6 @@ private:
 	bool m_bDeviceInfoRequested = false;
 	quint64 m_nLastInjectedInputSeq = 0;
 	qint64 m_nLastInjectedInputMs = -1;
-	QQueue<KFrameTraceInfo> m_frameTraceQueue;
 	KWebRtcSignaling *m_pSignaling = nullptr;
 	KWebRtcPeer *m_pPeer = nullptr;
 	KInputInjector *m_pInputInjector = nullptr;

@@ -10,6 +10,8 @@ struct KWebRtcVideoFrame
 	int nHeight = 0;
 	quint64 nFrameIndex = 0;
 	qint64 nTimestampMs = 0;
+	quint64 nLastInputSeq = 0;
+	qint64 nInputAgeMs = -1;
 	QByteArray yPlane;
 	QByteArray uPlane;
 	QByteArray vPlane;

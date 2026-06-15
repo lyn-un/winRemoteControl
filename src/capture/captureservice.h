@@ -27,6 +27,7 @@ public slots:
 	void startWebRtcCapture();
 	void stopCapture();
 	void setStreamConfig(const KStreamConfig &config);
+	void setInputTraceState(quint64 nSeq, qint64 nInjectedMs);
 
 signals:
 	void statusChanged(const QString &strStatus);
@@ -42,6 +43,8 @@ private:
 	QThread *m_pCaptureThread = nullptr;
 	KCaptureWorker *m_pCaptureWorker = nullptr;
 	KStreamConfig m_streamConfig;
+	quint64 m_nLastInputSeq = 0;
+	qint64 m_nLastInputInjectedMs = -1;
 };
 
 #endif // _WINREMOTECONTROL_CAPTURESERVICE_H_

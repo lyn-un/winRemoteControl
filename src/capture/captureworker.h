@@ -35,6 +35,7 @@ public slots:
 	void startWork();
 	void stopWork();
 	void setStreamConfig(const KStreamConfig &config);
+	void setInputTraceState(quint64 nSeq, qint64 nInjectedMs);
 
 signals:
 	void statusChanged(const QString &strStatus);
@@ -46,9 +47,12 @@ signals:
 
 private:
 	KStreamConfig streamConfig() const;
+	void inputTraceState(quint64 *pSeq, qint64 *pInjectedMs) const;
 	static KStreamConfig normalizeStreamConfig(const KStreamConfig &config);
 	static bool convertBgraToI420(const KCaptureFrame &captureFrame,
 		const KStreamConfig &config,
+		quint64 nLastInputSeq,
+		qint64 nLastInputAgeMs,
 		KWebRtcVideoFrame *pVideoFrame);
 	static bool resizeBgraFrame(const KCaptureFrame &captureFrame,
 		int nTargetWidth,
@@ -58,7 +62,10 @@ private:
 	WorkMode m_mode = LocalPreviewWorkMode;
 	std::atomic_bool m_bRunning = false;
 	mutable std::mutex m_configMutex;
+	mutable std::mutex m_inputTraceMutex;
 	KStreamConfig m_streamConfig;
+	quint64 m_nLastInputSeq = 0;
+	qint64 m_nLastInputInjectedMs = -1;
 };
 
 #endif // _WINREMOTECONTROL_CAPTUREWORKER_H_

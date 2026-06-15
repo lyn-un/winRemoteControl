@@ -1,6 +1,5 @@
 #include "transport/webrtc/webrtcsessionservice.h"
 
-#include "common/latencytracelogger.h"
 #include "common/sessiontracelogger.h"
 #include "input/inputinjector.h"
 #include "transport/webrtc/webrtcsignaling.h"
@@ -21,8 +20,6 @@ namespace
 	constexpr int kWallpaperJpegQuality = 65;
 	constexpr int kWallpaperMaxBase64Bytes = 96 * 1024;
 	constexpr int kWallpaperPathBufferLength = MAX_PATH;
-	constexpr int kMaxFrameTraceCacheSize = 256;
-	constexpr quint64 kVideoTraceFrameInterval = 30;
 
 	constexpr char kType[] = "type";
 	constexpr char kDeviceInfoRequest[] = "deviceInfoRequest";
@@ -30,7 +27,6 @@ namespace
 	constexpr char kStartStreaming[] = "startStreaming";
 	constexpr char kStopStreaming[] = "stopStreaming";
 	constexpr char kStreamConfig[] = "streamConfig";
-	constexpr char kFrameTrace[] = "frameTrace";
 	constexpr char kComputerName[] = "computerName";
 	constexpr char kWallpaperMime[] = "wallpaperMime";
 	constexpr char kWallpaperData[] = "wallpaperData";
@@ -40,10 +36,6 @@ namespace
 	constexpr char kWidth[] = "width";
 	constexpr char kHeight[] = "height";
 	constexpr char kBitrateKbps[] = "bitrateKbps";
-	constexpr char kFrameIndex[] = "frameIndex";
-	constexpr char kTimestampMs[] = "timestampMs";
-	constexpr char kLastInputSeq[] = "lastInputSeq";
-	constexpr char kInputAgeMs[] = "inputAgeMs";
 
 	static QString roleToString(const QString &strRole)
 	{
@@ -121,7 +113,7 @@ void KWebRtcSessionService::disconnectSession()
 	m_bDeviceInfoRequested = false;
 	m_nLastInjectedInputSeq = 0;
 	m_nLastInjectedInputMs = -1;
-	m_frameTraceQueue.clear();
+	emit inputTraceUpdated(0, -1);
 	emit stopCaptureRequested();
 	if (m_pSignaling != nullptr)
 		m_pSignaling->stop();
@@ -165,7 +157,6 @@ void KWebRtcSessionService::stopStreaming()
 
 void KWebRtcSessionService::pushVideoFrame(const KWebRtcVideoFrame &frame)
 {
-	sendFrameTraceMessage(frame);
 	if (m_pPeer != nullptr)
 		m_pPeer->pushVideoFrame(frame);
 }
@@ -215,7 +206,7 @@ void KWebRtcSessionService::wirePeer()
 	connect(m_pPeer, &KWebRtcPeer::peerError,
 		this, &KWebRtcSessionService::sessionError);
 	connect(m_pPeer, &KWebRtcPeer::remoteFrameReady,
-		this, &KWebRtcSessionService::handleRemoteFrameReady);
+		this, &KWebRtcSessionService::remoteFrameReady);
 	connect(m_pPeer, &KWebRtcPeer::remoteFrameStatsReady,
 		this, &KWebRtcSessionService::remoteFrameStatsReady);
 	connect(m_pPeer, &KWebRtcPeer::networkStatsReady,
@@ -294,21 +285,6 @@ void KWebRtcSessionService::handleSessionMessage(const QString &strMessage)
 		return;
 	}
 
-	if (strType == QString::fromLatin1(kFrameTrace) && m_strRole == QStringLiteral("controller"))
-	{
-		KFrameTraceInfo traceInfo;
-		traceInfo.nSourceFrameIndex =
-			object.value(QString::fromLatin1(kFrameIndex)).toString().toULongLong();
-		traceInfo.nLastInputSeq =
-			object.value(QString::fromLatin1(kLastInputSeq)).toString().toULongLong();
-		traceInfo.nInputAgeMs =
-			static_cast<qint64>(object.value(QString::fromLatin1(kInputAgeMs)).toDouble(-1));
-		m_frameTraceQueue.enqueue(traceInfo);
-		while (m_frameTraceQueue.size() > kMaxFrameTraceCacheSize)
-			m_frameTraceQueue.dequeue();
-		return;
-	}
-
 	if (strType == QString::fromLatin1(kStartStreaming) && m_strRole == QStringLiteral("controlled"))
 	{
 		KSessionTraceLogger::write(roleToString(m_strRole),
@@ -335,49 +311,11 @@ void KWebRtcSessionService::handleSessionMessage(const QString &strMessage)
 	}
 }
 
-void KWebRtcSessionService::handleRemoteFrameReady(const KDecodedVideoFrame &frame)
-{
-	KDecodedVideoFrame tracedFrame = frame;
-	if (!m_frameTraceQueue.isEmpty())
-	{
-		const KFrameTraceInfo traceInfo = m_frameTraceQueue.dequeue();
-		tracedFrame.nSourceFrameIndex = traceInfo.nSourceFrameIndex;
-		tracedFrame.nLastInputSeq = traceInfo.nLastInputSeq;
-		tracedFrame.nInputAgeMs = traceInfo.nInputAgeMs;
-	}
-
-	emit remoteFrameReady(tracedFrame);
-}
-
 void KWebRtcSessionService::handleInputInjected(quint64 nSeq, qint64 nInjectedMs)
 {
 	m_nLastInjectedInputSeq = nSeq;
 	m_nLastInjectedInputMs = nInjectedMs;
-}
-
-void KWebRtcSessionService::sendFrameTraceMessage(const KWebRtcVideoFrame &frame)
-{
-	if (m_strRole != QStringLiteral("controlled")
-		|| !KLatencyTraceLogger::isEnabled()
-		|| m_nLastInjectedInputSeq == 0)
-	{
-		return;
-	}
-
-	const qint64 nInputAgeMs =
-		m_nLastInjectedInputMs >= 0 ? frame.nTimestampMs - m_nLastInjectedInputMs : -1;
-	if (frame.nFrameIndex > 0 && frame.nFrameIndex % kVideoTraceFrameInterval == 0)
-	{
-		KLatencyTraceLogger::write(QStringLiteral("controlled"),
-			QStringLiteral("frame_trace"),
-			QStringLiteral("frame=%1 timestampMs=%2 lastInputSeq=%3 inputAgeMs=%4")
-				.arg(frame.nFrameIndex)
-				.arg(frame.nTimestampMs)
-				.arg(m_nLastInjectedInputSeq)
-				.arg(nInputAgeMs));
-	}
-
-	sendSessionMessage(createFrameTraceMessage(frame));
+	emit inputTraceUpdated(nSeq, nInjectedMs);
 }
 
 void KWebRtcSessionService::sendDeviceInfoMessage()
@@ -417,18 +355,6 @@ QString KWebRtcSessionService::createControlMessage(const QString &strType) cons
 {
 	QJsonObject object;
 	object.insert(QString::fromLatin1(kType), strType);
-	return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
-}
-
-QString KWebRtcSessionService::createFrameTraceMessage(const KWebRtcVideoFrame &frame) const
-{
-	QJsonObject object;
-	object.insert(QString::fromLatin1(kType), QString::fromLatin1(kFrameTrace));
-	object.insert(QString::fromLatin1(kFrameIndex), QString::number(frame.nFrameIndex));
-	object.insert(QString::fromLatin1(kTimestampMs), frame.nTimestampMs);
-	object.insert(QString::fromLatin1(kLastInputSeq), QString::number(m_nLastInjectedInputSeq));
-	object.insert(QString::fromLatin1(kInputAgeMs),
-		m_nLastInjectedInputMs >= 0 ? frame.nTimestampMs - m_nLastInjectedInputMs : -1);
 	return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
 }
 

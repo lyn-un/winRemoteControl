@@ -1,5 +1,6 @@
 #include "transport/webrtc/webrtcpeer.h"
 
+#include "common/framewatermark.h"
 #include "common/latencytracelogger.h"
 #include "common/sessiontracelogger.h"
 
@@ -1082,6 +1083,30 @@ void KWebRtcPeer::OnFrame(const webrtc::VideoFrame &frame)
 			pDstRow[x * 4 + 1] = static_cast<unsigned char>(nG);
 			pDstRow[x * 4 + 2] = static_cast<unsigned char>(nR);
 			pDstRow[x * 4 + 3] = 255;
+		}
+	}
+
+	if (KLatencyTraceLogger::isEnabled())
+	{
+		KFrameWatermark watermark;
+		if (KFrameWatermarkCodec::readBgra(decodedFrame.vecBgraBuffer,
+				decodedFrame.nWidth,
+				decodedFrame.nHeight,
+				&watermark))
+		{
+			decodedFrame.nSourceFrameIndex = watermark.nSourceFrameIndex;
+			decodedFrame.nLastInputSeq = watermark.nLastInputSeq;
+			decodedFrame.nInputAgeMs = watermark.nInputAgeMs;
+			if (decodedFrame.nFrameIndex > 0 && decodedFrame.nFrameIndex % kVideoTraceFrameInterval == 0)
+			{
+				KLatencyTraceLogger::write(QStringLiteral("controller"),
+					QStringLiteral("remote_frame_trace"),
+					QStringLiteral("frame=%1 sourceFrame=%2 lastInputSeq=%3 inputAgeMs=%4")
+						.arg(decodedFrame.nFrameIndex)
+						.arg(decodedFrame.nSourceFrameIndex)
+						.arg(decodedFrame.nLastInputSeq)
+						.arg(decodedFrame.nInputAgeMs));
+			}
 		}
 	}
 

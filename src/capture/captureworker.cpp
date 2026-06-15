@@ -4,6 +4,7 @@
 #include "capture/dxgidesktopduplicator.h"
 #include "codec/h264decoder.h"
 #include "codec/h264encoder.h"
+#include "common/framewatermark.h"
 #include "common/latencytracelogger.h"
 
 #include <QtCore/QThread>
@@ -95,8 +96,14 @@ void KCaptureWorker::startWork()
 						.arg(frame.nTimestampMs));
 			}
 
+			quint64 nLastInputSeq = 0;
+			qint64 nLastInputInjectedMs = -1;
+			inputTraceState(&nLastInputSeq, &nLastInputInjectedMs);
+			const qint64 nLastInputAgeMs =
+				nLastInputInjectedMs >= 0 ? frame.nTimestampMs - nLastInputInjectedMs : -1;
+
 			KWebRtcVideoFrame videoFrame;
-			if (!convertBgraToI420(frame, currentConfig, &videoFrame))
+			if (!convertBgraToI420(frame, currentConfig, nLastInputSeq, nLastInputAgeMs, &videoFrame))
 			{
 				m_bRunning = false;
 				emit captureError(QStringLiteral("Convert BGRA to I420 failed"));
@@ -211,10 +218,26 @@ void KCaptureWorker::setStreamConfig(const KStreamConfig &config)
 	m_streamConfig = normalizeStreamConfig(config);
 }
 
+void KCaptureWorker::setInputTraceState(quint64 nSeq, qint64 nInjectedMs)
+{
+	std::lock_guard<std::mutex> guard(m_inputTraceMutex);
+	m_nLastInputSeq = nSeq;
+	m_nLastInputInjectedMs = nInjectedMs;
+}
+
 KStreamConfig KCaptureWorker::streamConfig() const
 {
 	std::lock_guard<std::mutex> guard(m_configMutex);
 	return m_streamConfig;
+}
+
+void KCaptureWorker::inputTraceState(quint64 *pSeq, qint64 *pInjectedMs) const
+{
+	std::lock_guard<std::mutex> guard(m_inputTraceMutex);
+	if (pSeq != nullptr)
+		*pSeq = m_nLastInputSeq;
+	if (pInjectedMs != nullptr)
+		*pInjectedMs = m_nLastInputInjectedMs;
 }
 
 KStreamConfig KCaptureWorker::normalizeStreamConfig(const KStreamConfig &config)
@@ -229,6 +252,8 @@ KStreamConfig KCaptureWorker::normalizeStreamConfig(const KStreamConfig &config)
 
 bool KCaptureWorker::convertBgraToI420(const KCaptureFrame &captureFrame,
 	const KStreamConfig &config,
+	quint64 nLastInputSeq,
+	qint64 nLastInputAgeMs,
 	KWebRtcVideoFrame *pVideoFrame)
 {
 	if (pVideoFrame == nullptr || captureFrame.nWidth < 2 || captureFrame.nHeight < 2
@@ -261,10 +286,52 @@ bool KCaptureWorker::convertBgraToI420(const KCaptureFrame &captureFrame,
 		}
 	}
 
+	std::vector<unsigned char> traceBgraBuffer;
+	if (KLatencyTraceLogger::isEnabled() && nLastInputSeq > 0)
+	{
+		traceBgraBuffer.resize(static_cast<size_t>(nWidth) * static_cast<size_t>(nHeight) * 4);
+		if (!scaledBgraBuffer.empty())
+		{
+			std::memcpy(traceBgraBuffer.data(), scaledBgraBuffer.data(), traceBgraBuffer.size());
+		}
+		else
+		{
+			for (int y = 0; y < nHeight; ++y)
+			{
+				const unsigned char *pSrcRow = captureFrame.vecBgraBuffer.data()
+					+ static_cast<size_t>(y) * static_cast<size_t>(captureFrame.nWidth) * 4;
+				unsigned char *pDstRow = traceBgraBuffer.data()
+					+ static_cast<size_t>(y) * static_cast<size_t>(nWidth) * 4;
+				std::memcpy(pDstRow, pSrcRow, static_cast<size_t>(nWidth) * 4);
+			}
+		}
+
+		KFrameWatermark watermark;
+		watermark.nSourceFrameIndex = captureFrame.nFrameIndex;
+		watermark.nLastInputSeq = nLastInputSeq;
+		watermark.nInputAgeMs = nLastInputAgeMs;
+		KFrameWatermarkCodec::writeBgra(&traceBgraBuffer, nWidth, nHeight, watermark);
+		pSrc = traceBgraBuffer.data();
+		nSrcStride = nWidth * 4;
+
+		if (captureFrame.nFrameIndex > 0 && captureFrame.nFrameIndex % kVideoTraceFrameInterval == 0)
+		{
+			KLatencyTraceLogger::write(QStringLiteral("controlled"),
+				QStringLiteral("frame_trace"),
+				QStringLiteral("frame=%1 timestampMs=%2 lastInputSeq=%3 inputAgeMs=%4")
+					.arg(captureFrame.nFrameIndex)
+					.arg(captureFrame.nTimestampMs)
+					.arg(nLastInputSeq)
+					.arg(nLastInputAgeMs));
+		}
+	}
+
 	pVideoFrame->nWidth = nWidth;
 	pVideoFrame->nHeight = nHeight;
 	pVideoFrame->nFrameIndex = captureFrame.nFrameIndex;
 	pVideoFrame->nTimestampMs = captureFrame.nTimestampMs;
+	pVideoFrame->nLastInputSeq = nLastInputSeq;
+	pVideoFrame->nInputAgeMs = nLastInputAgeMs;
 	pVideoFrame->nStrideY = nWidth;
 	pVideoFrame->nStrideU = nWidth / 2;
 	pVideoFrame->nStrideV = nWidth / 2;

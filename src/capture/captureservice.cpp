@@ -32,6 +32,7 @@ void KCaptureService::startCaptureWithMode(KCaptureWorker::WorkMode mode)
 	m_pCaptureThread = new QThread(this);
 	m_pCaptureWorker = new KCaptureWorker(mode);
 	m_pCaptureWorker->setStreamConfig(m_streamConfig);
+	m_pCaptureWorker->setInputTraceState(m_nLastInputSeq, m_nLastInputInjectedMs);
 	m_pCaptureWorker->moveToThread(m_pCaptureThread);
 
 	connect(m_pCaptureThread, &QThread::started,
@@ -75,6 +76,14 @@ void KCaptureService::setStreamConfig(const KStreamConfig &config)
 	m_streamConfig = config;
 	if (m_pCaptureWorker != nullptr)
 		m_pCaptureWorker->setStreamConfig(config);
+}
+
+void KCaptureService::setInputTraceState(quint64 nSeq, qint64 nInjectedMs)
+{
+	m_nLastInputSeq = nSeq;
+	m_nLastInputInjectedMs = nInjectedMs;
+	if (m_pCaptureWorker != nullptr)
+		m_pCaptureWorker->setInputTraceState(nSeq, nInjectedMs);
 }
 
 void KCaptureService::clearWorker()
