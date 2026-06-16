@@ -91,7 +91,7 @@ void KInputInjector::handleInputMessage(const QString &strMessage)
 		emit inputError(strError);
 
 	const quint64 nSeq = object.value(QString::fromLatin1(kSeq)).toString().toULongLong();
-	if (bTrace && bOk && nSeq > 0)
+	if (bOk && nSeq > 0)
 		emit inputInjected(nSeq, QDateTime::currentMSecsSinceEpoch());
 
 	if (bTrace)
