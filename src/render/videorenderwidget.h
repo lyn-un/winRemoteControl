@@ -77,6 +77,7 @@ private:
 	bool m_bHasPendingFrame = false;
 	bool m_bPresentQueued = false;
 	bool m_bInitialized = false;
+	quint64 m_nLastRenderedInputSeq = 0;
 	int m_nFrameWidth = 0;
 	int m_nFrameHeight = 0;
 	int m_nRemoteScreenWidth = 0;

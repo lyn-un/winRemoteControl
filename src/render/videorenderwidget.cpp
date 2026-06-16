@@ -157,6 +157,22 @@ void KVideoRenderWidget::presentFrame(const KDecodedVideoFrame &frame)
 
 	render();
 
+	if (KLatencyTraceLogger::isEnabled()
+		&& frame.nLastInputSeq > 0
+		&& frame.nLastInputSeq != m_nLastRenderedInputSeq)
+	{
+		m_nLastRenderedInputSeq = frame.nLastInputSeq;
+		KLatencyTraceLogger::write(QStringLiteral("controller"),
+			QStringLiteral("input_feedback_rendered"),
+			QStringLiteral("seq=%1 frame=%2 sourceFrame=%3 inputAgeMs=%4 width=%5 height=%6")
+				.arg(frame.nLastInputSeq)
+				.arg(frame.nFrameIndex)
+				.arg(frame.nSourceFrameIndex)
+				.arg(frame.nInputAgeMs)
+				.arg(frame.nWidth)
+				.arg(frame.nHeight));
+	}
+
 	if (bTraceFrame)
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controller"),
@@ -179,6 +195,7 @@ void KVideoRenderWidget::clearFrame()
 		m_bHasPendingFrame = false;
 		m_bPresentQueued = false;
 		m_latestFrame = KDecodedVideoFrame();
+		m_nLastRenderedInputSeq = 0;
 	}
 
 	if (!m_spContext || !m_spSwapChain || !m_spRenderTargetView)
