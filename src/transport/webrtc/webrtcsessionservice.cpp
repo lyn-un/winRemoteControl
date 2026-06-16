@@ -1,5 +1,6 @@
 #include "transport/webrtc/webrtcsessionservice.h"
 
+#include "common/latencytracelogger.h"
 #include "common/sessiontracelogger.h"
 #include "input/inputinjector.h"
 #include "transport/webrtc/webrtcsignaling.h"
@@ -7,11 +8,14 @@
 #include <QtCore/QBuffer>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+#include <QtCore/QMetaObject>
 #include <QtCore/QSysInfo>
 #include <QtGui/QImage>
 #include <QtGui/QImageReader>
 
 #include <Windows.h>
+
+#include <utility>
 
 namespace
 {
@@ -20,6 +24,7 @@ namespace
 	constexpr int kWallpaperJpegQuality = 65;
 	constexpr int kWallpaperMaxBase64Bytes = 96 * 1024;
 	constexpr int kWallpaperPathBufferLength = MAX_PATH;
+	constexpr qint64 kRemoteFrameCoalesceTraceIntervalMs = 500;
 
 	constexpr char kType[] = "type";
 	constexpr char kDeviceInfoRequest[] = "deviceInfoRequest";
@@ -113,6 +118,7 @@ void KWebRtcSessionService::disconnectSession()
 	m_bDeviceInfoRequested = false;
 	m_nLastInjectedInputSeq = 0;
 	m_nLastInjectedInputMs = -1;
+	clearPendingRemoteFrame();
 	emit inputTraceUpdated(0, -1);
 	emit stopCaptureRequested();
 	if (m_pSignaling != nullptr)
@@ -151,6 +157,7 @@ void KWebRtcSessionService::startStreaming()
 
 void KWebRtcSessionService::stopStreaming()
 {
+	clearPendingRemoteFrame();
 	emit stopCaptureRequested();
 	emit webRtcStateChanged(QStringLiteral("Stopped"));
 }
@@ -206,9 +213,7 @@ void KWebRtcSessionService::wirePeer()
 	connect(m_pPeer, &KWebRtcPeer::peerError,
 		this, &KWebRtcSessionService::sessionError);
 	connect(m_pPeer, &KWebRtcPeer::remoteFrameReady,
-		this, &KWebRtcSessionService::remoteFrameReady);
-	connect(m_pPeer, &KWebRtcPeer::remoteFrameStatsReady,
-		this, &KWebRtcSessionService::remoteFrameStatsReady);
+		this, &KWebRtcSessionService::enqueueRemoteFrame, Qt::DirectConnection);
 	connect(m_pPeer, &KWebRtcPeer::networkStatsReady,
 		this, &KWebRtcSessionService::networkStatsReady);
 	connect(m_pPeer, &KWebRtcPeer::inputMessageReceived,
@@ -223,6 +228,108 @@ void KWebRtcSessionService::wirePeer()
 		this, &KWebRtcSessionService::handleSessionChannelChanged);
 	connect(m_pPeer, &KWebRtcPeer::sessionChannelChanged,
 		this, &KWebRtcSessionService::sessionChannelChanged);
+}
+
+void KWebRtcSessionService::enqueueRemoteFrame(const KDecodedVideoFrame &frame)
+{
+	if (frame.nWidth <= 0 || frame.nHeight <= 0 || frame.vecBgraBuffer.empty())
+		return;
+
+	bool bNeedQueue = false;
+	quint64 nDroppedFrames = 0;
+	{
+		std::lock_guard<std::mutex> guard(m_remoteFrameMutex);
+		if (m_bHasPendingRemoteFrame)
+			++m_nDroppedRemoteFrames;
+
+		m_pendingRemoteFrame = frame;
+		m_bHasPendingRemoteFrame = true;
+		nDroppedFrames = m_nDroppedRemoteFrames;
+		if (!m_bRemoteFrameFlushQueued)
+		{
+			m_bRemoteFrameFlushQueued = true;
+			bNeedQueue = true;
+		}
+	}
+
+	if (nDroppedFrames > 0 && shouldTraceRemoteFrameCoalescing())
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controller"),
+			QStringLiteral("remote_frame_coalesced"),
+			QStringLiteral("dropped=%1 latestFrame=%2")
+				.arg(nDroppedFrames)
+				.arg(frame.nFrameIndex));
+	}
+
+	if (bNeedQueue)
+	{
+		QMetaObject::invokeMethod(this,
+			&KWebRtcSessionService::flushLatestRemoteFrame,
+			Qt::QueuedConnection);
+	}
+}
+
+void KWebRtcSessionService::flushLatestRemoteFrame()
+{
+	KDecodedVideoFrame frame;
+	{
+		std::lock_guard<std::mutex> guard(m_remoteFrameMutex);
+		if (!m_bHasPendingRemoteFrame)
+		{
+			m_bRemoteFrameFlushQueued = false;
+			return;
+		}
+
+		frame = std::move(m_pendingRemoteFrame);
+		m_pendingRemoteFrame = KDecodedVideoFrame();
+		m_bHasPendingRemoteFrame = false;
+	}
+
+	emit remoteFrameReady(frame);
+	emit remoteFrameStatsReady(frame.nWidth, frame.nHeight, frame.nFrameIndex, frame.nTimestampMs);
+
+	bool bNeedQueue = false;
+	{
+		std::lock_guard<std::mutex> guard(m_remoteFrameMutex);
+		if (m_bHasPendingRemoteFrame)
+			bNeedQueue = true;
+		else
+			m_bRemoteFrameFlushQueued = false;
+	}
+
+	if (bNeedQueue)
+	{
+		QMetaObject::invokeMethod(this,
+			&KWebRtcSessionService::flushLatestRemoteFrame,
+			Qt::QueuedConnection);
+	}
+}
+
+void KWebRtcSessionService::clearPendingRemoteFrame()
+{
+	std::lock_guard<std::mutex> guard(m_remoteFrameMutex);
+	m_pendingRemoteFrame = KDecodedVideoFrame();
+	m_nDroppedRemoteFrames = 0;
+	m_bHasPendingRemoteFrame = false;
+	m_bRemoteFrameFlushQueued = false;
+}
+
+bool KWebRtcSessionService::shouldTraceRemoteFrameCoalescing()
+{
+	if (!KLatencyTraceLogger::isEnabled())
+		return false;
+
+	if (!m_remoteFrameCoalesceTraceTimer.isValid())
+	{
+		m_remoteFrameCoalesceTraceTimer.start();
+		return true;
+	}
+
+	if (m_remoteFrameCoalesceTraceTimer.elapsed() < kRemoteFrameCoalesceTraceIntervalMs)
+		return false;
+
+	m_remoteFrameCoalesceTraceTimer.restart();
+	return true;
 }
 
 void KWebRtcSessionService::handleSessionChannelChanged(bool bOpen)
