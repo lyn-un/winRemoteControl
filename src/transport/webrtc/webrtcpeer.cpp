@@ -96,6 +96,7 @@ namespace
 	constexpr int kBitsPerByte = 8;
 	constexpr int kMsPerSecond = 1000;
 	constexpr int kBitsPerKilobit = 1000;
+	constexpr int kReceiverMaxFrameRateFps = 60;
 	constexpr double kSecondsToMilliseconds = 1000.0;
 	constexpr quint64 kVideoTraceFrameInterval = 30;
 	constexpr char kInputMouseMove[] = "mouseMove";
@@ -603,13 +604,24 @@ void KWebRtcPeer::setStreamConfig(const KStreamConfig &config)
 
 	for (webrtc::RtpEncodingParameters &encoding : parameters.encodings)
 	{
-		encoding.max_bitrate_bps = config.nBitrateKbps * 1000;
+		encoding.max_bitrate_bps = config.nBitrateKbps * kBitsPerKilobit;
 		encoding.max_framerate = static_cast<double>(config.nFps);
 	}
 
 	const webrtc::RTCError result = m_spVideoSender->SetParameters(parameters);
 	if (!result.ok())
+	{
 		emit peerError(rtcErrorMessage(QStringLiteral("Set video stream parameters failed"), result));
+		return;
+	}
+
+	KLatencyTraceLogger::write(roleToString(m_role),
+		QStringLiteral("stream_config_applied"),
+		QStringLiteral("fps=%1 width=%2 height=%3 bitrateKbps=%4")
+			.arg(config.nFps)
+			.arg(config.nWidth)
+			.arg(config.nHeight)
+			.arg(config.nBitrateKbps));
 }
 
 void KWebRtcPeer::startStatsPolling(const QString &strReason)
@@ -860,7 +872,10 @@ void KWebRtcPeer::OnAddTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterface>
 	}
 
 	m_spRemoteVideoTrack = static_cast<webrtc::VideoTrackInterface *>(receiver->track().get());
-	m_spRemoteVideoTrack->AddOrUpdateSink(this, webrtc::VideoSinkWants());
+	webrtc::VideoSinkWants wants;
+	wants.black_frames = false;
+	wants.max_framerate_fps = kReceiverMaxFrameRateFps;
+	m_spRemoteVideoTrack->AddOrUpdateSink(this, wants);
 	emit stateChanged(QStringLiteral("RemoteVideoTrack"));
 	startStatsPolling(QStringLiteral("remote_video_track"));
 }

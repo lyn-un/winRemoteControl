@@ -6,9 +6,9 @@
 struct KStreamConfig
 {
 	int nFps = 30;
-	int nWidth = 0;
-	int nHeight = 0;
-	int nBitrateKbps = 2000;
+	int nWidth = 1280;
+	int nHeight = 720;
+	int nBitrateKbps = 3000;
 };
 
 Q_DECLARE_METATYPE(KStreamConfig)

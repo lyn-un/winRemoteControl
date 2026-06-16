@@ -353,9 +353,10 @@ function DesktopPage() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   const qualityPresets = {
-    auto: { label: "自动", fps: 30, width: 1280, height: 720, bitrateKbps: 2000 },
-    original: { label: "原画", fps: 30, width: 0, height: 0, bitrateKbps: 20000 },
-    hd: { label: "高清", fps: 30, width: 1920, height: 1080, bitrateKbps: 8000 },
+    ultraFast: { label: "极速", fps: 60, width: 1280, height: 720, bitrateKbps: 4000 },
+    auto: { label: "自动", fps: 30, width: 1280, height: 720, bitrateKbps: 3000 },
+    original: { label: "原画", fps: 30, width: 0, height: 0, bitrateKbps: 12000 },
+    hd: { label: "高清", fps: 30, width: 1920, height: 1080, bitrateKbps: 6000 },
     smooth: { label: "流畅", fps: 30, width: 1280, height: 720, bitrateKbps: 2000 },
   };
 

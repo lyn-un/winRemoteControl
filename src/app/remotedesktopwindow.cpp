@@ -12,6 +12,35 @@
 #include <Windows.h>
 #include <windowsx.h>
 
+namespace
+{
+	constexpr int kUltraFastWidth = 1280;
+	constexpr int kUltraFastHeight = 720;
+	constexpr int kUltraFastFps = 60;
+	constexpr int kUltraFastBitrateKbps = 4000;
+	constexpr int kAutoWidth = 1280;
+	constexpr int kAutoHeight = 720;
+	constexpr int kAutoFps = 30;
+	constexpr int kAutoBitrateKbps = 3000;
+	constexpr int kOriginalWidth = 0;
+	constexpr int kOriginalHeight = 0;
+	constexpr int kOriginalFps = 30;
+	constexpr int kOriginalBitrateKbps = 12000;
+	constexpr int kHdWidth = 1920;
+	constexpr int kHdHeight = 1080;
+	constexpr int kHdFps = 30;
+	constexpr int kHdBitrateKbps = 6000;
+	constexpr int kSmoothWidth = 1280;
+	constexpr int kSmoothHeight = 720;
+	constexpr int kSmoothFps = 30;
+	constexpr int kSmoothBitrateKbps = 2000;
+	constexpr double kMaxInitialWindowScale = 0.9;
+	constexpr int kMinimumWindowWidth = 640;
+	constexpr int kMinimumWindowHeight = 420;
+	constexpr int kDesktopTitleBarHeight = 40;
+	constexpr int kResizeBorderDip = 8;
+}
+
 KRemoteDesktopWindow::KRemoteDesktopWindow(QWidget *pParent)
 	: QMainWindow(pParent)
 	, m_pWebViewWidget(new KWebViewWidget(this))
@@ -116,52 +145,41 @@ void KRemoteDesktopWindow::showControlCenterMenu(const QPoint &pos)
 {
 	QMenu menu(this);
 	QMenu *pQualityMenu = menu.addMenu(QStringLiteral("画质"));
+	pQualityMenu->addAction(QStringLiteral("极速"), this,
+		[this]()
+		{
+			applyStreamConfig(kUltraFastWidth, kUltraFastHeight, kUltraFastFps, kUltraFastBitrateKbps);
+		});
 	pQualityMenu->addAction(QStringLiteral("自动"), this,
 		[this]()
 		{
-			applyStreamQuality(1280, 720, 2000);
+			applyStreamConfig(kAutoWidth, kAutoHeight, kAutoFps, kAutoBitrateKbps);
 		});
 	pQualityMenu->addAction(QStringLiteral("原画"), this,
 		[this]()
 		{
-			applyStreamQuality(0, 0, 20000);
+			applyStreamConfig(kOriginalWidth, kOriginalHeight, kOriginalFps, kOriginalBitrateKbps);
 		});
 	pQualityMenu->addAction(QStringLiteral("高清"), this,
 		[this]()
 		{
-			applyStreamQuality(1920, 1080, 8000);
+			applyStreamConfig(kHdWidth, kHdHeight, kHdFps, kHdBitrateKbps);
 		});
 	pQualityMenu->addAction(QStringLiteral("流畅"), this,
 		[this]()
 		{
-			applyStreamQuality(1280, 720, 2000);
-		});
-	pQualityMenu->addSeparator();
-	pQualityMenu->addAction(QStringLiteral("60 帧"), this,
-		[this]()
-		{
-			applyStreamFps(60);
-		});
-	pQualityMenu->addAction(QStringLiteral("30 帧"), this,
-		[this]()
-		{
-			applyStreamFps(30);
+			applyStreamConfig(kSmoothWidth, kSmoothHeight, kSmoothFps, kSmoothBitrateKbps);
 		});
 
 	menu.exec(m_pWebViewWidget->mapToGlobal(pos));
 }
 
-void KRemoteDesktopWindow::applyStreamQuality(int nWidth, int nHeight, int nBitrateKbps)
+void KRemoteDesktopWindow::applyStreamConfig(int nWidth, int nHeight, int nFps, int nBitrateKbps)
 {
 	m_streamConfig.nWidth = nWidth;
 	m_streamConfig.nHeight = nHeight;
-	m_streamConfig.nBitrateKbps = nBitrateKbps;
-	emit streamConfigRequested(m_streamConfig);
-}
-
-void KRemoteDesktopWindow::applyStreamFps(int nFps)
-{
 	m_streamConfig.nFps = nFps;
+	m_streamConfig.nBitrateKbps = nBitrateKbps;
 	emit streamConfigRequested(m_streamConfig);
 }
 
@@ -196,10 +214,9 @@ void KRemoteDesktopWindow::adjustInitialWindowSize(int nFrameWidth, int nFrameHe
 		return;
 
 	const QRect availableRect = pScreen->availableGeometry();
-	const int nMaxWindowWidth = qMax(640, qFloor(availableRect.width() * 0.9));
-	const int nMaxWindowHeight = qMax(420, qFloor(availableRect.height() * 0.9));
-	const int nTitleBarHeight = 40;
-	const int nMaxVideoHeight = qMax(1, nMaxWindowHeight - nTitleBarHeight);
+	const int nMaxWindowWidth = qMax(kMinimumWindowWidth, qFloor(availableRect.width() * kMaxInitialWindowScale));
+	const int nMaxWindowHeight = qMax(kMinimumWindowHeight, qFloor(availableRect.height() * kMaxInitialWindowScale));
+	const int nMaxVideoHeight = qMax(1, nMaxWindowHeight - kDesktopTitleBarHeight);
 	const double fFrameAspect = static_cast<double>(nFrameWidth) / static_cast<double>(nFrameHeight);
 
 	int nVideoWidth = nMaxWindowWidth;
@@ -210,7 +227,8 @@ void KRemoteDesktopWindow::adjustInitialWindowSize(int nFrameWidth, int nFrameHe
 		nVideoWidth = qRound(nVideoHeight * fFrameAspect);
 	}
 
-	const QSize targetSize(qMax(640, nVideoWidth), qMax(420, nVideoHeight + nTitleBarHeight));
+	const QSize targetSize(qMax(kMinimumWindowWidth, nVideoWidth),
+		qMax(kMinimumWindowHeight, nVideoHeight + kDesktopTitleBarHeight));
 	resize(targetSize);
 	move(availableRect.center() - rect().center());
 	m_bInitialSizeAdjusted = true;
@@ -224,7 +242,7 @@ bool KRemoteDesktopWindow::handleNativeHitTest(void *pMessage, qintptr *pResult)
 	if (isMaximized())
 		return false;
 
-	const int nBorderWidth = static_cast<int>(8 * devicePixelRatioF());
+	const int nBorderWidth = static_cast<int>(kResizeBorderDip * devicePixelRatioF());
 	const LONG nX = GET_X_LPARAM(pMsg->lParam);
 	const LONG nY = GET_Y_LPARAM(pMsg->lParam);
 	RECT windowRect = {};

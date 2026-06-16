@@ -41,8 +41,7 @@ private:
 	void initConnections();
 	void updatePreviewRect(const QRect &rect);
 	void showControlCenterMenu(const QPoint &pos);
-	void applyStreamQuality(int nWidth, int nHeight, int nBitrateKbps);
-	void applyStreamFps(int nFps);
+	void applyStreamConfig(int nWidth, int nHeight, int nFps, int nBitrateKbps);
 	void minimizeWindow();
 	void toggleMaximizeWindow();
 	void beginWindowDrag();
