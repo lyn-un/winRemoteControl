@@ -185,6 +185,8 @@ void KSessionViewModel::initConnections()
 		m_pCaptureService, &KCaptureService::setStreamConfig);
 	connect(m_pWebRtcSessionService, &KWebRtcSessionService::inputTraceUpdated,
 		m_pCaptureService, &KCaptureService::setInputTraceState);
+	connect(m_pWebRtcSessionService, &KWebRtcSessionService::inputFeedbackFrameRequested,
+		m_pCaptureService, &KCaptureService::requestImmediateFrame);
 	connect(m_pWebRtcSessionService, &KWebRtcSessionService::signalingChanged,
 		this, &KSessionViewModel::signalingChanged);
 	connect(m_pWebRtcSessionService, &KWebRtcSessionService::webRtcStateChanged,

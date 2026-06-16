@@ -316,6 +316,7 @@ void KWebRtcSessionService::handleInputInjected(quint64 nSeq, qint64 nInjectedMs
 	m_nLastInjectedInputSeq = nSeq;
 	m_nLastInjectedInputMs = nInjectedMs;
 	emit inputTraceUpdated(nSeq, nInjectedMs);
+	emit inputFeedbackFrameRequested();
 }
 
 void KWebRtcSessionService::sendDeviceInfoMessage()

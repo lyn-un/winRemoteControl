@@ -86,6 +86,12 @@ void KCaptureService::setInputTraceState(quint64 nSeq, qint64 nInjectedMs)
 		m_pCaptureWorker->setInputTraceState(nSeq, nInjectedMs);
 }
 
+void KCaptureService::requestImmediateFrame()
+{
+	if (m_pCaptureWorker != nullptr)
+		m_pCaptureWorker->requestImmediateFrame();
+}
+
 void KCaptureService::clearWorker()
 {
 	m_pCaptureThread = nullptr;

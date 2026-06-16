@@ -6,9 +6,11 @@
 #include "transport/webrtc/webrtcvideoframe.h"
 
 #include <QtCore/QObject>
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QString>
 
 #include <atomic>
+#include <condition_variable>
 #include <mutex>
 #include <vector>
 
@@ -36,6 +38,7 @@ public slots:
 	void stopWork();
 	void setStreamConfig(const KStreamConfig &config);
 	void setInputTraceState(quint64 nSeq, qint64 nInjectedMs);
+	void requestImmediateFrame();
 
 signals:
 	void statusChanged(const QString &strStatus);
@@ -48,6 +51,8 @@ signals:
 private:
 	KStreamConfig streamConfig() const;
 	void inputTraceState(quint64 *pSeq, qint64 *pInjectedMs) const;
+	bool waitForNextFrame(qint64 nSleepMs);
+	bool shouldTraceImmediateFrameRequest();
 	static KStreamConfig normalizeStreamConfig(const KStreamConfig &config);
 	static bool convertBgraToI420(const KCaptureFrame &captureFrame,
 		const KStreamConfig &config,
@@ -63,9 +68,14 @@ private:
 	std::atomic_bool m_bRunning = false;
 	mutable std::mutex m_configMutex;
 	mutable std::mutex m_inputTraceMutex;
+	std::mutex m_waitMutex;
+	std::condition_variable m_waitCondition;
 	KStreamConfig m_streamConfig;
 	quint64 m_nLastInputSeq = 0;
 	qint64 m_nLastInputInjectedMs = -1;
+	bool m_bImmediateFrameRequested = false;
+	bool m_bImmediateFrameTracePending = false;
+	QElapsedTimer m_immediateFrameTraceTimer;
 };
 
 #endif // _WINREMOTECONTROL_CAPTUREWORKER_H_

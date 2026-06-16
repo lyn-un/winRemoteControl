@@ -11,6 +11,7 @@
 #include <QtCore/QElapsedTimer>
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <cmath>
 #include <vector>
@@ -20,6 +21,7 @@
 namespace
 {
 	constexpr quint64 kVideoTraceFrameInterval = 30;
+	constexpr qint64 kImmediateFrameTraceIntervalMs = 500;
 }
 
 KCaptureWorker::KCaptureWorker(WorkMode mode, QObject *pParent)
@@ -126,8 +128,7 @@ void KCaptureWorker::startWork()
 			emit frameReady(frame.nWidth, frame.nHeight, frame.nFrameIndex, frame.nTimestampMs);
 			const int nFrameIntervalMs = std::max(1, 1000 / std::max(1, currentConfig.nFps));
 			const qint64 nSleepMs = static_cast<qint64>(nFrameIntervalMs) - frameTimer.elapsed();
-			if (nSleepMs > 0)
-				QThread::msleep(static_cast<unsigned long>(nSleepMs));
+			waitForNextFrame(nSleepMs);
 			continue;
 		}
 
@@ -210,6 +211,7 @@ void KCaptureWorker::startWork()
 void KCaptureWorker::stopWork()
 {
 	m_bRunning = false;
+	m_waitCondition.notify_all();
 }
 
 void KCaptureWorker::setStreamConfig(const KStreamConfig &config)
@@ -225,6 +227,23 @@ void KCaptureWorker::setInputTraceState(quint64 nSeq, qint64 nInjectedMs)
 	m_nLastInputInjectedMs = nInjectedMs;
 }
 
+void KCaptureWorker::requestImmediateFrame()
+{
+	if (m_mode != WebRtcSourceWorkMode || !m_bRunning)
+		return;
+
+	std::lock_guard<std::mutex> guard(m_waitMutex);
+	m_bImmediateFrameRequested = true;
+	if (shouldTraceImmediateFrameRequest())
+	{
+		m_bImmediateFrameTracePending = true;
+		KLatencyTraceLogger::write(QStringLiteral("controlled"),
+			QStringLiteral("immediate_frame_requested"),
+			QStringLiteral("mode=webrtc"));
+	}
+	m_waitCondition.notify_all();
+}
+
 KStreamConfig KCaptureWorker::streamConfig() const
 {
 	std::lock_guard<std::mutex> guard(m_configMutex);
@@ -238,6 +257,53 @@ void KCaptureWorker::inputTraceState(quint64 *pSeq, qint64 *pInjectedMs) const
 		*pSeq = m_nLastInputSeq;
 	if (pInjectedMs != nullptr)
 		*pInjectedMs = m_nLastInputInjectedMs;
+}
+
+bool KCaptureWorker::waitForNextFrame(qint64 nSleepMs)
+{
+	if (nSleepMs <= 0)
+		return false;
+
+	std::unique_lock<std::mutex> lock(m_waitMutex);
+	const bool bInterrupted = m_waitCondition.wait_for(lock,
+		std::chrono::milliseconds(nSleepMs),
+		[this]()
+		{
+			return !m_bRunning || m_bImmediateFrameRequested;
+		});
+
+	const bool bWokeForImmediateFrame = bInterrupted && m_bImmediateFrameRequested && m_bRunning;
+	const bool bTracePending = m_bImmediateFrameTracePending;
+	m_bImmediateFrameRequested = false;
+	m_bImmediateFrameTracePending = false;
+	lock.unlock();
+
+	if (bWokeForImmediateFrame && bTracePending)
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controlled"),
+			QStringLiteral("immediate_frame_wake"),
+			QStringLiteral("mode=webrtc"));
+	}
+
+	return bWokeForImmediateFrame;
+}
+
+bool KCaptureWorker::shouldTraceImmediateFrameRequest()
+{
+	if (!KLatencyTraceLogger::isEnabled())
+		return false;
+
+	if (!m_immediateFrameTraceTimer.isValid())
+	{
+		m_immediateFrameTraceTimer.start();
+		return true;
+	}
+
+	if (m_immediateFrameTraceTimer.elapsed() < kImmediateFrameTraceIntervalMs)
+		return false;
+
+	m_immediateFrameTraceTimer.restart();
+	return true;
 }
 
 KStreamConfig KCaptureWorker::normalizeStreamConfig(const KStreamConfig &config)

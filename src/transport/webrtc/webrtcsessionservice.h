@@ -57,6 +57,7 @@ signals:
 	void inputChannelChanged(bool bOpen);
 	void sessionChannelChanged(bool bOpen);
 	void inputTraceUpdated(quint64 nSeq, qint64 nInjectedMs);
+	void inputFeedbackFrameRequested();
 
 private:
 	bool initializePeer(KWebRtcPeer::Role role, QString *pErrorMessage);

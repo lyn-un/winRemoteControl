@@ -28,6 +28,7 @@ public slots:
 	void stopCapture();
 	void setStreamConfig(const KStreamConfig &config);
 	void setInputTraceState(quint64 nSeq, qint64 nInjectedMs);
+	void requestImmediateFrame();
 
 signals:
 	void statusChanged(const QString &strStatus);
