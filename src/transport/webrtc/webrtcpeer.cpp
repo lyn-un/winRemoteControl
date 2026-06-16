@@ -99,6 +99,7 @@ namespace
 	constexpr int kReceiverMaxFrameRateFps = 60;
 	constexpr double kSecondsToMilliseconds = 1000.0;
 	constexpr quint64 kVideoTraceFrameInterval = 30;
+	constexpr quint64 kRemoteCallbackFrameCoalesceTraceInterval = 30;
 	constexpr char kInputMouseMove[] = "mouseMove";
 	constexpr char kInputMouseButton[] = "mouseButton";
 	constexpr char kInputMouseWheel[] = "mouseWheel";
@@ -429,6 +430,7 @@ void KWebRtcPeer::shutdown()
 	if (m_spRemoteVideoTrack)
 		m_spRemoteVideoTrack->RemoveSink(this);
 	m_spRemoteVideoTrack = nullptr;
+	clearPendingRemoteFrame();
 	m_spVideoSender = nullptr;
 	m_spPeerConnection = nullptr;
 	m_spVideoSource = nullptr;
@@ -885,6 +887,7 @@ void KWebRtcPeer::OnRemoveTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterfa
 	if (m_spRemoteVideoTrack)
 		m_spRemoteVideoTrack->RemoveSink(this);
 	m_spRemoteVideoTrack = nullptr;
+	clearPendingRemoteFrame();
 }
 
 void KWebRtcPeer::OnDataChannel(webrtc::scoped_refptr<webrtc::DataChannelInterface> channel)
@@ -1056,6 +1059,87 @@ void KWebRtcPeer::handleRemoteDescriptionFailure(webrtc::RTCError error)
 
 void KWebRtcPeer::OnFrame(const webrtc::VideoFrame &frame)
 {
+	bool bNeedQueue = false;
+	quint64 nDroppedFrames = 0;
+	{
+		std::lock_guard<std::mutex> guard(m_remoteFrameMutex);
+		if (m_bHasPendingRemoteFrame)
+			++m_nDroppedRemoteCallbackFrames;
+
+		m_pendingRemoteFrame = frame;
+		m_bHasPendingRemoteFrame = true;
+		nDroppedFrames = m_nDroppedRemoteCallbackFrames;
+		if (!m_bRemoteFrameProcessQueued)
+		{
+			m_bRemoteFrameProcessQueued = true;
+			bNeedQueue = true;
+		}
+	}
+
+	if (nDroppedFrames > 0
+		&& KLatencyTraceLogger::isEnabled()
+		&& (nDroppedFrames == 1
+			|| nDroppedFrames % kRemoteCallbackFrameCoalesceTraceInterval == 0))
+	{
+		KLatencyTraceLogger::write(roleToString(m_role),
+			QStringLiteral("remote_callback_frame_coalesced"),
+			QStringLiteral("dropped=%1 latestTimestampMs=%2")
+				.arg(nDroppedFrames)
+				.arg(frame.timestamp_us() / 1000));
+	}
+
+	if (bNeedQueue)
+	{
+		QMetaObject::invokeMethod(this,
+			[this]()
+			{
+				processLatestRemoteFrame();
+			},
+			Qt::QueuedConnection);
+	}
+}
+
+void KWebRtcPeer::processLatestRemoteFrame()
+{
+	std::optional<webrtc::VideoFrame> pendingFrame;
+	{
+		std::lock_guard<std::mutex> guard(m_remoteFrameMutex);
+		if (!m_bHasPendingRemoteFrame)
+		{
+			m_bRemoteFrameProcessQueued = false;
+			return;
+		}
+
+		pendingFrame = std::move(m_pendingRemoteFrame);
+		m_pendingRemoteFrame.reset();
+		m_bHasPendingRemoteFrame = false;
+	}
+
+	if (pendingFrame.has_value())
+		decodeAndEmitRemoteFrame(*pendingFrame);
+
+	bool bNeedQueue = false;
+	{
+		std::lock_guard<std::mutex> guard(m_remoteFrameMutex);
+		if (m_bHasPendingRemoteFrame)
+			bNeedQueue = true;
+		else
+			m_bRemoteFrameProcessQueued = false;
+	}
+
+	if (bNeedQueue)
+	{
+		QMetaObject::invokeMethod(this,
+			[this]()
+			{
+				processLatestRemoteFrame();
+			},
+			Qt::QueuedConnection);
+	}
+}
+
+void KWebRtcPeer::decodeAndEmitRemoteFrame(const webrtc::VideoFrame &frame)
+{
 	const quint64 nNextFrameIndex = m_nRemoteFrameIndex + 1;
 	if (nNextFrameIndex % kVideoTraceFrameInterval == 0)
 	{
@@ -1130,6 +1214,15 @@ void KWebRtcPeer::OnFrame(const webrtc::VideoFrame &frame)
 		decodedFrame.nHeight,
 		decodedFrame.nFrameIndex,
 		decodedFrame.nTimestampMs);
+}
+
+void KWebRtcPeer::clearPendingRemoteFrame()
+{
+	std::lock_guard<std::mutex> guard(m_remoteFrameMutex);
+	m_pendingRemoteFrame.reset();
+	m_bHasPendingRemoteFrame = false;
+	m_bRemoteFrameProcessQueued = false;
+	m_nDroppedRemoteCallbackFrames = 0;
 }
 
 bool KWebRtcPeer::createFactory(QString *pErrorMessage)
