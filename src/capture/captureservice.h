@@ -9,6 +9,8 @@
 #include <QtCore/QObject>
 #include <QtCore/QString>
 
+#include <mutex>
+
 class QThread;
 
 class KCaptureService : public QObject
@@ -40,12 +42,21 @@ signals:
 private:
 	void startCaptureWithMode(KCaptureWorker::WorkMode mode);
 	void clearWorker();
+	void enqueueWebRtcFrame(const KWebRtcVideoFrame &frame);
+	void flushLatestWebRtcFrame();
+	void clearPendingWebRtcFrame();
 
 	QThread *m_pCaptureThread = nullptr;
 	KCaptureWorker *m_pCaptureWorker = nullptr;
 	KStreamConfig m_streamConfig;
 	quint64 m_nLastInputSeq = 0;
 	qint64 m_nLastInputInjectedMs = -1;
+	std::mutex m_webRtcFrameMutex;
+	KWebRtcVideoFrame m_pendingWebRtcFrame;
+	bool m_bHasPendingWebRtcFrame = false;
+	bool m_bWebRtcFrameFlushQueued = false;
+	bool m_bAcceptWebRtcFrames = false;
+	quint64 m_nDroppedWebRtcSourceFrames = 0;
 };
 
 #endif // _WINREMOTECONTROL_CAPTURESERVICE_H_

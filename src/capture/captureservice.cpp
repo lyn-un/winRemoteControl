@@ -1,8 +1,15 @@
 #include "capture/captureservice.h"
 
 #include "capture/captureworker.h"
+#include "common/latencytracelogger.h"
 
+#include <QtCore/QMetaObject>
 #include <QtCore/QThread>
+
+namespace
+{
+	constexpr quint64 kSourceFrameCoalesceTraceInterval = 30;
+}
 
 KCaptureService::KCaptureService(QObject *pParent)
 	: QObject(pParent)
@@ -29,6 +36,8 @@ void KCaptureService::startCaptureWithMode(KCaptureWorker::WorkMode mode)
 	if (m_pCaptureThread != nullptr)
 		return;
 
+	clearPendingWebRtcFrame();
+	m_bAcceptWebRtcFrames = (mode == KCaptureWorker::WebRtcSourceWorkMode);
 	m_pCaptureThread = new QThread(this);
 	m_pCaptureWorker = new KCaptureWorker(mode);
 	m_pCaptureWorker->setStreamConfig(m_streamConfig);
@@ -44,7 +53,7 @@ void KCaptureService::startCaptureWithMode(KCaptureWorker::WorkMode mode)
 	connect(m_pCaptureWorker, &KCaptureWorker::decodedFrameReady,
 		this, &KCaptureService::decodedFrameReady);
 	connect(m_pCaptureWorker, &KCaptureWorker::webRtcFrameReady,
-		this, &KCaptureService::webRtcFrameReady);
+		this, &KCaptureService::enqueueWebRtcFrame, Qt::QueuedConnection);
 	connect(m_pCaptureWorker, &KCaptureWorker::frameReady,
 		this, &KCaptureService::frameReady);
 	connect(m_pCaptureWorker, &KCaptureWorker::workFinished,
@@ -64,9 +73,12 @@ void KCaptureService::stopCapture()
 	if (m_pCaptureThread == nullptr || m_pCaptureWorker == nullptr)
 		return;
 
+	m_bAcceptWebRtcFrames = false;
+	clearPendingWebRtcFrame();
 	m_pCaptureWorker->stopWork();
 	m_pCaptureThread->quit();
 	m_pCaptureThread->wait();
+	clearPendingWebRtcFrame();
 	clearWorker();
 	emit statusChanged(QStringLiteral("Stopped"));
 }
@@ -94,6 +106,99 @@ void KCaptureService::requestImmediateFrame()
 
 void KCaptureService::clearWorker()
 {
+	m_bAcceptWebRtcFrames = false;
+	clearPendingWebRtcFrame();
 	m_pCaptureThread = nullptr;
 	m_pCaptureWorker = nullptr;
+}
+
+void KCaptureService::enqueueWebRtcFrame(const KWebRtcVideoFrame &frame)
+{
+	if (!m_bAcceptWebRtcFrames || frame.nWidth <= 0 || frame.nHeight <= 0)
+		return;
+
+	bool bNeedQueue = false;
+	bool bDroppedFrame = false;
+	quint64 nDroppedFrames = 0;
+	{
+		std::lock_guard<std::mutex> guard(m_webRtcFrameMutex);
+		if (m_bHasPendingWebRtcFrame)
+		{
+			++m_nDroppedWebRtcSourceFrames;
+			bDroppedFrame = true;
+		}
+
+		m_pendingWebRtcFrame = frame;
+		m_bHasPendingWebRtcFrame = true;
+		nDroppedFrames = m_nDroppedWebRtcSourceFrames;
+		if (!m_bWebRtcFrameFlushQueued)
+		{
+			m_bWebRtcFrameFlushQueued = true;
+			bNeedQueue = true;
+		}
+	}
+
+	if (bDroppedFrame
+		&& KLatencyTraceLogger::isEnabled()
+		&& (nDroppedFrames == 1
+			|| nDroppedFrames % kSourceFrameCoalesceTraceInterval == 0))
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controlled"),
+			QStringLiteral("source_frame_coalesced"),
+			QStringLiteral("dropped=%1 latestFrame=%2")
+				.arg(nDroppedFrames)
+				.arg(frame.nFrameIndex));
+	}
+
+	if (bNeedQueue)
+	{
+		QMetaObject::invokeMethod(this,
+			&KCaptureService::flushLatestWebRtcFrame,
+			Qt::QueuedConnection);
+	}
+}
+
+void KCaptureService::flushLatestWebRtcFrame()
+{
+	KWebRtcVideoFrame frame;
+	{
+		std::lock_guard<std::mutex> guard(m_webRtcFrameMutex);
+		if (!m_bHasPendingWebRtcFrame || !m_bAcceptWebRtcFrames)
+		{
+			m_bHasPendingWebRtcFrame = false;
+			m_bWebRtcFrameFlushQueued = false;
+			return;
+		}
+
+		frame = std::move(m_pendingWebRtcFrame);
+		m_pendingWebRtcFrame = KWebRtcVideoFrame();
+		m_bHasPendingWebRtcFrame = false;
+	}
+
+	emit webRtcFrameReady(frame);
+
+	bool bNeedQueue = false;
+	{
+		std::lock_guard<std::mutex> guard(m_webRtcFrameMutex);
+		if (m_bHasPendingWebRtcFrame && m_bAcceptWebRtcFrames)
+			bNeedQueue = true;
+		else
+			m_bWebRtcFrameFlushQueued = false;
+	}
+
+	if (bNeedQueue)
+	{
+		QMetaObject::invokeMethod(this,
+			&KCaptureService::flushLatestWebRtcFrame,
+			Qt::QueuedConnection);
+	}
+}
+
+void KCaptureService::clearPendingWebRtcFrame()
+{
+	std::lock_guard<std::mutex> guard(m_webRtcFrameMutex);
+	m_pendingWebRtcFrame = KWebRtcVideoFrame();
+	m_bHasPendingWebRtcFrame = false;
+	m_bWebRtcFrameFlushQueued = false;
+	m_nDroppedWebRtcSourceFrames = 0;
 }
