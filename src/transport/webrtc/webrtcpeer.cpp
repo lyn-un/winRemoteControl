@@ -3,6 +3,7 @@
 #include "common/framewatermark.h"
 #include "common/latencytracelogger.h"
 #include "common/sessiontracelogger.h"
+#include "transport/webrtc/webrtch264encoder.h"
 
 #include <QtCore/QDateTime>
 #include <QtCore/QJsonDocument>
@@ -29,11 +30,9 @@
 #include <api/video/video_source_interface.h>
 #include <api/video/i420_buffer.h>
 #include <api/video_codecs/video_decoder_factory_template.h>
+#include <api/video_codecs/video_decoder_factory_template_open_h264_adapter.h>
 #include <api/video_codecs/video_decoder_factory_template_libvpx_vp8_adapter.h>
 #include <api/video_codecs/video_decoder_factory_template_libvpx_vp9_adapter.h>
-#include <api/video_codecs/video_encoder_factory_template.h>
-#include <api/video_codecs/video_encoder_factory_template_libvpx_vp8_adapter.h>
-#include <api/video_codecs/video_encoder_factory_template_libvpx_vp9_adapter.h>
 #include <pc/video_track_source.h>
 #include <rtc_base/logging.h>
 
@@ -1248,10 +1247,9 @@ bool KWebRtcPeer::createFactory(QString *pErrorMessage)
 	deps.env = webrtc::CreateEnvironment();
 	deps.audio_encoder_factory = webrtc::CreateBuiltinAudioEncoderFactory();
 	deps.audio_decoder_factory = webrtc::CreateBuiltinAudioDecoderFactory();
-	deps.video_encoder_factory = std::make_unique<webrtc::VideoEncoderFactoryTemplate<
-		webrtc::LibvpxVp8EncoderTemplateAdapter,
-		webrtc::LibvpxVp9EncoderTemplateAdapter>>();
+	deps.video_encoder_factory = std::make_unique<KWebRtcH264EncoderFactory>();
 	deps.video_decoder_factory = std::make_unique<webrtc::VideoDecoderFactoryTemplate<
+		webrtc::OpenH264DecoderTemplateAdapter,
 		webrtc::LibvpxVp8DecoderTemplateAdapter,
 		webrtc::LibvpxVp9DecoderTemplateAdapter>>();
 	webrtc::EnableMedia(deps);

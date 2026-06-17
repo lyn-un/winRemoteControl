@@ -52,6 +52,8 @@ qt_add_executable(winRemoteControl WIN32
 	src/session/sessionviewmodel.h
 	src/transport/webrtc/webrtcpeer.cpp
 	src/transport/webrtc/webrtcpeer.h
+	src/transport/webrtc/webrtch264encoder.cpp
+	src/transport/webrtc/webrtch264encoder.h
 	src/transport/webrtc/webrtcnetworkstats.h
 	src/transport/webrtc/webrtcsessionservice.cpp
 	src/transport/webrtc/webrtcsessionservice.h
@@ -68,6 +70,7 @@ target_compile_definitions(winRemoteControl PRIVATE
 	WIN32_LEAN_AND_MEAN
 	NOMINMAX
 	WEBRTC_WIN
+	WEBRTC_USE_H264
 	WEBRTC_ENABLE_PROTOBUF=0
 )
 

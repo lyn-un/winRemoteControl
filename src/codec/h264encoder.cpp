@@ -9,11 +9,15 @@ extern "C" {
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
+
+#include <libyuv.h>
 
 namespace
 {
 	constexpr std::int64_t kMinBitrate = 2'000'000;
 	constexpr std::int64_t kMaxBitrate = 20'000'000;
+	constexpr int kBitsPerKilobit = 1000;
 	constexpr int kMfScenarioDisplayRemoting = 1;
 	constexpr int kMfRateControlLowDelayVbr = 4;
 }
@@ -31,6 +35,16 @@ KH264Encoder::~KH264Encoder()
 bool KH264Encoder::openStream(int nWidth,
 	int nHeight,
 	int nFps,
+	const DataCallback &callback,
+	QString *pErrorMessage)
+{
+	return openStream(nWidth, nHeight, nFps, 0, callback, pErrorMessage);
+}
+
+bool KH264Encoder::openStream(int nWidth,
+	int nHeight,
+	int nFps,
+	int nBitrateKbps,
 	const DataCallback &callback,
 	QString *pErrorMessage)
 {
@@ -70,6 +84,7 @@ bool KH264Encoder::openStream(int nWidth,
 	m_nEncodedWidth = nWidth & ~1;
 	m_nEncodedHeight = nHeight & ~1;
 	m_nFps = nFps;
+	m_nBitrateKbps = nBitrateKbps;
 	m_nFirstTimestampMs = 0;
 	m_nLastPts = -1;
 	m_dataCallback = callback;
@@ -84,10 +99,13 @@ bool KH264Encoder::openStream(int nWidth,
 	m_pCodecContext->gop_size = m_nFps * 2;
 	m_pCodecContext->max_b_frames = 0;
 	m_pCodecContext->thread_count = 1;
-	m_pCodecContext->bit_rate = std::clamp(
-		static_cast<std::int64_t>(m_nEncodedWidth) * m_nEncodedHeight * m_nFps / 4,
-		kMinBitrate,
-		kMaxBitrate);
+	const std::int64_t nRequestedBitrate = static_cast<std::int64_t>(m_nBitrateKbps) * kBitsPerKilobit;
+	m_pCodecContext->bit_rate = nRequestedBitrate > 0
+		? nRequestedBitrate
+		: std::clamp(
+			static_cast<std::int64_t>(m_nEncodedWidth) * m_nEncodedHeight * m_nFps / 4,
+			kMinBitrate,
+			kMaxBitrate);
 
 	av_opt_set_int(m_pCodecContext->priv_data, "hw_encoding", 1, 0);
 	av_opt_set_int(m_pCodecContext->priv_data, "scenario", kMfScenarioDisplayRemoting, 0);
@@ -199,16 +217,8 @@ bool KH264Encoder::encodeBgraFrame(const unsigned char *pBgraData,
 		return false;
 	}
 
-	if (m_nFirstTimestampMs <= 0)
-		m_nFirstTimestampMs = nTimestampMs;
-
-	std::int64_t nPts = static_cast<std::int64_t>(
-		((nTimestampMs - m_nFirstTimestampMs) * static_cast<qint64>(m_nFps) + 500) / 1000);
-	if (nPts <= m_nLastPts)
-		nPts = m_nLastPts + 1;
-
-	m_pFrame->pts = nPts;
-	m_nLastPts = nPts;
+	if (!prepareFrame(nTimestampMs, false, pErrorMessage))
+		return false;
 
 	const int nSendResult = avcodec_send_frame(m_pCodecContext, m_pFrame);
 	if (nSendResult < 0)
@@ -219,6 +229,85 @@ bool KH264Encoder::encodeBgraFrame(const unsigned char *pBgraData,
 	}
 
 	return writePacket(pErrorMessage);
+}
+
+bool KH264Encoder::encodeI420Frame(const unsigned char *pYData,
+	int nStrideY,
+	const unsigned char *pUData,
+	int nStrideU,
+	const unsigned char *pVData,
+	int nStrideV,
+	int nWidth,
+	int nHeight,
+	qint64 nTimestampMs,
+	bool bForceKeyFrame,
+	QString *pErrorMessage)
+{
+	if (!isOpen() || pYData == nullptr || pUData == nullptr || pVData == nullptr)
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("H.264 encoder is not open");
+		return false;
+	}
+
+	if (nWidth < m_nEncodedWidth || nHeight < m_nEncodedHeight)
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("Input frame size is smaller than encoder size");
+		return false;
+	}
+
+	const int nWritableResult = av_frame_make_writable(m_pFrame);
+	if (nWritableResult < 0)
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = ffmpegErrorMessage(QStringLiteral("Make video frame writable failed"), nWritableResult);
+		return false;
+	}
+
+	const int nConvertResult = libyuv::I420ToNV12(pYData,
+		nStrideY,
+		pUData,
+		nStrideU,
+		pVData,
+		nStrideV,
+		m_pFrame->data[0],
+		m_pFrame->linesize[0],
+		m_pFrame->data[1],
+		m_pFrame->linesize[1],
+		m_nEncodedWidth,
+		m_nEncodedHeight);
+	if (nConvertResult != 0)
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("Convert I420 frame to NV12 failed");
+		return false;
+	}
+
+	if (!prepareFrame(nTimestampMs, bForceKeyFrame, pErrorMessage))
+		return false;
+
+	const int nSendResult = avcodec_send_frame(m_pCodecContext, m_pFrame);
+	if (nSendResult < 0)
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = ffmpegErrorMessage(QStringLiteral("Send frame to H.264 encoder failed"), nSendResult);
+		return false;
+	}
+
+	return writePacket(pErrorMessage);
+}
+
+void KH264Encoder::setBitrateKbps(int nBitrateKbps)
+{
+	m_nBitrateKbps = nBitrateKbps;
+	if (m_pCodecContext != nullptr && nBitrateKbps > 0)
+		m_pCodecContext->bit_rate = static_cast<std::int64_t>(nBitrateKbps) * kBitsPerKilobit;
+}
+
+void KH264Encoder::setDataCallback(const DataCallback &callback)
+{
+	m_dataCallback = callback;
 }
 
 bool KH264Encoder::close(QString *pErrorMessage)
@@ -256,6 +345,22 @@ int KH264Encoder::encodedWidth() const
 int KH264Encoder::encodedHeight() const
 {
 	return m_nEncodedHeight;
+}
+
+bool KH264Encoder::prepareFrame(qint64 nTimestampMs, bool bForceKeyFrame, QString *)
+{
+	if (m_nFirstTimestampMs <= 0)
+		m_nFirstTimestampMs = nTimestampMs;
+
+	std::int64_t nPts = static_cast<std::int64_t>(
+		((nTimestampMs - m_nFirstTimestampMs) * static_cast<qint64>(m_nFps) + 500) / 1000);
+	if (nPts <= m_nLastPts)
+		nPts = m_nLastPts + 1;
+
+	m_pFrame->pts = nPts;
+	m_pFrame->pict_type = bForceKeyFrame ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
+	m_nLastPts = nPts;
+	return true;
 }
 
 bool KH264Encoder::writePacket(QString *pErrorMessage)
@@ -309,6 +414,7 @@ void KH264Encoder::release()
 	m_dataCallback = DataCallback();
 	m_nEncodedWidth = 0;
 	m_nEncodedHeight = 0;
+	m_nBitrateKbps = 0;
 	m_nFirstTimestampMs = 0;
 	m_nLastPts = -1;
 	m_bOpen = false;
