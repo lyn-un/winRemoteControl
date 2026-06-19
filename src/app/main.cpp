@@ -1,6 +1,7 @@
 #include "app/mainwindow.h"
 
 #include "codec/decodedvideoframe.h"
+#include "common/latencytracelogger.h"
 #include "common/streamconfig.h"
 #include "transport/webrtc/webrtcnetworkstats.h"
 #include "transport/webrtc/webrtcvideoframe.h"
@@ -18,6 +19,9 @@ int main(int nArgc, char *pArgv[])
 		return -1;
 
 	QApplication app(nArgc, pArgv);
+	KLatencyTraceLogger::write(QStringLiteral("app"),
+		QStringLiteral("startup"),
+		QStringLiteral("dir=%1").arg(QCoreApplication::applicationDirPath()));
 	QNetworkProxy::setApplicationProxy(QNetworkProxy::NoProxy);
 	qRegisterMetaType<KDecodedVideoFrame>("KDecodedVideoFrame");
 	qRegisterMetaType<KStreamConfig>("KStreamConfig");

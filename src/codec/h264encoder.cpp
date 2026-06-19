@@ -347,6 +347,19 @@ int KH264Encoder::encodedHeight() const
 	return m_nEncodedHeight;
 }
 
+QByteArray KH264Encoder::codecHeaderData() const
+{
+	if (m_pCodecContext == nullptr
+		|| m_pCodecContext->extradata == nullptr
+		|| m_pCodecContext->extradata_size <= 0)
+	{
+		return QByteArray();
+	}
+
+	return QByteArray(reinterpret_cast<const char *>(m_pCodecContext->extradata),
+		m_pCodecContext->extradata_size);
+}
+
 bool KH264Encoder::prepareFrame(qint64 nTimestampMs, bool bForceKeyFrame, QString *)
 {
 	if (m_nFirstTimestampMs <= 0)

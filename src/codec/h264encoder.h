@@ -53,6 +53,7 @@ public:
 
 	int encodedWidth() const;
 	int encodedHeight() const;
+	QByteArray codecHeaderData() const;
 
 private:
 	bool prepareFrame(qint64 nTimestampMs, bool bForceKeyFrame, QString *pErrorMessage);

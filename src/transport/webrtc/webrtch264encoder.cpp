@@ -204,7 +204,7 @@ int32_t KWebRtcH264Encoder::Encode(const webrtc::VideoFrame &frame,
 	if (encodedFrame.isEmpty())
 		return WEBRTC_VIDEO_CODEC_OK;
 
-	const QByteArray annexBFrame = normalizeToAnnexB(encodedFrame);
+	QByteArray annexBFrame = normalizeToAnnexB(encodedFrame);
 	if (annexBFrame.isEmpty())
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controlled"),
@@ -214,6 +214,13 @@ int32_t KWebRtcH264Encoder::Encode(const webrtc::VideoFrame &frame,
 	}
 
 	const bool bKeyFrame = isKeyFrame(annexBFrame);
+	if (bKeyFrame)
+	{
+		const QByteArray annexBHeader = normalizeToAnnexB(m_encoder.codecHeaderData());
+		if (!annexBHeader.isEmpty() && !annexBFrame.startsWith(annexBHeader))
+			annexBFrame.prepend(annexBHeader);
+	}
+
 	if (bKeyFrame)
 		m_bNeedKeyFrame = false;
 
@@ -321,6 +328,8 @@ QByteArray KWebRtcH264Encoder::normalizeToAnnexB(const QByteArray &encodedData)
 	QByteArray annexBData;
 	if (convertLengthPrefixedToAnnexB(encodedData, &annexBData))
 		return annexBData;
+	if (convertAvccConfigToAnnexB(encodedData, &annexBData))
+		return annexBData;
 
 	return QByteArray();
 }
@@ -367,6 +376,60 @@ bool KWebRtcH264Encoder::convertLengthPrefixedToAnnexB(const QByteArray &encoded
 	}
 
 	if (nOffset != nSize || annexBData.isEmpty())
+		return false;
+
+	*pAnnexBData = std::move(annexBData);
+	return true;
+}
+
+bool KWebRtcH264Encoder::convertAvccConfigToAnnexB(const QByteArray &configData, QByteArray *pAnnexBData)
+{
+	if (pAnnexBData == nullptr || configData.size() < 7)
+		return false;
+
+	const auto *pData = reinterpret_cast<const unsigned char *>(configData.constData());
+	if (pData[0] != 1)
+		return false;
+
+	int nOffset = 5;
+	const int nSpsCount = pData[nOffset++] & 0x1f;
+	QByteArray annexBData;
+	static constexpr char kStartCode[] = { 0, 0, 0, 1 };
+	for (int i = 0; i < nSpsCount; ++i)
+	{
+		if (nOffset + 2 > configData.size())
+			return false;
+		const int nSpsSize = (static_cast<int>(pData[nOffset]) << 8)
+			| static_cast<int>(pData[nOffset + 1]);
+		nOffset += 2;
+		if (nSpsSize <= 0 || nOffset + nSpsSize > configData.size())
+			return false;
+
+		annexBData.append(kStartCode, sizeof(kStartCode));
+		annexBData.append(reinterpret_cast<const char *>(pData + nOffset), nSpsSize);
+		nOffset += nSpsSize;
+	}
+
+	if (nOffset >= configData.size())
+		return false;
+
+	const int nPpsCount = pData[nOffset++];
+	for (int i = 0; i < nPpsCount; ++i)
+	{
+		if (nOffset + 2 > configData.size())
+			return false;
+		const int nPpsSize = (static_cast<int>(pData[nOffset]) << 8)
+			| static_cast<int>(pData[nOffset + 1]);
+		nOffset += 2;
+		if (nPpsSize <= 0 || nOffset + nPpsSize > configData.size())
+			return false;
+
+		annexBData.append(kStartCode, sizeof(kStartCode));
+		annexBData.append(reinterpret_cast<const char *>(pData + nOffset), nPpsSize);
+		nOffset += nPpsSize;
+	}
+
+	if (annexBData.isEmpty())
 		return false;
 
 	*pAnnexBData = std::move(annexBData);

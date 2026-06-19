@@ -37,6 +37,7 @@ private:
 	static QByteArray normalizeToAnnexB(const QByteArray &encodedData);
 	static bool hasAnnexBStartCode(const QByteArray &encodedData);
 	static bool convertLengthPrefixedToAnnexB(const QByteArray &encodedData, QByteArray *pAnnexBData);
+	static bool convertAvccConfigToAnnexB(const QByteArray &configData, QByteArray *pAnnexBData);
 	static bool isKeyFrame(const QByteArray &encodedData);
 
 	KH264Encoder m_encoder;
