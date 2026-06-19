@@ -34,6 +34,9 @@ private:
 		const QByteArray &encodedData,
 		qint64 nEncodeStartMs,
 		qint64 nEncodeFinishMs);
+	static QByteArray normalizeToAnnexB(const QByteArray &encodedData);
+	static bool hasAnnexBStartCode(const QByteArray &encodedData);
+	static bool convertLengthPrefixedToAnnexB(const QByteArray &encodedData, QByteArray *pAnnexBData);
 	static bool isKeyFrame(const QByteArray &encodedData);
 
 	KH264Encoder m_encoder;

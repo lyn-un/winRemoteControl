@@ -204,7 +204,16 @@ int32_t KWebRtcH264Encoder::Encode(const webrtc::VideoFrame &frame,
 	if (encodedFrame.isEmpty())
 		return WEBRTC_VIDEO_CODEC_OK;
 
-	const bool bKeyFrame = isKeyFrame(encodedFrame);
+	const QByteArray annexBFrame = normalizeToAnnexB(encodedFrame);
+	if (annexBFrame.isEmpty())
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controlled"),
+			QStringLiteral("h264_mf_encode_failed"),
+			QStringLiteral("error=normalize_annexb_failed bytes=%1").arg(encodedFrame.size()));
+		return WEBRTC_VIDEO_CODEC_ERROR;
+	}
+
+	const bool bKeyFrame = isKeyFrame(annexBFrame);
 	if (bKeyFrame)
 		m_bNeedKeyFrame = false;
 
@@ -216,12 +225,12 @@ int32_t KWebRtcH264Encoder::Encode(const webrtc::VideoFrame &frame,
 			QStringLiteral("frame=%1 costMs=%2 bytes=%3 keyframe=%4 bitrateKbps=%5")
 				.arg(m_nEncodedFrameCount)
 				.arg(encodeTimer.elapsed())
-				.arg(encodedFrame.size())
+				.arg(annexBFrame.size())
 				.arg(bKeyFrame ? 1 : 0)
 				.arg(m_nBitrateKbps));
 	}
 
-	return emitEncodedFrame(frame, encodedFrame, nEncodeStartMs, nEncodeFinishMs)
+	return emitEncodedFrame(frame, annexBFrame, nEncodeStartMs, nEncodeFinishMs)
 		? WEBRTC_VIDEO_CODEC_OK
 		: WEBRTC_VIDEO_CODEC_ERROR;
 }
@@ -285,6 +294,7 @@ bool KWebRtcH264Encoder::emitEncodedFrame(const webrtc::VideoFrame &frame,
 	image.set_frame_type(bKeyFrame
 		? webrtc::VideoFrameType::kVideoFrameKey
 		: webrtc::VideoFrameType::kVideoFrameDelta);
+	image.SetSimulcastIndex(0);
 	image.SetEncodeTime(nEncodeStartMs, nEncodeFinishMs);
 	image.set_end_of_temporal_unit(true);
 
@@ -298,6 +308,69 @@ bool KWebRtcH264Encoder::emitEncodedFrame(const webrtc::VideoFrame &frame,
 	const webrtc::EncodedImageCallback::Result result =
 		m_pCallback->OnEncodedImage(image, &codecInfo);
 	return result.error == webrtc::EncodedImageCallback::Result::OK;
+}
+
+QByteArray KWebRtcH264Encoder::normalizeToAnnexB(const QByteArray &encodedData)
+{
+	if (encodedData.isEmpty())
+		return QByteArray();
+
+	if (hasAnnexBStartCode(encodedData))
+		return encodedData;
+
+	QByteArray annexBData;
+	if (convertLengthPrefixedToAnnexB(encodedData, &annexBData))
+		return annexBData;
+
+	return QByteArray();
+}
+
+bool KWebRtcH264Encoder::hasAnnexBStartCode(const QByteArray &encodedData)
+{
+	const auto *pData = reinterpret_cast<const unsigned char *>(encodedData.constData());
+	const int nSize = encodedData.size();
+	for (int i = 0; i + 3 < nSize; ++i)
+	{
+		if (pData[i] == 0 && pData[i + 1] == 0 && pData[i + 2] == 1)
+			return true;
+		if (i + 4 < nSize && pData[i] == 0 && pData[i + 1] == 0 && pData[i + 2] == 0 && pData[i + 3] == 1)
+			return true;
+	}
+
+	return false;
+}
+
+bool KWebRtcH264Encoder::convertLengthPrefixedToAnnexB(const QByteArray &encodedData, QByteArray *pAnnexBData)
+{
+	if (pAnnexBData == nullptr)
+		return false;
+
+	const auto *pData = reinterpret_cast<const unsigned char *>(encodedData.constData());
+	const int nSize = encodedData.size();
+	int nOffset = 0;
+	QByteArray annexBData;
+	while (nOffset + 4 <= nSize)
+	{
+		const int nNalSize =
+			(static_cast<int>(pData[nOffset]) << 24)
+			| (static_cast<int>(pData[nOffset + 1]) << 16)
+			| (static_cast<int>(pData[nOffset + 2]) << 8)
+			| static_cast<int>(pData[nOffset + 3]);
+		nOffset += 4;
+		if (nNalSize <= 0 || nOffset + nNalSize > nSize)
+			return false;
+
+		static constexpr char kStartCode[] = { 0, 0, 0, 1 };
+		annexBData.append(kStartCode, sizeof(kStartCode));
+		annexBData.append(reinterpret_cast<const char *>(pData + nOffset), nNalSize);
+		nOffset += nNalSize;
+	}
+
+	if (nOffset != nSize || annexBData.isEmpty())
+		return false;
+
+	*pAnnexBData = std::move(annexBData);
+	return true;
 }
 
 bool KWebRtcH264Encoder::isKeyFrame(const QByteArray &encodedData)
