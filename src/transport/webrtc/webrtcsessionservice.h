@@ -8,11 +8,8 @@
 #include "transport/webrtc/webrtcvideoframe.h"
 
 #include <QtCore/QObject>
-#include <QtCore/QElapsedTimer>
 #include <QtCore/QJsonObject>
 #include <QtCore/QString>
-
-#include <mutex>
 
 class KWebRtcSignaling;
 class KInputInjector;
@@ -65,10 +62,7 @@ signals:
 private:
 	bool initializePeer(KWebRtcPeer::Role role, QString *pErrorMessage);
 	void wirePeer();
-	void enqueueRemoteFrame(const KDecodedVideoFrame &frame);
-	void flushLatestRemoteFrame();
-	void clearPendingRemoteFrame();
-	bool shouldTraceRemoteFrameCoalescing();
+	void handleRemoteFrame(const KDecodedVideoFrame &frame);
 	void handleSessionChannelChanged(bool bOpen);
 	void handleSessionMessage(const QString &strMessage);
 	void handleInputInjected(quint64 nSeq, qint64 nInjectedMs);
@@ -86,12 +80,6 @@ private:
 	KWebRtcSignaling *m_pSignaling = nullptr;
 	KWebRtcPeer *m_pPeer = nullptr;
 	KInputInjector *m_pInputInjector = nullptr;
-	std::mutex m_remoteFrameMutex;
-	KDecodedVideoFrame m_pendingRemoteFrame;
-	quint64 m_nDroppedRemoteFrames = 0;
-	bool m_bHasPendingRemoteFrame = false;
-	bool m_bRemoteFrameFlushQueued = false;
-	QElapsedTimer m_remoteFrameCoalesceTraceTimer;
 };
 
 #endif // _WINREMOTECONTROL_WEBRTCSESSIONSERVICE_H_

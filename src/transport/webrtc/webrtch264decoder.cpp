@@ -15,6 +15,8 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
+#include <libyuv.h>
+
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -201,34 +203,61 @@ bool KWebRtcH264Decoder::receiveFrames(const webrtc::EncodedImage &inputImage)
 		if (nReceiveResult < 0)
 			return false;
 
-		if (!ensureSwsContext(m_pFrame))
-		{
-			av_frame_unref(m_pFrame);
-			return false;
-		}
-
 		webrtc::scoped_refptr<webrtc::I420Buffer> spBuffer =
 			webrtc::I420Buffer::Create(m_pFrame->width, m_pFrame->height);
-		unsigned char *pDstData[kYuvPlaneCount] = {
-			spBuffer->MutableDataY(),
-			spBuffer->MutableDataU(),
-			spBuffer->MutableDataV()
-		};
-		int nDstStride[kYuvPlaneCount] = {
-			spBuffer->StrideY(),
-			spBuffer->StrideU(),
-			spBuffer->StrideV()
-		};
 
-		const int nScaleResult = sws_scale(m_pSwsContext,
-			m_pFrame->data,
-			m_pFrame->linesize,
-			0,
-			m_pFrame->height,
-			pDstData,
-			nDstStride);
+		// FFmpeg's H.264 software decoder emits AV_PIX_FMT_YUV420P (= I420) by
+		// default, so a same-format plane copy with stride alignment is enough;
+		// sws_scale is only kept as a fallback for unexpected pixel formats.
+		const bool bIsI420 = m_pFrame->format == AV_PIX_FMT_YUV420P;
+		int nCopied = 0;
+		if (bIsI420)
+		{
+			nCopied = libyuv::I420Copy(m_pFrame->data[0],
+				m_pFrame->linesize[0],
+				m_pFrame->data[1],
+				m_pFrame->linesize[1],
+				m_pFrame->data[2],
+				m_pFrame->linesize[2],
+				spBuffer->MutableDataY(),
+				spBuffer->StrideY(),
+				spBuffer->MutableDataU(),
+				spBuffer->StrideU(),
+				spBuffer->MutableDataV(),
+				spBuffer->StrideV(),
+				m_pFrame->width,
+				m_pFrame->height);
+		}
+		else
+		{
+			if (!ensureSwsContext(m_pFrame))
+			{
+				av_frame_unref(m_pFrame);
+				return false;
+			}
+
+			unsigned char *pDstData[kYuvPlaneCount] = {
+				spBuffer->MutableDataY(),
+				spBuffer->MutableDataU(),
+				spBuffer->MutableDataV()
+			};
+			int nDstStride[kYuvPlaneCount] = {
+				spBuffer->StrideY(),
+				spBuffer->StrideU(),
+				spBuffer->StrideV()
+			};
+
+			nCopied = sws_scale(m_pSwsContext,
+				m_pFrame->data,
+				m_pFrame->linesize,
+				0,
+				m_pFrame->height,
+				pDstData,
+				nDstStride);
+		}
+
 		av_frame_unref(m_pFrame);
-		if (nScaleResult <= 0)
+		if (nCopied <= 0)
 			return false;
 
 		webrtc::VideoFrame decodedFrame = webrtc::VideoFrame::Builder()

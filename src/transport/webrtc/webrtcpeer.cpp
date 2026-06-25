@@ -33,6 +33,8 @@
 #include <pc/video_track_source.h>
 #include <rtc_base/logging.h>
 
+#include <libyuv.h>
+
 #include <algorithm>
 #include <cstring>
 #include <cmath>
@@ -274,12 +276,14 @@ namespace
 			if (pSrc == nullptr || pDst == nullptr)
 				return;
 
-			for (int y = 0; y < nHeight; ++y)
-			{
-				std::memcpy(pDst + y * nDstStride,
-					pSrc + y * nSrcStride,
-					static_cast<size_t>(nWidth));
-			}
+			// libyuv::CopyPlane uses SIMD memcpy and handles stride alignment,
+			// replacing the per-row std::memcpy loop.
+			libyuv::CopyPlane(pSrc,
+				nSrcStride,
+				pDst,
+				nDstStride,
+				nWidth,
+				nHeight);
 		}
 
 		std::mutex m_mutex;
@@ -1159,27 +1163,18 @@ void KWebRtcPeer::decodeAndEmitRemoteFrame(const webrtc::VideoFrame &frame)
 	decodedFrame.nTimestampMs = frame.timestamp_us() / 1000;
 	decodedFrame.vecBgraBuffer.resize(static_cast<size_t>(nWidth) * nHeight * 4);
 
-	unsigned char *pDst = decodedFrame.vecBgraBuffer.data();
-	for (int y = 0; y < nHeight; ++y)
-	{
-		const unsigned char *pY = spI420->DataY() + y * spI420->StrideY();
-		const unsigned char *pU = spI420->DataU() + (y / 2) * spI420->StrideU();
-		const unsigned char *pV = spI420->DataV() + (y / 2) * spI420->StrideV();
-		unsigned char *pDstRow = pDst + static_cast<size_t>(y) * nWidth * 4;
-		for (int x = 0; x < nWidth; ++x)
-		{
-			const int nY = std::max(0, static_cast<int>(pY[x]) - 16);
-			const int nU = static_cast<int>(pU[x / 2]) - 128;
-			const int nV = static_cast<int>(pV[x / 2]) - 128;
-			const int nR = std::clamp((298 * nY + 409 * nV + 128) >> 8, 0, 255);
-			const int nG = std::clamp((298 * nY - 100 * nU - 208 * nV + 128) >> 8, 0, 255);
-			const int nB = std::clamp((298 * nY + 516 * nU + 128) >> 8, 0, 255);
-			pDstRow[x * 4 + 0] = static_cast<unsigned char>(nB);
-			pDstRow[x * 4 + 1] = static_cast<unsigned char>(nG);
-			pDstRow[x * 4 + 2] = static_cast<unsigned char>(nR);
-			pDstRow[x * 4 + 3] = 255;
-		}
-	}
+	// libyuv SIMD path replaces the per-pixel YUV->BGRA loop; output byte order
+	// (B,G,R,A) matches DXGI_FORMAT_B8G8R8A8_UNORM consumed by the renderer.
+	libyuv::I420ToBGRA(spI420->DataY(),
+		spI420->StrideY(),
+		spI420->DataU(),
+		spI420->StrideU(),
+		spI420->DataV(),
+		spI420->StrideV(),
+		decodedFrame.vecBgraBuffer.data(),
+		nWidth * 4,
+		nWidth,
+		nHeight);
 
 	if (KLatencyTraceLogger::isEnabled())
 	{
