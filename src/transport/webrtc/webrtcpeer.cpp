@@ -1163,9 +1163,8 @@ void KWebRtcPeer::decodeAndEmitRemoteFrame(const webrtc::VideoFrame &frame)
 	decodedFrame.nTimestampMs = frame.timestamp_us() / 1000;
 	decodedFrame.vecBgraBuffer.resize(static_cast<size_t>(nWidth) * nHeight * 4);
 
-	// libyuv SIMD path replaces the per-pixel YUV->BGRA loop; output byte order
-	// (B,G,R,A) matches DXGI_FORMAT_B8G8R8A8_UNORM consumed by the renderer.
-	libyuv::I420ToBGRA(spI420->DataY(),
+	// libyuv ARGB is stored as B,G,R,A on little-endian Windows, matching DXGI BGRA8.
+	const int nConvertResult = libyuv::I420ToARGB(spI420->DataY(),
 		spI420->StrideY(),
 		spI420->DataU(),
 		spI420->StrideU(),
@@ -1175,6 +1174,8 @@ void KWebRtcPeer::decodeAndEmitRemoteFrame(const webrtc::VideoFrame &frame)
 		nWidth * 4,
 		nWidth,
 		nHeight);
+	if (nConvertResult != 0)
+		return;
 
 	if (KLatencyTraceLogger::isEnabled())
 	{

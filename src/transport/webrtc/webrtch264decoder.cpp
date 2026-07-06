@@ -210,10 +210,10 @@ bool KWebRtcH264Decoder::receiveFrames(const webrtc::EncodedImage &inputImage)
 		// default, so a same-format plane copy with stride alignment is enough;
 		// sws_scale is only kept as a fallback for unexpected pixel formats.
 		const bool bIsI420 = m_pFrame->format == AV_PIX_FMT_YUV420P;
-		int nCopied = 0;
+		bool bConverted = false;
 		if (bIsI420)
 		{
-			nCopied = libyuv::I420Copy(m_pFrame->data[0],
+			const int nCopyResult = libyuv::I420Copy(m_pFrame->data[0],
 				m_pFrame->linesize[0],
 				m_pFrame->data[1],
 				m_pFrame->linesize[1],
@@ -227,6 +227,7 @@ bool KWebRtcH264Decoder::receiveFrames(const webrtc::EncodedImage &inputImage)
 				spBuffer->StrideV(),
 				m_pFrame->width,
 				m_pFrame->height);
+			bConverted = nCopyResult == 0;
 		}
 		else
 		{
@@ -247,17 +248,18 @@ bool KWebRtcH264Decoder::receiveFrames(const webrtc::EncodedImage &inputImage)
 				spBuffer->StrideV()
 			};
 
-			nCopied = sws_scale(m_pSwsContext,
+			const int nScaledRows = sws_scale(m_pSwsContext,
 				m_pFrame->data,
 				m_pFrame->linesize,
 				0,
 				m_pFrame->height,
 				pDstData,
 				nDstStride);
+			bConverted = nScaledRows == m_pFrame->height;
 		}
 
 		av_frame_unref(m_pFrame);
-		if (nCopied <= 0)
+		if (!bConverted)
 			return false;
 
 		webrtc::VideoFrame decodedFrame = webrtc::VideoFrame::Builder()
