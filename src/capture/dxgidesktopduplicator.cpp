@@ -1,5 +1,7 @@
 #include "capture/dxgidesktopduplicator.h"
 
+#include "common/latencytracelogger.h"
+
 #include <QtCore/QDateTime>
 #include <QtCore/QDebug>
 
@@ -67,6 +69,11 @@ unsigned char FloatToByte(float fValue)
 unsigned char UnormToByte(unsigned int nValue, unsigned int nMaxValue)
 {
 	return static_cast<unsigned char>((nValue * 255u + nMaxValue / 2u) / nMaxValue);
+}
+
+unsigned char MaskBit(const unsigned char *pRow, int x)
+{
+	return static_cast<unsigned char>((pRow[x / 8] >> (7 - x % 8)) & 1);
 }
 
 bool CopyMappedFrameToBgra(const D3D11_TEXTURE2D_DESC &sourceDesc,
@@ -253,6 +260,10 @@ void KDxgiDesktopDuplicator::shutdown()
 	m_nFrameIndex = 0;
 	m_bHdrOutput = false;
 	m_captureFormat = DXGI_FORMAT_UNKNOWN;
+	m_pointerPosition = {};
+	m_pointerShapeInfo = {};
+	m_vecPointerShapeBuffer.clear();
+	m_nPointerUpdateCount = 0;
 }
 
 bool KDxgiDesktopDuplicator::detectHdrOutput(const Microsoft::WRL::ComPtr<IDXGIOutput> &spOutput,
@@ -375,6 +386,11 @@ KDxgiDesktopDuplicator::CaptureResult KDxgiDesktopDuplicator::captureNextFrame(K
 			*pErrorMessage = hresultMessage(QStringLiteral("AcquireNextFrame failed"), hrAcquire);
 		return ErrorCaptureResult;
 	}
+	if (!updatePointerState(frameInfo, pErrorMessage))
+	{
+		m_spDuplication->ReleaseFrame();
+		return ErrorCaptureResult;
+	}
 
 	Microsoft::WRL::ComPtr<ID3D11Texture2D> spDesktopTexture;
 	HRESULT hr = spDesktopResource.As(&spDesktopTexture);
@@ -431,8 +447,151 @@ KDxgiDesktopDuplicator::CaptureResult KDxgiDesktopDuplicator::captureNextFrame(K
 	}
 
 	m_spContext->Unmap(m_spStagingTexture.Get(), 0);
+	if (!composePointer(pFrame, pErrorMessage))
+	{
+		m_spDuplication->ReleaseFrame();
+		return ErrorCaptureResult;
+	}
 	m_spDuplication->ReleaseFrame();
 	return CapturedCaptureResult;
+}
+
+bool KDxgiDesktopDuplicator::updatePointerState(const DXGI_OUTDUPL_FRAME_INFO &frameInfo,
+	QString *pErrorMessage)
+{
+	bool bPointerUpdated = false;
+	if (frameInfo.LastMouseUpdateTime.QuadPart != 0)
+	{
+		m_pointerPosition = frameInfo.PointerPosition;
+		bPointerUpdated = true;
+	}
+
+	if (frameInfo.PointerShapeBufferSize > 0)
+	{
+		m_vecPointerShapeBuffer.resize(frameInfo.PointerShapeBufferSize);
+		UINT nRequiredSize = 0;
+		HRESULT hr = m_spDuplication->GetFramePointerShape(
+			static_cast<UINT>(m_vecPointerShapeBuffer.size()),
+			m_vecPointerShapeBuffer.data(),
+			&nRequiredSize,
+			&m_pointerShapeInfo);
+		if (hr == DXGI_ERROR_MORE_DATA && nRequiredSize > m_vecPointerShapeBuffer.size())
+		{
+			m_vecPointerShapeBuffer.resize(nRequiredSize);
+			hr = m_spDuplication->GetFramePointerShape(
+				static_cast<UINT>(m_vecPointerShapeBuffer.size()),
+				m_vecPointerShapeBuffer.data(),
+				&nRequiredSize,
+				&m_pointerShapeInfo);
+		}
+		if (FAILED(hr))
+		{
+			if (pErrorMessage != nullptr)
+				*pErrorMessage = hresultMessage(QStringLiteral("GetFramePointerShape failed"), hr);
+			return false;
+		}
+		m_vecPointerShapeBuffer.resize(nRequiredSize);
+		bPointerUpdated = true;
+	}
+
+	if (bPointerUpdated)
+	{
+		++m_nPointerUpdateCount;
+		if (frameInfo.PointerShapeBufferSize > 0 || m_nPointerUpdateCount % 30 == 0)
+		{
+			KLatencyTraceLogger::write(QStringLiteral("controlled"),
+				QStringLiteral("pointer_update"),
+				QStringLiteral("x=%1 y=%2 visible=%3 shapeType=%4 width=%5 height=%6")
+					.arg(m_pointerPosition.Position.x)
+					.arg(m_pointerPosition.Position.y)
+					.arg(m_pointerPosition.Visible ? 1 : 0)
+					.arg(m_pointerShapeInfo.Type)
+					.arg(m_pointerShapeInfo.Width)
+					.arg(m_pointerShapeInfo.Height));
+		}
+	}
+
+	return true;
+}
+
+bool KDxgiDesktopDuplicator::composePointer(KCaptureFrame *pFrame, QString *pErrorMessage) const
+{
+	if (!m_pointerPosition.Visible || m_vecPointerShapeBuffer.empty())
+		return true;
+
+	const bool bMonochrome = m_pointerShapeInfo.Type == DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MONOCHROME;
+	const int nShapeHeight = static_cast<int>(m_pointerShapeInfo.Height);
+	const int nPointerHeight = bMonochrome ? nShapeHeight / 2 : nShapeHeight;
+	const int nPointerWidth = static_cast<int>(m_pointerShapeInfo.Width);
+	const int nPitch = static_cast<int>(m_pointerShapeInfo.Pitch);
+	if (nPointerWidth <= 0 || nPointerHeight <= 0 || nPitch <= 0)
+		return true;
+
+	const size_t nRequiredSize = static_cast<size_t>(nPitch) * static_cast<size_t>(nShapeHeight);
+	if (nRequiredSize > m_vecPointerShapeBuffer.size())
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("DXGI pointer shape buffer is incomplete");
+		return false;
+	}
+
+	const int nDrawX = m_pointerPosition.Position.x - static_cast<int>(m_pointerShapeInfo.HotSpot.x);
+	const int nDrawY = m_pointerPosition.Position.y - static_cast<int>(m_pointerShapeInfo.HotSpot.y);
+	for (int y = 0; y < nPointerHeight; ++y)
+	{
+		const int nTargetY = nDrawY + y;
+		if (nTargetY < 0 || nTargetY >= pFrame->nHeight)
+			continue;
+
+		for (int x = 0; x < nPointerWidth; ++x)
+		{
+			const int nTargetX = nDrawX + x;
+			if (nTargetX < 0 || nTargetX >= pFrame->nWidth)
+				continue;
+
+			unsigned char *pTarget = pFrame->vecBgraBuffer.data()
+				+ (static_cast<size_t>(nTargetY) * static_cast<size_t>(pFrame->nWidth)
+					+ static_cast<size_t>(nTargetX)) * 4;
+			if (bMonochrome)
+			{
+				const unsigned char *pAndRow = m_vecPointerShapeBuffer.data()
+					+ static_cast<size_t>(y) * static_cast<size_t>(nPitch);
+				const unsigned char *pXorRow = m_vecPointerShapeBuffer.data()
+					+ static_cast<size_t>(y + nPointerHeight) * static_cast<size_t>(nPitch);
+				const unsigned char nAndMask = MaskBit(pAndRow, x) != 0 ? 0xff : 0x00;
+				const unsigned char nXorMask = MaskBit(pXorRow, x) != 0 ? 0xff : 0x00;
+				for (int nChannel = 0; nChannel < 3; ++nChannel)
+					pTarget[nChannel] = static_cast<unsigned char>((pTarget[nChannel] & nAndMask) ^ nXorMask);
+				continue;
+			}
+
+			const unsigned char *pSource = m_vecPointerShapeBuffer.data()
+				+ static_cast<size_t>(y) * static_cast<size_t>(nPitch)
+				+ static_cast<size_t>(x) * 4;
+			if (m_pointerShapeInfo.Type == DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MASKED_COLOR)
+			{
+				for (int nChannel = 0; nChannel < 3; ++nChannel)
+				{
+					pTarget[nChannel] = pSource[3] != 0
+						? static_cast<unsigned char>(pTarget[nChannel] ^ pSource[nChannel])
+						: pSource[nChannel];
+				}
+				continue;
+			}
+
+			if (m_pointerShapeInfo.Type != DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR)
+				continue;
+			const unsigned int nInverseAlpha = 255u - pSource[3];
+			for (int nChannel = 0; nChannel < 3; ++nChannel)
+			{
+				pTarget[nChannel] = static_cast<unsigned char>(std::min(255u,
+					static_cast<unsigned int>(pSource[nChannel])
+						+ static_cast<unsigned int>(pTarget[nChannel]) * nInverseAlpha / 255u));
+			}
+		}
+	}
+
+	return true;
 }
 
 bool KDxgiDesktopDuplicator::createStagingTexture(const D3D11_TEXTURE2D_DESC &sourceDesc, QString *pErrorMessage)
