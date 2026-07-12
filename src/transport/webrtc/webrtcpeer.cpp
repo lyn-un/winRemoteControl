@@ -108,6 +108,7 @@ namespace
 	constexpr char kLatencyPong[] = "latencyPong";
 	constexpr char kLatencyId[] = "id";
 	constexpr char kLatencySendMs[] = "sendMs";
+	constexpr char kPlayoutDelayUri[] = "http://www.webrtc.org/experiments/rtp-hdrext/playout-delay";
 
 	static int secondsToMs(double fSeconds)
 	{
@@ -1383,6 +1384,11 @@ void KWebRtcPeer::sendSessionDescription(const webrtc::SessionDescriptionInterfa
 {
 	std::string strSdp;
 	pDescription->ToString(&strSdp);
+	KLatencyTraceLogger::write(roleToString(m_role),
+		QStringLiteral("sdp_playout_delay"),
+		QStringLiteral("direction=local type=%1 present=%2")
+			.arg(stringViewToQString(webrtc::SdpTypeToString(pDescription->GetType())))
+			.arg(strSdp.find(kPlayoutDelayUri) != std::string::npos ? 1 : 0));
 
 	QJsonObject object;
 	object.insert(QString::fromLatin1(kMessageType),
@@ -1395,6 +1401,12 @@ void KWebRtcPeer::sendSessionDescription(const webrtc::SessionDescriptionInterfa
 
 void KWebRtcPeer::handleSessionDescription(const QString &strType, const QString &strSdp)
 {
+	KLatencyTraceLogger::write(roleToString(m_role),
+		QStringLiteral("sdp_playout_delay"),
+		QStringLiteral("direction=remote type=%1 present=%2")
+			.arg(strType)
+			.arg(strSdp.contains(QString::fromLatin1(kPlayoutDelayUri)) ? 1 : 0));
+
 	std::optional<webrtc::SdpType> sdpType = webrtc::SdpTypeFromString(strType.toStdString());
 	if (!sdpType.has_value())
 	{

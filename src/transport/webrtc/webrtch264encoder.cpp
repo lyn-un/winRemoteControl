@@ -32,6 +32,8 @@ namespace
 	constexpr int kH264NaluTypeMask = 0x1f;
 	constexpr int kH264IdrNaluType = 5;
 	constexpr int kH264SpsNaluType = 7;
+	constexpr int kMaxPlayoutDelayMs = 40950;
+	constexpr char kPlayoutDelayMaxMsEnvName[] = "WRC_PLAYOUT_DELAY_MAX_MS";
 
 	static bool equalsIgnoreCase(const std::string &left, const char *right)
 	{
@@ -116,6 +118,34 @@ int KWebRtcH264Encoder::InitEncode(const webrtc::VideoCodec *pCodecSettings,
 	m_nBitrateKbps = std::max(1, bitrateKbpsFromCodec(pCodecSettings));
 	m_nEncodedFrameCount = 0;
 	m_bNeedKeyFrame = true;
+	m_playoutDelay.reset();
+	if (qEnvironmentVariableIsSet(kPlayoutDelayMaxMsEnvName))
+	{
+		bool bValidDelay = false;
+		const int nMaxPlayoutDelayMs = qEnvironmentVariableIntValue(
+			kPlayoutDelayMaxMsEnvName, &bValidDelay);
+		if (bValidDelay && nMaxPlayoutDelayMs >= 0 && nMaxPlayoutDelayMs <= kMaxPlayoutDelayMs)
+		{
+			m_playoutDelay.emplace(webrtc::TimeDelta::Zero(),
+				webrtc::TimeDelta::Millis(nMaxPlayoutDelayMs));
+			KLatencyTraceLogger::write(QStringLiteral("controlled"),
+				QStringLiteral("playout_delay_config"),
+				QStringLiteral("minMs=0 maxMs=%1").arg(nMaxPlayoutDelayMs));
+		}
+		else
+		{
+			KLatencyTraceLogger::write(QStringLiteral("controlled"),
+				QStringLiteral("playout_delay_config_invalid"),
+				QStringLiteral("value=%1")
+					.arg(qEnvironmentVariable(kPlayoutDelayMaxMsEnvName)));
+		}
+	}
+	else
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controlled"),
+			QStringLiteral("playout_delay_config"),
+			QStringLiteral("mode=default"));
+	}
 
 	QString strError;
 	const bool bOpen = m_encoder.openStream(m_nWidth,
@@ -304,6 +334,7 @@ bool KWebRtcH264Encoder::emitEncodedFrame(const webrtc::VideoFrame &frame,
 	image.SetSimulcastIndex(0);
 	image.SetEncodeTime(nEncodeStartMs, nEncodeFinishMs);
 	image.set_end_of_temporal_unit(true);
+	image.SetPlayoutDelay(m_playoutDelay);
 
 	webrtc::CodecSpecificInfo codecInfo;
 	codecInfo.codecType = webrtc::kVideoCodecH264;

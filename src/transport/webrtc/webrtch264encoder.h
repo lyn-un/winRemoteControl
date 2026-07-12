@@ -4,6 +4,7 @@
 #include "codec/h264encoder.h"
 
 #include <api/video/video_frame.h>
+#include <api/video/video_timing.h>
 #include <api/video_codecs/sdp_video_format.h>
 #include <api/video_codecs/video_encoder.h>
 #include <api/video_codecs/video_encoder_factory.h>
@@ -48,6 +49,7 @@ private:
 	int m_nBitrateKbps = 3000;
 	quint64 m_nEncodedFrameCount = 0;
 	bool m_bNeedKeyFrame = true;
+	std::optional<webrtc::VideoPlayoutDelay> m_playoutDelay;
 };
 
 class KWebRtcH264EncoderFactory final : public webrtc::VideoEncoderFactory
