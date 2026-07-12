@@ -4,7 +4,6 @@
 #include "common/latencytracelogger.h"
 #include "transport/webrtc/webrtcsessionservice.h"
 
-#include <QtCore/QDateTime>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 
@@ -17,7 +16,6 @@ namespace
 	constexpr char kX[] = "x";
 	constexpr char kY[] = "y";
 	constexpr char kSeq[] = "seq";
-	constexpr char kClientSendMs[] = "clientSendMs";
 	constexpr char kTrace[] = "trace";
 }
 
@@ -212,7 +210,6 @@ void KSessionViewModel::sendInputJsonMessage(QJsonObject object, bool bTrace)
 
 	const quint64 nSeq = ++m_nInputSequence;
 	object.insert(QString::fromLatin1(kSeq), QString::number(nSeq));
-	object.insert(QString::fromLatin1(kClientSendMs), QDateTime::currentMSecsSinceEpoch());
 	if (bTrace)
 		object.insert(QString::fromLatin1(kTrace), true);
 

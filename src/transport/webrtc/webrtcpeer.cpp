@@ -104,7 +104,6 @@ namespace
 	constexpr char kInputType[] = "type";
 	constexpr char kInputSeq[] = "seq";
 	constexpr char kInputTrace[] = "trace";
-	constexpr char kInputClientSendMs[] = "clientSendMs";
 	constexpr char kLatencyPing[] = "latencyPing";
 	constexpr char kLatencyPong[] = "latencyPong";
 	constexpr char kLatencyId[] = "id";
@@ -989,17 +988,11 @@ void KWebRtcPeer::OnMessage(const webrtc::DataBuffer &buffer)
 	{
 		if (shouldTraceInputMessage(object))
 		{
-			const qint64 nClientSendMs =
-				static_cast<qint64>(object.value(QString::fromLatin1(kInputClientSendMs)).toDouble(-1));
-			const qint64 nClientDelayMs = nClientSendMs >= 0
-				? QDateTime::currentMSecsSinceEpoch() - nClientSendMs
-				: -1;
 			KLatencyTraceLogger::write(roleToString(m_role),
 				QStringLiteral("input_recv"),
-				QStringLiteral("%1 size=%2 clientDelayMs=%3")
+				QStringLiteral("%1 size=%2")
 					.arg(inputTraceExtra(object))
-					.arg(static_cast<int>(buffer.data.size()))
-					.arg(nClientDelayMs));
+					.arg(static_cast<int>(buffer.data.size())));
 		}
 
 		emit inputMessageReceived(strMessage);

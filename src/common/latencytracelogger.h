@@ -10,6 +10,7 @@ public:
 	static void write(const QString &strSide,
 		const QString &strStage,
 		const QString &strExtra = QString());
+	static void shutdown();
 
 private:
 	KLatencyTraceLogger() = delete;

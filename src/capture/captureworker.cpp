@@ -316,7 +316,7 @@ KStreamConfig KCaptureWorker::normalizeStreamConfig(const KStreamConfig &config)
 	return normalizedConfig;
 }
 
-bool KCaptureWorker::convertBgraToI420(const KCaptureFrame &captureFrame,
+bool KCaptureWorker::convertBgraToI420(KCaptureFrame &captureFrame,
 	const KStreamConfig &config,
 	quint64 nLastInputSeq,
 	qint64 nLastInputAgeMs,
@@ -352,32 +352,20 @@ bool KCaptureWorker::convertBgraToI420(const KCaptureFrame &captureFrame,
 		}
 	}
 
-	std::vector<unsigned char> traceBgraBuffer;
 	if (KLatencyTraceLogger::isEnabled() && nLastInputSeq > 0)
 	{
-		traceBgraBuffer.resize(static_cast<size_t>(nWidth) * static_cast<size_t>(nHeight) * 4);
+		std::vector<unsigned char> *pTraceBgraBuffer = nullptr;
 		if (!scaledBgraBuffer.empty())
-		{
-			std::memcpy(traceBgraBuffer.data(), scaledBgraBuffer.data(), traceBgraBuffer.size());
-		}
+			pTraceBgraBuffer = &scaledBgraBuffer;
 		else
-		{
-			for (int y = 0; y < nHeight; ++y)
-			{
-				const unsigned char *pSrcRow = captureFrame.vecBgraBuffer.data()
-					+ static_cast<size_t>(y) * static_cast<size_t>(captureFrame.nWidth) * 4;
-				unsigned char *pDstRow = traceBgraBuffer.data()
-					+ static_cast<size_t>(y) * static_cast<size_t>(nWidth) * 4;
-				std::memcpy(pDstRow, pSrcRow, static_cast<size_t>(nWidth) * 4);
-			}
-		}
+			pTraceBgraBuffer = &captureFrame.vecBgraBuffer;
 
 		KFrameWatermark watermark;
 		watermark.nSourceFrameIndex = captureFrame.nFrameIndex;
 		watermark.nLastInputSeq = nLastInputSeq;
 		watermark.nInputAgeMs = nLastInputAgeMs;
-		KFrameWatermarkCodec::writeBgra(&traceBgraBuffer, nWidth, nHeight, watermark);
-		pSrc = traceBgraBuffer.data();
+		KFrameWatermarkCodec::writeBgra(pTraceBgraBuffer, nWidth, nHeight, watermark);
+		pSrc = pTraceBgraBuffer->data();
 		nSrcStride = nWidth * 4;
 
 		if (captureFrame.nFrameIndex > 0 && captureFrame.nFrameIndex % kVideoTraceFrameInterval == 0)

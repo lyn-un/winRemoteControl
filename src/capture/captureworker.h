@@ -54,7 +54,7 @@ private:
 	bool waitForNextFrame(qint64 nSleepMs);
 	bool shouldTraceImmediateFrameRequest();
 	static KStreamConfig normalizeStreamConfig(const KStreamConfig &config);
-	static bool convertBgraToI420(const KCaptureFrame &captureFrame,
+	static bool convertBgraToI420(KCaptureFrame &captureFrame,
 		const KStreamConfig &config,
 		quint64 nLastInputSeq,
 		qint64 nLastInputAgeMs,

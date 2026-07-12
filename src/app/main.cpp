@@ -33,6 +33,8 @@ int main(int nArgc, char *pArgv[])
 	mainWindow.show();
 
 	const int nResult = app.exec();
+	KLatencyTraceLogger::write(QStringLiteral("app"), QStringLiteral("shutdown"));
+	KLatencyTraceLogger::shutdown();
 	::CoUninitialize();
 	return nResult;
 }
