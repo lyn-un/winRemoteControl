@@ -23,12 +23,13 @@ namespace
 	constexpr int kLatencyTraceMaxQueuedLines = 8192;
 	constexpr char kLatencyTraceEnvName[] = "WRC_LATENCY_TRACE";
 
-	static QString logFilePath()
+	static QString logFilePath(const QString &strProcessSide)
 	{
 		const QString strBasePath = QCoreApplication::applicationDirPath().isEmpty()
 			? QDir::currentPath()
 			: QCoreApplication::applicationDirPath();
-		return QDir(strBasePath).absoluteFilePath(QStringLiteral("logs/latency_trace.log"));
+		return QDir(strBasePath).absoluteFilePath(
+			QStringLiteral("logs/latency_trace_%1.log").arg(strProcessSide));
 	}
 
 	static void rotateIfNeeded(const QString &strFilePath)
@@ -66,6 +67,12 @@ namespace
 				QMutexLocker locker(&m_mutex);
 				if (!m_bEnabled || m_bStopping)
 					return;
+				if (m_strProcessSide.isEmpty()
+					&& (strSide == QStringLiteral("controller") || strSide == QStringLiteral("controlled")))
+				{
+					m_strProcessSide = strSide;
+					m_waitCondition.wakeOne();
+				}
 			}
 
 			const qint64 nMonotonicUs = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -112,7 +119,17 @@ namespace
 	protected:
 		void run() override
 		{
-			const QString strFilePath = logFilePath();
+			QString strProcessSide;
+			{
+				QMutexLocker locker(&m_mutex);
+				while (m_strProcessSide.isEmpty() && !m_bStopping)
+					m_waitCondition.wait(&m_mutex);
+				strProcessSide = m_strProcessSide.isEmpty()
+					? QStringLiteral("unknown")
+					: m_strProcessSide;
+			}
+
+			const QString strFilePath = logFilePath(strProcessSide);
 			const QFileInfo fileInfo(strFilePath);
 			QDir().mkpath(fileInfo.absolutePath());
 			rotateIfNeeded(strFilePath);
@@ -170,6 +187,7 @@ namespace
 		QMutex m_mutex;
 		QWaitCondition m_waitCondition;
 		QQueue<QString> m_pendingLines;
+		QString m_strProcessSide;
 		quint64 m_nDroppedLines = 0;
 		bool m_bInitialized = false;
 		bool m_bEnabled = false;
