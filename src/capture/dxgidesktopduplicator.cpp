@@ -260,6 +260,7 @@ void KDxgiDesktopDuplicator::shutdown()
 	m_nFrameIndex = 0;
 	m_bHdrOutput = false;
 	m_captureFormat = DXGI_FORMAT_UNKNOWN;
+	m_outputRect = {};
 	m_pointerPosition = {};
 	m_pointerShapeInfo = {};
 	m_vecPointerShapeBuffer.clear();
@@ -301,9 +302,18 @@ bool KDxgiDesktopDuplicator::createDuplication(const Microsoft::WRL::ComPtr<IDXG
 {
 	if (!detectHdrOutput(spOutput, pErrorMessage))
 		return false;
+	DXGI_OUTPUT_DESC outputDesc = {};
+	HRESULT hr = spOutput->GetDesc(&outputDesc);
+	if (FAILED(hr))
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = hresultMessage(QStringLiteral("IDXGIOutput::GetDesc failed"), hr);
+		return false;
+	}
+	m_outputRect = outputDesc.DesktopCoordinates;
 
 	Microsoft::WRL::ComPtr<IDXGIOutput5> spOutput5;
-	HRESULT hr = spOutput.As(&spOutput5);
+	hr = spOutput.As(&spOutput5);
 	if (SUCCEEDED(hr))
 	{
 		DXGI_FORMAT supportedFormats[1] = {};
@@ -379,7 +389,18 @@ KDxgiDesktopDuplicator::CaptureResult KDxgiDesktopDuplicator::captureNextFrame(K
 	Microsoft::WRL::ComPtr<IDXGIResource> spDesktopResource;
 	const HRESULT hrAcquire = m_spDuplication->AcquireNextFrame(100, &frameInfo, &spDesktopResource);
 	if (hrAcquire == DXGI_ERROR_WAIT_TIMEOUT)
+	{
+		if (m_nFrameIndex == 0)
+		{
+			KLatencyTraceLogger::write(QStringLiteral("controlled"),
+				QStringLiteral("initial_frame_fallback"),
+				QStringLiteral("source=gdi reason=dxgi_timeout"));
+			return captureInitialFrameWithGdi(pFrame, pErrorMessage)
+				? CapturedCaptureResult
+				: ErrorCaptureResult;
+		}
 		return TimeoutCaptureResult;
+	}
 	if (FAILED(hrAcquire))
 	{
 		if (pErrorMessage != nullptr)
@@ -453,7 +474,101 @@ KDxgiDesktopDuplicator::CaptureResult KDxgiDesktopDuplicator::captureNextFrame(K
 		return ErrorCaptureResult;
 	}
 	m_spDuplication->ReleaseFrame();
+	if (pFrame->nFrameIndex == 1)
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controlled"),
+			QStringLiteral("first_frame_captured"),
+			QStringLiteral("source=dxgi width=%1 height=%2")
+				.arg(pFrame->nWidth)
+				.arg(pFrame->nHeight));
+	}
 	return CapturedCaptureResult;
+}
+
+bool KDxgiDesktopDuplicator::captureInitialFrameWithGdi(KCaptureFrame *pFrame,
+	QString *pErrorMessage)
+{
+	const int nWidth = m_outputRect.right - m_outputRect.left;
+	const int nHeight = m_outputRect.bottom - m_outputRect.top;
+	if (nWidth <= 0 || nHeight <= 0)
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("Invalid output bounds for initial GDI capture");
+		return false;
+	}
+
+	HDC hScreenDc = ::GetDC(nullptr);
+	if (hScreenDc == nullptr)
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("GetDC failed for initial GDI capture");
+		return false;
+	}
+
+	HDC hMemoryDc = ::CreateCompatibleDC(hScreenDc);
+	BITMAPINFO bitmapInfo = {};
+	bitmapInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+	bitmapInfo.bmiHeader.biWidth = nWidth;
+	bitmapInfo.bmiHeader.biHeight = -nHeight;
+	bitmapInfo.bmiHeader.biPlanes = 1;
+	bitmapInfo.bmiHeader.biBitCount = 32;
+	bitmapInfo.bmiHeader.biCompression = BI_RGB;
+	void *pBitmapBits = nullptr;
+	HBITMAP hBitmap = hMemoryDc != nullptr
+		? ::CreateDIBSection(hScreenDc, &bitmapInfo, DIB_RGB_COLORS, &pBitmapBits, nullptr, 0)
+		: nullptr;
+	if (hMemoryDc == nullptr || hBitmap == nullptr || pBitmapBits == nullptr)
+	{
+		if (hBitmap != nullptr)
+			::DeleteObject(hBitmap);
+		if (hMemoryDc != nullptr)
+			::DeleteDC(hMemoryDc);
+		::ReleaseDC(nullptr, hScreenDc);
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("CreateDIBSection failed for initial GDI capture");
+		return false;
+	}
+
+	HGDIOBJ hPreviousBitmap = ::SelectObject(hMemoryDc, hBitmap);
+	const BOOL bCopied = ::BitBlt(hMemoryDc,
+		0,
+		0,
+		nWidth,
+		nHeight,
+		hScreenDc,
+		m_outputRect.left,
+		m_outputRect.top,
+		SRCCOPY | CAPTUREBLT);
+	if (bCopied)
+	{
+		const size_t nBufferSize = static_cast<size_t>(nWidth) * static_cast<size_t>(nHeight) * 4;
+		pFrame->vecBgraBuffer.resize(nBufferSize);
+		std::memcpy(pFrame->vecBgraBuffer.data(), pBitmapBits, nBufferSize);
+		for (size_t nAlphaIndex = 3; nAlphaIndex < nBufferSize; nAlphaIndex += 4)
+			pFrame->vecBgraBuffer[nAlphaIndex] = 255;
+		pFrame->nWidth = nWidth;
+		pFrame->nHeight = nHeight;
+		pFrame->nFrameIndex = ++m_nFrameIndex;
+		pFrame->nTimestampMs = QDateTime::currentMSecsSinceEpoch();
+	}
+
+	::SelectObject(hMemoryDc, hPreviousBitmap);
+	::DeleteObject(hBitmap);
+	::DeleteDC(hMemoryDc);
+	::ReleaseDC(nullptr, hScreenDc);
+	if (!bCopied)
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("BitBlt failed for initial GDI capture");
+		return false;
+	}
+
+	KLatencyTraceLogger::write(QStringLiteral("controlled"),
+		QStringLiteral("first_frame_captured"),
+		QStringLiteral("source=gdi width=%1 height=%2")
+			.arg(nWidth)
+			.arg(nHeight));
+	return true;
 }
 
 bool KDxgiDesktopDuplicator::updatePointerState(const DXGI_OUTDUPL_FRAME_INFO &frameInfo,

@@ -37,6 +37,7 @@ private:
 	bool detectHdrOutput(const Microsoft::WRL::ComPtr<IDXGIOutput> &spOutput, QString *pErrorMessage);
 	bool createDuplication(const Microsoft::WRL::ComPtr<IDXGIOutput> &spOutput, QString *pErrorMessage);
 	bool createStagingTexture(const D3D11_TEXTURE2D_DESC &sourceDesc, QString *pErrorMessage);
+	bool captureInitialFrameWithGdi(KCaptureFrame *pFrame, QString *pErrorMessage);
 	bool updatePointerState(const DXGI_OUTDUPL_FRAME_INFO &frameInfo, QString *pErrorMessage);
 	bool composePointer(KCaptureFrame *pFrame, QString *pErrorMessage) const;
 	static QString hresultMessage(const QString &strPrefix, HRESULT hr);
@@ -49,6 +50,7 @@ private:
 	quint64 m_nFrameIndex = 0;
 	bool m_bHdrOutput = false;
 	DXGI_FORMAT m_captureFormat = DXGI_FORMAT_UNKNOWN;
+	RECT m_outputRect = {};
 	float m_fSdrWhiteScale = 2.5f;
 	DXGI_OUTDUPL_POINTER_POSITION m_pointerPosition = {};
 	DXGI_OUTDUPL_POINTER_SHAPE_INFO m_pointerShapeInfo = {};
