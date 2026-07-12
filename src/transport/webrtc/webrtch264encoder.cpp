@@ -119,11 +119,24 @@ int KWebRtcH264Encoder::InitEncode(const webrtc::VideoCodec *pCodecSettings,
 	m_nEncodedFrameCount = 0;
 	m_bNeedKeyFrame = true;
 	m_playoutDelay.reset();
-	if (qEnvironmentVariableIsSet(kPlayoutDelayMaxMsEnvName))
+	const QString strPlayoutDelayValue = qEnvironmentVariable(kPlayoutDelayMaxMsEnvName).trimmed();
+	if (!qEnvironmentVariableIsSet(kPlayoutDelayMaxMsEnvName) || strPlayoutDelayValue.isEmpty())
+	{
+		m_playoutDelay = webrtc::VideoPlayoutDelay::Minimal();
+		KLatencyTraceLogger::write(QStringLiteral("controlled"),
+			QStringLiteral("playout_delay_config"),
+			QStringLiteral("minMs=0 maxMs=0 source=default"));
+	}
+	else if (strPlayoutDelayValue.compare(QStringLiteral("default"), Qt::CaseInsensitive) == 0)
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controlled"),
+			QStringLiteral("playout_delay_config"),
+			QStringLiteral("mode=webrtc_default source=environment"));
+	}
+	else
 	{
 		bool bValidDelay = false;
-		const int nMaxPlayoutDelayMs = qEnvironmentVariableIntValue(
-			kPlayoutDelayMaxMsEnvName, &bValidDelay);
+		const int nMaxPlayoutDelayMs = strPlayoutDelayValue.toInt(&bValidDelay);
 		if (bValidDelay && nMaxPlayoutDelayMs >= 0 && nMaxPlayoutDelayMs <= kMaxPlayoutDelayMs)
 		{
 			m_playoutDelay.emplace(webrtc::TimeDelta::Zero(),
@@ -134,17 +147,12 @@ int KWebRtcH264Encoder::InitEncode(const webrtc::VideoCodec *pCodecSettings,
 		}
 		else
 		{
+			m_playoutDelay = webrtc::VideoPlayoutDelay::Minimal();
 			KLatencyTraceLogger::write(QStringLiteral("controlled"),
 				QStringLiteral("playout_delay_config_invalid"),
-				QStringLiteral("value=%1")
-					.arg(qEnvironmentVariable(kPlayoutDelayMaxMsEnvName)));
+				QStringLiteral("value=%1 fallbackMinMs=0 fallbackMaxMs=0")
+					.arg(strPlayoutDelayValue));
 		}
-	}
-	else
-	{
-		KLatencyTraceLogger::write(QStringLiteral("controlled"),
-			QStringLiteral("playout_delay_config"),
-			QStringLiteral("mode=default"));
 	}
 
 	QString strError;
