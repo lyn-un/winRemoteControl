@@ -20,6 +20,8 @@ namespace
 	constexpr int kBitsPerKilobit = 1000;
 	constexpr int kMfScenarioDisplayRemoting = 1;
 	constexpr int kMfRateControlLowDelayVbr = 4;
+	constexpr char kHardwareEncoderName[] = "h264_mf";
+	constexpr char kSoftwareEncoderName[] = "libx264";
 }
 
 KH264Encoder::KH264Encoder()
@@ -65,22 +67,6 @@ bool KH264Encoder::openStream(int nWidth,
 		return false;
 	}
 
-	const AVCodec *pCodec = avcodec_find_encoder_by_name("h264_mf");
-	if (pCodec == nullptr)
-	{
-		if (pErrorMessage != nullptr)
-			*pErrorMessage = QStringLiteral("FFmpeg encoder h264_mf not found");
-		return false;
-	}
-
-	m_pCodecContext = avcodec_alloc_context3(pCodec);
-	if (m_pCodecContext == nullptr)
-	{
-		if (pErrorMessage != nullptr)
-			*pErrorMessage = QStringLiteral("Create H.264 codec context failed");
-		return false;
-	}
-
 	m_nEncodedWidth = nWidth & ~1;
 	m_nEncodedHeight = nHeight & ~1;
 	m_nFps = nFps;
@@ -88,36 +74,24 @@ bool KH264Encoder::openStream(int nWidth,
 	m_nFirstTimestampMs = 0;
 	m_nLastPts = -1;
 	m_dataCallback = callback;
+	m_strEncoderName.clear();
+	m_strFallbackReason.clear();
 
-	m_pCodecContext->codec_id = pCodec->id;
-	m_pCodecContext->codec_type = AVMEDIA_TYPE_VIDEO;
-	m_pCodecContext->width = m_nEncodedWidth;
-	m_pCodecContext->height = m_nEncodedHeight;
-	m_pCodecContext->pix_fmt = AV_PIX_FMT_NV12;
-	m_pCodecContext->time_base = AVRational{ 1, m_nFps };
-	m_pCodecContext->framerate = AVRational{ m_nFps, 1 };
-	m_pCodecContext->gop_size = m_nFps * 2;
-	m_pCodecContext->max_b_frames = 0;
-	m_pCodecContext->thread_count = 1;
-	const std::int64_t nRequestedBitrate = static_cast<std::int64_t>(m_nBitrateKbps) * kBitsPerKilobit;
-	m_pCodecContext->bit_rate = nRequestedBitrate > 0
-		? nRequestedBitrate
-		: std::clamp(
-			static_cast<std::int64_t>(m_nEncodedWidth) * m_nEncodedHeight * m_nFps / 4,
-			kMinBitrate,
-			kMaxBitrate);
-
-	av_opt_set_int(m_pCodecContext->priv_data, "hw_encoding", 1, 0);
-	av_opt_set_int(m_pCodecContext->priv_data, "scenario", kMfScenarioDisplayRemoting, 0);
-	av_opt_set_int(m_pCodecContext->priv_data, "rate_control", kMfRateControlLowDelayVbr, 0);
-
-	const int nOpenResult = avcodec_open2(m_pCodecContext, pCodec, nullptr);
-	if (nOpenResult < 0)
+	QString strHardwareError;
+	if (!openCodec(kHardwareEncoderName, true, &strHardwareError))
 	{
-		if (pErrorMessage != nullptr)
-			*pErrorMessage = ffmpegErrorMessage(QStringLiteral("Open h264_mf failed"), nOpenResult);
-		release();
-		return false;
+		QString strSoftwareError;
+		if (!openCodec(kSoftwareEncoderName, false, &strSoftwareError))
+		{
+			if (pErrorMessage != nullptr)
+			{
+				*pErrorMessage = QStringLiteral("Hardware encoder failed: %1; software encoder failed: %2")
+					.arg(strHardwareError, strSoftwareError);
+			}
+			release();
+			return false;
+		}
+		m_strFallbackReason = strHardwareError;
 	}
 
 	m_pFrame = av_frame_alloc();
@@ -360,6 +334,85 @@ QByteArray KH264Encoder::codecHeaderData() const
 		m_pCodecContext->extradata_size);
 }
 
+QString KH264Encoder::encoderName() const
+{
+	return m_strEncoderName;
+}
+
+QString KH264Encoder::fallbackReason() const
+{
+	return m_strFallbackReason;
+}
+
+bool KH264Encoder::openCodec(const char *pCodecName, bool bHardware, QString *pErrorMessage)
+{
+	const AVCodec *pCodec = avcodec_find_encoder_by_name(pCodecName);
+	if (pCodec == nullptr)
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("FFmpeg encoder %1 not found").arg(QString::fromLatin1(pCodecName));
+		return false;
+	}
+
+	m_pCodecContext = avcodec_alloc_context3(pCodec);
+	if (m_pCodecContext == nullptr)
+	{
+		if (pErrorMessage != nullptr)
+		{
+			*pErrorMessage = QStringLiteral("Create %1 codec context failed")
+				.arg(QString::fromLatin1(pCodecName));
+		}
+		return false;
+	}
+
+	m_pCodecContext->codec_id = pCodec->id;
+	m_pCodecContext->codec_type = AVMEDIA_TYPE_VIDEO;
+	m_pCodecContext->width = m_nEncodedWidth;
+	m_pCodecContext->height = m_nEncodedHeight;
+	m_pCodecContext->pix_fmt = AV_PIX_FMT_NV12;
+	m_pCodecContext->time_base = AVRational{ 1, m_nFps };
+	m_pCodecContext->framerate = AVRational{ m_nFps, 1 };
+	m_pCodecContext->gop_size = m_nFps * 2;
+	m_pCodecContext->max_b_frames = 0;
+	m_pCodecContext->thread_count = bHardware ? 1 : 0;
+	const std::int64_t nRequestedBitrate = static_cast<std::int64_t>(m_nBitrateKbps) * kBitsPerKilobit;
+	m_pCodecContext->bit_rate = nRequestedBitrate > 0
+		? nRequestedBitrate
+		: std::clamp(
+			static_cast<std::int64_t>(m_nEncodedWidth) * m_nEncodedHeight * m_nFps / 4,
+			kMinBitrate,
+			kMaxBitrate);
+
+	if (bHardware)
+	{
+		av_opt_set_int(m_pCodecContext->priv_data, "hw_encoding", 1, 0);
+		av_opt_set_int(m_pCodecContext->priv_data, "scenario", kMfScenarioDisplayRemoting, 0);
+		av_opt_set_int(m_pCodecContext->priv_data, "rate_control", kMfRateControlLowDelayVbr, 0);
+	}
+	else
+	{
+		av_opt_set(m_pCodecContext->priv_data, "preset", "ultrafast", 0);
+		av_opt_set(m_pCodecContext->priv_data, "tune", "zerolatency", 0);
+		av_opt_set(m_pCodecContext->priv_data, "profile", "baseline", 0);
+	}
+
+	const int nOpenResult = avcodec_open2(m_pCodecContext, pCodec, nullptr);
+	if (nOpenResult < 0)
+	{
+		if (pErrorMessage != nullptr)
+		{
+			*pErrorMessage = ffmpegErrorMessage(
+				QStringLiteral("Open %1 failed").arg(QString::fromLatin1(pCodecName)),
+				nOpenResult);
+		}
+		avcodec_free_context(&m_pCodecContext);
+		return false;
+	}
+
+	m_strEncoderName = QString::fromLatin1(pCodecName);
+	return true;
+}
+
 bool KH264Encoder::prepareFrame(qint64 nTimestampMs, bool bForceKeyFrame, QString *)
 {
 	if (m_nFirstTimestampMs <= 0)
@@ -430,6 +483,8 @@ void KH264Encoder::release()
 	m_nBitrateKbps = 0;
 	m_nFirstTimestampMs = 0;
 	m_nLastPts = -1;
+	m_strEncoderName.clear();
+	m_strFallbackReason.clear();
 	m_bOpen = false;
 }
 

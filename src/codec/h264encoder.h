@@ -54,8 +54,11 @@ public:
 	int encodedWidth() const;
 	int encodedHeight() const;
 	QByteArray codecHeaderData() const;
+	QString encoderName() const;
+	QString fallbackReason() const;
 
 private:
+	bool openCodec(const char *pCodecName, bool bHardware, QString *pErrorMessage);
 	bool prepareFrame(qint64 nTimestampMs, bool bForceKeyFrame, QString *pErrorMessage);
 	bool writePacket(QString *pErrorMessage);
 	void release();
@@ -72,6 +75,8 @@ private:
 	int m_nBitrateKbps = 0;
 	qint64 m_nFirstTimestampMs = 0;
 	std::int64_t m_nLastPts = -1;
+	QString m_strEncoderName;
+	QString m_strFallbackReason;
 	bool m_bOpen = false;
 };
 

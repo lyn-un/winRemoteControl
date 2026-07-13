@@ -167,18 +167,29 @@ int KWebRtcH264Encoder::InitEncode(const webrtc::VideoCodec *pCodecSettings,
 	if (!bOpen)
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controlled"),
-			QStringLiteral("h264_mf_encoder_init_failed"),
+			QStringLiteral("h264_encoder_init_failed"),
 			QStringLiteral("error=%1").arg(strError));
 		return WEBRTC_VIDEO_CODEC_ERROR;
 	}
 
+	if (!m_encoder.fallbackReason().isEmpty())
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controlled"),
+			QStringLiteral("h264_encoder_fallback"),
+			QStringLiteral("from=h264_mf to=libx264 error=%1").arg(m_encoder.fallbackReason()));
+	}
 	KLatencyTraceLogger::write(QStringLiteral("controlled"),
-		QStringLiteral("h264_mf_encoder_init"),
-		QStringLiteral("width=%1 height=%2 fps=%3 bitrateKbps=%4")
+		QStringLiteral("webrtc_codec_selected"),
+		QStringLiteral("codec=H264 encoder=%1").arg(m_encoder.encoderName()));
+	KLatencyTraceLogger::write(QStringLiteral("controlled"),
+		QStringLiteral("h264_encoder_init"),
+		QStringLiteral("encoder=%1 width=%2 height=%3 fps=%4 bitrateKbps=%5 fallback=%6")
+			.arg(m_encoder.encoderName())
 			.arg(m_nWidth)
 			.arg(m_nHeight)
 			.arg(m_nFps)
-			.arg(m_nBitrateKbps));
+			.arg(m_nBitrateKbps)
+			.arg(m_encoder.fallbackReason().isEmpty() ? 0 : 1));
 	return WEBRTC_VIDEO_CODEC_OK;
 }
 
@@ -232,8 +243,8 @@ int32_t KWebRtcH264Encoder::Encode(const webrtc::VideoFrame &frame,
 	{
 		m_encoder.setDataCallback(KH264Encoder::DataCallback());
 		KLatencyTraceLogger::write(QStringLiteral("controlled"),
-			QStringLiteral("h264_mf_encode_failed"),
-			QStringLiteral("error=%1").arg(strError));
+			QStringLiteral("h264_encode_failed"),
+			QStringLiteral("encoder=%1 error=%2").arg(m_encoder.encoderName(), strError));
 		return WEBRTC_VIDEO_CODEC_ERROR;
 	}
 	m_encoder.setDataCallback(KH264Encoder::DataCallback());
@@ -246,8 +257,10 @@ int32_t KWebRtcH264Encoder::Encode(const webrtc::VideoFrame &frame,
 	if (annexBFrame.isEmpty())
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controlled"),
-			QStringLiteral("h264_mf_encode_failed"),
-			QStringLiteral("error=normalize_annexb_failed bytes=%1").arg(encodedFrame.size()));
+			QStringLiteral("h264_encode_failed"),
+			QStringLiteral("encoder=%1 error=normalize_annexb_failed bytes=%2")
+				.arg(m_encoder.encoderName())
+				.arg(encodedFrame.size()));
 		return WEBRTC_VIDEO_CODEC_ERROR;
 	}
 
@@ -266,8 +279,9 @@ int32_t KWebRtcH264Encoder::Encode(const webrtc::VideoFrame &frame,
 	if (m_nEncodedFrameCount % kVideoTraceFrameInterval == 0)
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controlled"),
-			QStringLiteral("h264_mf_encode_end"),
-			QStringLiteral("frame=%1 costMs=%2 bytes=%3 keyframe=%4 bitrateKbps=%5")
+			QStringLiteral("h264_encode_end"),
+			QStringLiteral("encoder=%1 frame=%2 costMs=%3 bytes=%4 keyframe=%5 bitrateKbps=%6")
+				.arg(m_encoder.encoderName())
 				.arg(m_nEncodedFrameCount)
 				.arg(encodeTimer.elapsed())
 				.arg(annexBFrame.size())
@@ -296,8 +310,11 @@ void KWebRtcH264Encoder::SetRates(const webrtc::VideoEncoder::RateControlParamet
 webrtc::VideoEncoder::EncoderInfo KWebRtcH264Encoder::GetEncoderInfo() const
 {
 	webrtc::VideoEncoder::EncoderInfo info;
-	info.implementation_name = "h264_mf";
-	info.is_hardware_accelerated = true;
+	const QString strEncoderName = m_encoder.encoderName();
+	info.implementation_name = strEncoderName.isEmpty()
+		? "h264_mf_or_libx264"
+		: strEncoderName.toStdString();
+	info.is_hardware_accelerated = strEncoderName == QStringLiteral("h264_mf");
 	info.supports_native_handle = false;
 	info.requested_resolution_alignment = 2;
 	info.apply_alignment_to_all_simulcast_layers = true;
@@ -524,9 +541,6 @@ std::unique_ptr<webrtc::VideoEncoder> KWebRtcH264EncoderFactory::Create(const we
 	if (!isH264Format(format))
 		return nullptr;
 
-	KLatencyTraceLogger::write(QStringLiteral("controlled"),
-		QStringLiteral("webrtc_codec_selected"),
-		QStringLiteral("codec=H264 encoder=h264_mf"));
 	return std::make_unique<KWebRtcH264Encoder>();
 }
 
