@@ -55,6 +55,10 @@ KWebRtcSessionService::KWebRtcSessionService(QObject *pParent)
 		this, &KWebRtcSessionService::signalingChanged);
 	connect(m_pSignaling, &KWebRtcSignaling::signalingError,
 		this, &KWebRtcSessionService::sessionError);
+	connect(m_pSignaling, &KWebRtcSignaling::outgoingConnectionEstablished,
+		this, &KWebRtcSessionService::handleOutgoingConnectionEstablished);
+	connect(m_pSignaling, &KWebRtcSignaling::outgoingConnectionFailed,
+		this, &KWebRtcSessionService::handleOutgoingConnectionFailed);
 	connect(m_pInputInjector, &KInputInjector::inputError,
 		this, &KWebRtcSessionService::sessionError);
 }
@@ -74,6 +78,7 @@ void KWebRtcSessionService::setRole(const QString &strRole)
 
 void KWebRtcSessionService::startSignalingServer(quint16 nPort)
 {
+	m_bControllerConnectionPending = false;
 	QString strError;
 	if (!initializePeer(KWebRtcPeer::ControlledRole, &strError))
 	{
@@ -92,6 +97,8 @@ void KWebRtcSessionService::startSignalingServer(quint16 nPort)
 
 void KWebRtcSessionService::connectSignaling(const QString &strHost, quint16 nPort)
 {
+	m_bControllerConnectionPending = false;
+	m_pSignaling->stop();
 	QString strError;
 	if (!initializePeer(KWebRtcPeer::ControllerRole, &strError))
 	{
@@ -99,18 +106,13 @@ void KWebRtcSessionService::connectSignaling(const QString &strHost, quint16 nPo
 		return;
 	}
 
-	if (!m_pSignaling->connectToHost(strHost, nPort, &strError))
-	{
-		emit sessionError(strError);
-		return;
-	}
-
-	m_strRole = QStringLiteral("controller");
-	m_pPeer->createOffer();
+	m_bControllerConnectionPending = true;
+	m_pSignaling->connectToHost(strHost, nPort);
 }
 
 void KWebRtcSessionService::disconnectSession()
 {
+	m_bControllerConnectionPending = false;
 	m_bDeviceInfoRequested = false;
 	m_nLastInjectedInputSeq = 0;
 	m_nLastInjectedInputMs = -1;
@@ -328,6 +330,27 @@ void KWebRtcSessionService::handleInputInjected(quint64 nSeq, qint64 nInjectedMs
 	m_nLastInjectedInputMs = nInjectedMs;
 	emit inputTraceUpdated(nSeq, nInjectedMs);
 	emit inputFeedbackFrameRequested();
+}
+
+void KWebRtcSessionService::handleOutgoingConnectionEstablished()
+{
+	if (!m_bControllerConnectionPending || m_pPeer == nullptr)
+		return;
+
+	m_bControllerConnectionPending = false;
+	m_strRole = QStringLiteral("controller");
+	m_pPeer->createOffer();
+}
+
+void KWebRtcSessionService::handleOutgoingConnectionFailed(const QString &strMessage)
+{
+	if (!m_bControllerConnectionPending)
+		return;
+
+	m_bControllerConnectionPending = false;
+	if (m_pPeer != nullptr)
+		m_pPeer->shutdown();
+	emit sessionError(strMessage);
 }
 
 void KWebRtcSessionService::sendDeviceInfoMessage()

@@ -66,6 +66,8 @@ private:
 	void handleSessionChannelChanged(bool bOpen);
 	void handleSessionMessage(const QString &strMessage);
 	void handleInputInjected(quint64 nSeq, qint64 nInjectedMs);
+	void handleOutgoingConnectionEstablished();
+	void handleOutgoingConnectionFailed(const QString &strMessage);
 	void sendDeviceInfoMessage();
 	QString createDeviceInfoMessage(const QString &strWallpaperMime, const QString &strWallpaperData) const;
 	QString createControlMessage(const QString &strType) const;
@@ -75,6 +77,7 @@ private:
 
 	QString m_strRole = QStringLiteral("controller");
 	bool m_bDeviceInfoRequested = false;
+	bool m_bControllerConnectionPending = false;
 	quint64 m_nLastInjectedInputSeq = 0;
 	qint64 m_nLastInjectedInputMs = -1;
 	KWebRtcSignaling *m_pSignaling = nullptr;

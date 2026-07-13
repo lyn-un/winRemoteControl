@@ -1,13 +1,25 @@
 #include "transport/webrtc/webrtcsignaling.h"
 
+#include "common/latencytracelogger.h"
+
+#include <QtCore/QTimer>
 #include <QtNetwork/QHostAddress>
 #include <QtNetwork/QNetworkProxy>
 #include <QtNetwork/QTcpServer>
 #include <QtNetwork/QTcpSocket>
 
+namespace
+{
+	constexpr int kConnectTimeoutMs = 3000;
+}
+
 KWebRtcSignaling::KWebRtcSignaling(QObject *pParent)
 	: QObject(pParent)
+	, m_pConnectTimeoutTimer(new QTimer(this))
 {
+	m_pConnectTimeoutTimer->setSingleShot(true);
+	connect(m_pConnectTimeoutTimer, &QTimer::timeout,
+		this, &KWebRtcSignaling::handleConnectTimeout);
 }
 
 KWebRtcSignaling::~KWebRtcSignaling()
@@ -36,27 +48,31 @@ bool KWebRtcSignaling::startServer(quint16 nPort, QString *pErrorMessage)
 	return true;
 }
 
-bool KWebRtcSignaling::connectToHost(const QString &strHost, quint16 nPort, QString *pErrorMessage)
+void KWebRtcSignaling::connectToHost(const QString &strHost, quint16 nPort)
 {
 	stop();
 
 	QTcpSocket *pSocket = new QTcpSocket(this);
 	pSocket->setProxy(QNetworkProxy::NoProxy);
 	setSocket(pSocket);
+	m_bOutgoingConnectionPending = true;
+	m_connectElapsedTimer.start();
+	m_pConnectTimeoutTimer->start(kConnectTimeoutMs);
+	emit stateChanged(QStringLiteral("Connecting"));
+	KLatencyTraceLogger::write(QStringLiteral("controller"),
+		QStringLiteral("signaling_connect_start"),
+		QStringLiteral("host=%1 port=%2 timeoutMs=%3")
+			.arg(strHost)
+			.arg(nPort)
+			.arg(kConnectTimeoutMs));
 	pSocket->connectToHost(strHost, nPort);
-	if (!pSocket->waitForConnected(3000))
-	{
-		if (pErrorMessage != nullptr)
-			*pErrorMessage = pSocket->errorString();
-		stop();
-		return false;
-	}
-
-	return true;
 }
 
 void KWebRtcSignaling::stop()
 {
+	m_bOutgoingConnectionPending = false;
+	m_pConnectTimeoutTimer->stop();
+	m_connectElapsedTimer.invalidate();
 	closeSocket();
 	if (m_pServer != nullptr)
 	{
@@ -120,6 +136,20 @@ void KWebRtcSignaling::handleReadyRead()
 
 void KWebRtcSignaling::handleConnected()
 {
+	if (m_bOutgoingConnectionPending)
+	{
+		m_bOutgoingConnectionPending = false;
+		m_pConnectTimeoutTimer->stop();
+		const qint64 nCostMs = m_connectElapsedTimer.elapsed();
+		m_connectElapsedTimer.invalidate();
+		KLatencyTraceLogger::write(QStringLiteral("controller"),
+			QStringLiteral("signaling_connect_success"),
+			QStringLiteral("costMs=%1").arg(nCostMs));
+		emit stateChanged(QStringLiteral("Connected"));
+		emit outgoingConnectionEstablished();
+		return;
+	}
+
 	emit stateChanged(QStringLiteral("Connected"));
 }
 
@@ -130,8 +160,26 @@ void KWebRtcSignaling::handleDisconnected()
 
 void KWebRtcSignaling::handleSocketError()
 {
-	if (m_pSocket != nullptr)
-		emit signalingError(m_pSocket->errorString());
+	if (m_pSocket == nullptr)
+		return;
+
+	const QString strError = m_pSocket->errorString();
+	if (m_bOutgoingConnectionPending)
+	{
+		failOutgoingConnection(QStringLiteral("socket_error"), strError);
+		return;
+	}
+
+	emit signalingError(strError);
+}
+
+void KWebRtcSignaling::handleConnectTimeout()
+{
+	if (!m_bOutgoingConnectionPending)
+		return;
+
+	failOutgoingConnection(QStringLiteral("timeout"),
+		QStringLiteral("Signaling connection timed out after %1 ms").arg(kConnectTimeoutMs));
 }
 
 void KWebRtcSignaling::setSocket(QTcpSocket *pSocket)
@@ -156,4 +204,23 @@ void KWebRtcSignaling::closeSocket()
 	m_pSocket->disconnectFromHost();
 	m_pSocket->deleteLater();
 	m_pSocket = nullptr;
+}
+
+void KWebRtcSignaling::failOutgoingConnection(const QString &strReason, const QString &strMessage)
+{
+	if (!m_bOutgoingConnectionPending)
+		return;
+
+	m_bOutgoingConnectionPending = false;
+	m_pConnectTimeoutTimer->stop();
+	const qint64 nCostMs = m_connectElapsedTimer.elapsed();
+	m_connectElapsedTimer.invalidate();
+	KLatencyTraceLogger::write(QStringLiteral("controller"),
+		QStringLiteral("signaling_connect_failed"),
+		QStringLiteral("costMs=%1 reason=%2 error=%3")
+			.arg(nCostMs)
+			.arg(strReason, strMessage));
+	closeSocket();
+	emit stateChanged(QStringLiteral("ConnectionFailed"));
+	emit outgoingConnectionFailed(strMessage);
 }
