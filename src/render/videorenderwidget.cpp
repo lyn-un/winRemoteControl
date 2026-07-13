@@ -159,7 +159,7 @@ void KVideoRenderWidget::presentFrame(const KDecodedVideoFrame &frame)
 
 	if (KLatencyTraceLogger::isEnabled()
 		&& frame.nLastInputSeq > 0
-		&& frame.nLastInputSeq != m_nLastRenderedInputSeq)
+		&& frame.nLastInputSeq > m_nLastRenderedInputSeq)
 	{
 		m_nLastRenderedInputSeq = frame.nLastInputSeq;
 		KLatencyTraceLogger::write(QStringLiteral("controller"),
@@ -171,6 +171,7 @@ void KVideoRenderWidget::presentFrame(const KDecodedVideoFrame &frame)
 				.arg(frame.nInputAgeMs)
 				.arg(frame.nWidth)
 				.arg(frame.nHeight));
+		emit inputFeedbackRendered(frame.nLastInputSeq);
 	}
 
 	if (bTraceFrame)

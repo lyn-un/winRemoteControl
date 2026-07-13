@@ -7,9 +7,11 @@
 
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QJsonObject>
+#include <QtCore/QMap>
 #include <QtCore/QObject>
 #include <QtCore/QSize>
 #include <QtCore/QString>
+#include <QtCore/QVector>
 
 class KCaptureService;
 class KWebRtcSessionService;
@@ -42,6 +44,7 @@ public slots:
 	void sendRemoteMouseButton(int nX, int nY, int nButton, bool bPressed);
 	void sendRemoteMouseWheel(int nX, int nY, int nDelta);
 	void sendStreamConfig(const KStreamConfig &config);
+	void handleInputFeedbackRendered(quint64 nSeq);
 
 signals:
 	void statusChanged(const QString &strStatus);
@@ -72,12 +75,19 @@ private:
 	void initConnections();
 	void sendInputJsonMessage(QJsonObject object, bool bTrace);
 	bool shouldTraceMouseMove();
+	void resetInputRoundTripTrace();
+	void recordInputSent(quint64 nSeq);
+	void logInputRoundTripStats();
 
 	KCaptureService *m_pCaptureService = nullptr;
 	KWebRtcSessionService *m_pWebRtcSessionService = nullptr;
 	quint64 m_nInputSequence = 0;
+	quint64 m_nInputRoundTripSampleCount = 0;
 	QSize m_remoteScreenSize;
 	QElapsedTimer m_inputMoveTraceTimer;
+	QElapsedTimer m_inputRoundTripTimer;
+	QMap<quint64, qint64> m_inputSentTimesMs;
+	QVector<qint64> m_inputRoundTripSamples;
 };
 
 #endif // _WINREMOTECONTROL_SESSIONVIEWMODEL_H_

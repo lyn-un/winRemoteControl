@@ -36,6 +36,7 @@ signals:
 	void remoteMouseMoveRequested(int nX, int nY);
 	void remoteMouseButtonRequested(int nX, int nY, int nButton, bool bPressed);
 	void remoteMouseWheelRequested(int nX, int nY, int nDelta);
+	void inputFeedbackRendered(quint64 nSeq);
 
 protected:
 	void resizeEvent(QResizeEvent *pEvent) override;
