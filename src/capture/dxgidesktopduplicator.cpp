@@ -616,9 +616,14 @@ bool KDxgiDesktopDuplicator::updatePointerState(const DXGI_OUTDUPL_FRAME_INFO &f
 		{
 			KLatencyTraceLogger::write(QStringLiteral("controlled"),
 				QStringLiteral("pointer_update"),
-				QStringLiteral("x=%1 y=%2 visible=%3 shapeType=%4 width=%5 height=%6")
+				QStringLiteral("x=%1 y=%2 drawX=%3 drawY=%4 hotspotX=%5 hotspotY=%6 "
+					"visible=%7 shapeType=%8 width=%9 height=%10")
 					.arg(m_pointerPosition.Position.x)
 					.arg(m_pointerPosition.Position.y)
+					.arg(m_pointerPosition.Position.x)
+					.arg(m_pointerPosition.Position.y)
+					.arg(m_pointerShapeInfo.HotSpot.x)
+					.arg(m_pointerShapeInfo.HotSpot.y)
 					.arg(m_pointerPosition.Visible ? 1 : 0)
 					.arg(m_pointerShapeInfo.Type)
 					.arg(m_pointerShapeInfo.Width)
@@ -650,8 +655,8 @@ bool KDxgiDesktopDuplicator::composePointer(KCaptureFrame *pFrame, QString *pErr
 		return false;
 	}
 
-	const int nDrawX = m_pointerPosition.Position.x - static_cast<int>(m_pointerShapeInfo.HotSpot.x);
-	const int nDrawY = m_pointerPosition.Position.y - static_cast<int>(m_pointerShapeInfo.HotSpot.y);
+	const int nDrawX = m_pointerPosition.Position.x;
+	const int nDrawY = m_pointerPosition.Position.y;
 	for (int y = 0; y < nPointerHeight; ++y)
 	{
 		const int nTargetY = nDrawY + y;
