@@ -125,10 +125,21 @@ void KWebRtcSessionService::disconnectSession()
 	emit webRtcStateChanged(QStringLiteral("Disconnected"));
 }
 
-void KWebRtcSessionService::enterRemoteDesktop()
+void KWebRtcSessionService::enterRemoteDesktop(const KStreamConfig &config)
 {
 	if (m_strRole != QStringLiteral("controller"))
 		return;
+
+	KSessionTraceLogger::write(QStringLiteral("controller"),
+		QStringLiteral("startup_order"),
+		QStringLiteral("streamConfigBeforeStart"),
+		-1,
+		QStringLiteral("width=%1 height=%2 fps=%3 bitrateKbps=%4")
+			.arg(config.nWidth)
+			.arg(config.nHeight)
+			.arg(config.nFps)
+			.arg(config.nBitrateKbps));
+	sendStreamConfig(config);
 	sendSessionMessage(createControlMessage(QString::fromLatin1(kStartStreaming)));
 }
 

@@ -22,6 +22,14 @@ namespace
 	constexpr char kY[] = "y";
 	constexpr char kSeq[] = "seq";
 	constexpr char kTrace[] = "trace";
+
+	bool isSameStreamConfig(const KStreamConfig &lhs, const KStreamConfig &rhs)
+	{
+		return lhs.nFps == rhs.nFps
+			&& lhs.nWidth == rhs.nWidth
+			&& lhs.nHeight == rhs.nHeight
+			&& lhs.nBitrateKbps == rhs.nBitrateKbps;
+	}
 }
 
 KSessionViewModel::KSessionViewModel(QObject *pParent)
@@ -78,7 +86,7 @@ void KSessionViewModel::disconnectSession()
 
 void KSessionViewModel::enterRemoteDesktop()
 {
-	m_pWebRtcSessionService->enterRemoteDesktop();
+	m_pWebRtcSessionService->enterRemoteDesktop(m_streamConfig);
 }
 
 void KSessionViewModel::leaveRemoteDesktop()
@@ -138,6 +146,10 @@ void KSessionViewModel::sendRemoteMouseWheel(int nX, int nY, int nDelta)
 
 void KSessionViewModel::sendStreamConfig(const KStreamConfig &config)
 {
+	if (isSameStreamConfig(m_streamConfig, config))
+		return;
+
+	m_streamConfig = config;
 	m_pWebRtcSessionService->sendStreamConfig(config);
 }
 

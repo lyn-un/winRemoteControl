@@ -88,6 +88,7 @@ private:
 	QElapsedTimer m_inputRoundTripTimer;
 	QMap<quint64, qint64> m_inputSentTimesMs;
 	QVector<qint64> m_inputRoundTripSamples;
+	KStreamConfig m_streamConfig;
 };
 
 #endif // _WINREMOTECONTROL_SESSIONVIEWMODEL_H_

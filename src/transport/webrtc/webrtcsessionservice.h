@@ -30,7 +30,7 @@ public slots:
 	void startSignalingServer(quint16 nPort);
 	void connectSignaling(const QString &strHost, quint16 nPort);
 	void disconnectSession();
-	void enterRemoteDesktop();
+	void enterRemoteDesktop(const KStreamConfig &config);
 	void leaveRemoteDesktop();
 	void startStreaming();
 	void stopStreaming();
