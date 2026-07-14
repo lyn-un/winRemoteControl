@@ -17,12 +17,18 @@ namespace
 	static bool g_bSessionTraceInitialized = false;
 	static bool g_bSessionTraceEnabled = false;
 
-	static QString logFilePath()
+	static QString logDirectoryPath()
 	{
 		const QString strBasePath = QCoreApplication::applicationDirPath().isEmpty()
 			? QDir::currentPath()
 			: QCoreApplication::applicationDirPath();
-		return QDir(strBasePath).absoluteFilePath(QStringLiteral("logs/session_trace.log"));
+		return QDir(strBasePath).absoluteFilePath(QStringLiteral("logs"));
+	}
+
+	static QString logFilePath(const QString &strRole)
+	{
+		return QDir(logDirectoryPath()).absoluteFilePath(
+			QStringLiteral("session_trace_%1.log").arg(strRole));
 	}
 
 	static void initialize()
@@ -36,8 +42,7 @@ namespace
 		if (!g_bSessionTraceEnabled)
 			return;
 
-		const QFileInfo fileInfo(logFilePath());
-		QDir().mkpath(fileInfo.absolutePath());
+		QDir().mkpath(logDirectoryPath());
 	}
 
 	static void rotateIfNeeded(const QString &strFilePath)
@@ -70,7 +75,7 @@ void KSessionTraceLogger::write(const QString &strRole,
 	if (!g_bSessionTraceEnabled)
 		return;
 
-	const QString strFilePath = logFilePath();
+	const QString strFilePath = logFilePath(strRole);
 	rotateIfNeeded(strFilePath);
 
 	QFile file(strFilePath);
