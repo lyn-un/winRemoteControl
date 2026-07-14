@@ -375,6 +375,11 @@ bool KH264Encoder::openCodec(const char *pCodecName, bool bHardware, QString *pE
 	m_pCodecContext->gop_size = m_nFps * 2;
 	m_pCodecContext->max_b_frames = 0;
 	m_pCodecContext->thread_count = bHardware ? 1 : 0;
+	if (!bHardware)
+	{
+		m_pCodecContext->thread_type = FF_THREAD_SLICE;
+		m_pCodecContext->flags |= AV_CODEC_FLAG_LOW_DELAY;
+	}
 	const std::int64_t nRequestedBitrate = static_cast<std::int64_t>(m_nBitrateKbps) * kBitsPerKilobit;
 	m_pCodecContext->bit_rate = nRequestedBitrate > 0
 		? nRequestedBitrate

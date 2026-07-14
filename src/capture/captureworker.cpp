@@ -7,8 +7,9 @@
 #include "common/framewatermark.h"
 #include "common/latencytracelogger.h"
 
-#include <QtCore/QThread>
+#include <QtCore/QDateTime>
 #include <QtCore/QElapsedTimer>
+#include <QtCore/QThread>
 
 #include <algorithm>
 #include <chrono>
@@ -22,6 +23,8 @@ namespace
 {
 	constexpr quint64 kVideoTraceFrameInterval = 30;
 	constexpr qint64 kImmediateFrameTraceIntervalMs = 500;
+	constexpr qint64 kInitialFrameRetryDurationMs = 1000;
+	constexpr int kInitialFrameRetryMaxCount = 10;
 }
 
 KCaptureWorker::KCaptureWorker(WorkMode mode, QObject *pParent)
@@ -49,6 +52,9 @@ void KCaptureWorker::startWork()
 	bool bDecodeOk = true;
 	QString strError;
 	QElapsedTimer frameTimer;
+	QElapsedTimer initialFrameRetryTimer;
+	KWebRtcVideoFrame lastVideoFrame;
+	int nInitialFrameRetryCount = 0;
 	if (!duplicator.initialize(&strError))
 	{
 		m_bRunning = false;
@@ -76,7 +82,26 @@ void KCaptureWorker::startWork()
 		strError.clear();
 		const KDxgiDesktopDuplicator::CaptureResult result = duplicator.captureNextFrame(&frame, &strError);
 		if (result == KDxgiDesktopDuplicator::TimeoutCaptureResult)
+		{
+			if (m_mode == WebRtcSourceWorkMode
+				&& initialFrameRetryTimer.isValid()
+				&& initialFrameRetryTimer.elapsed() <= kInitialFrameRetryDurationMs
+				&& nInitialFrameRetryCount < kInitialFrameRetryMaxCount
+				&& lastVideoFrame.nWidth > 0
+				&& lastVideoFrame.nHeight > 0)
+			{
+				++nInitialFrameRetryCount;
+				lastVideoFrame.nTimestampMs = QDateTime::currentMSecsSinceEpoch();
+				KLatencyTraceLogger::write(QStringLiteral("controlled"),
+					QStringLiteral("initial_frame_retry"),
+					QStringLiteral("attempt=%1 sourceFrame=%2 timestampMs=%3")
+						.arg(nInitialFrameRetryCount)
+						.arg(lastVideoFrame.nFrameIndex)
+						.arg(lastVideoFrame.nTimestampMs));
+				emit webRtcFrameReady(lastVideoFrame);
+			}
 			continue;
+		}
 		if (result == KDxgiDesktopDuplicator::ErrorCaptureResult)
 		{
 			m_bRunning = false;
@@ -112,6 +137,9 @@ void KCaptureWorker::startWork()
 				emit statusChanged(QStringLiteral("Error"));
 				break;
 			}
+			lastVideoFrame = videoFrame;
+			if (!initialFrameRetryTimer.isValid())
+				initialFrameRetryTimer.start();
 
 			if (videoFrame.nFrameIndex > 0 && videoFrame.nFrameIndex % kVideoTraceFrameInterval == 0)
 			{

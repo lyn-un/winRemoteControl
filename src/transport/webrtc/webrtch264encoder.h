@@ -48,6 +48,7 @@ private:
 	int m_nFps = 30;
 	int m_nBitrateKbps = 3000;
 	quint64 m_nEncodedFrameCount = 0;
+	quint64 m_nNoOutputCount = 0;
 	bool m_bNeedKeyFrame = true;
 	std::optional<webrtc::VideoPlayoutDelay> m_playoutDelay;
 };

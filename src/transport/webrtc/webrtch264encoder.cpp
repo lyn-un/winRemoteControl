@@ -117,6 +117,7 @@ int KWebRtcH264Encoder::InitEncode(const webrtc::VideoCodec *pCodecSettings,
 			: kDefaultFps));
 	m_nBitrateKbps = std::max(1, bitrateKbpsFromCodec(pCodecSettings));
 	m_nEncodedFrameCount = 0;
+	m_nNoOutputCount = 0;
 	m_bNeedKeyFrame = true;
 	m_playoutDelay.reset();
 	const QString strPlayoutDelayValue = qEnvironmentVariable(kPlayoutDelayMaxMsEnvName).trimmed();
@@ -251,7 +252,19 @@ int32_t KWebRtcH264Encoder::Encode(const webrtc::VideoFrame &frame,
 	const qint64 nEncodeFinishMs = QDateTime::currentMSecsSinceEpoch();
 
 	if (encodedFrame.isEmpty())
+	{
+		++m_nNoOutputCount;
+		if (m_nNoOutputCount == 1 || m_nNoOutputCount % kVideoTraceFrameInterval == 0)
+		{
+			KLatencyTraceLogger::write(QStringLiteral("controlled"),
+				QStringLiteral("h264_encode_no_output"),
+				QStringLiteral("encoder=%1 noOutputCount=%2 keyframe=%3")
+					.arg(m_encoder.encoderName())
+					.arg(m_nNoOutputCount)
+					.arg(bForceKeyFrame ? 1 : 0));
+		}
 		return WEBRTC_VIDEO_CODEC_OK;
+	}
 
 	QByteArray annexBFrame = normalizeToAnnexB(encodedFrame);
 	if (annexBFrame.isEmpty())
