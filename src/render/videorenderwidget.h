@@ -6,6 +6,7 @@
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QPoint>
 #include <QtCore/QRectF>
+#include <QtCore/QTimer>
 #include <QtWidgets/QWidget>
 
 #include <Windows.h>
@@ -49,6 +50,7 @@ protected:
 
 private slots:
 	void presentLatestFrame();
+	void flushPendingMouseMove();
 
 private:
 	struct KVertex
@@ -68,6 +70,7 @@ private:
 	void releaseRenderTarget();
 	void releaseAll();
 	void render();
+	void cancelPendingMouseMove();
 	bool mapToRemotePoint(const QPointF &localPoint, QPoint *pRemotePoint) const;
 	static int qtMouseButtonToRemoteButton(Qt::MouseButton button);
 	static QString hresultMessage(const QString &strPrefix, HRESULT hr);
@@ -75,9 +78,12 @@ private:
 	std::mutex m_frameMutex;
 	KDecodedVideoFrame m_latestFrame;
 	QElapsedTimer m_mouseMoveThrottleTimer;
+	QTimer m_mouseMoveFlushTimer;
+	QPoint m_pendingMouseMovePoint;
 	bool m_bHasPendingFrame = false;
 	bool m_bPresentQueued = false;
 	bool m_bInitialized = false;
+	bool m_bHasPendingMouseMove = false;
 	quint64 m_nLastRenderedInputSeq = 0;
 	int m_nFrameWidth = 0;
 	int m_nFrameHeight = 0;

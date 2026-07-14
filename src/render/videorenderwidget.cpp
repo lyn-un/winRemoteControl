@@ -50,11 +50,16 @@ KVideoRenderWidget::KVideoRenderWidget(QWidget *pParent)
 	setAutoFillBackground(false);
 	setMouseTracking(true);
 	setFocusPolicy(Qt::StrongFocus);
+	m_mouseMoveFlushTimer.setSingleShot(true);
+	m_mouseMoveFlushTimer.setTimerType(Qt::PreciseTimer);
+	connect(&m_mouseMoveFlushTimer, &QTimer::timeout,
+		this, &KVideoRenderWidget::flushPendingMouseMove);
 	m_mouseMoveThrottleTimer.start();
 }
 
 KVideoRenderWidget::~KVideoRenderWidget()
 {
+	cancelPendingMouseMove();
 	releaseAll();
 }
 
@@ -191,6 +196,7 @@ void KVideoRenderWidget::presentFrame(const KDecodedVideoFrame &frame)
 
 void KVideoRenderWidget::clearFrame()
 {
+	cancelPendingMouseMove();
 	{
 		std::lock_guard<std::mutex> guard(m_frameMutex);
 		m_bHasPendingFrame = false;
@@ -268,12 +274,18 @@ void KVideoRenderWidget::mouseMoveEvent(QMouseEvent *pEvent)
 	QPoint remotePoint;
 	if (pEvent != nullptr && mapToRemotePoint(pEvent->position(), &remotePoint))
 	{
-		if (!m_mouseMoveThrottleTimer.isValid()
-			|| m_mouseMoveThrottleTimer.elapsed() >= kMouseMoveThrottleMs)
+		m_pendingMouseMovePoint = remotePoint;
+		m_bHasPendingMouseMove = true;
+		const qint64 nElapsedMs = m_mouseMoveThrottleTimer.isValid()
+			? m_mouseMoveThrottleTimer.elapsed()
+			: kMouseMoveThrottleMs;
+		if (nElapsedMs >= kMouseMoveThrottleMs)
 		{
-			m_mouseMoveThrottleTimer.restart();
-			emit remoteMouseMoveRequested(remotePoint.x(), remotePoint.y());
+			flushPendingMouseMove();
 		}
+		else if (!m_mouseMoveFlushTimer.isActive())
+			m_mouseMoveFlushTimer.start(static_cast<int>(
+				kMouseMoveThrottleMs - nElapsedMs));
 		pEvent->accept();
 		return;
 	}
@@ -287,6 +299,7 @@ void KVideoRenderWidget::mousePressEvent(QMouseEvent *pEvent)
 	QPoint remotePoint;
 	if (nButton != 0 && pEvent != nullptr && mapToRemotePoint(pEvent->position(), &remotePoint))
 	{
+		cancelPendingMouseMove();
 		setFocus(Qt::MouseFocusReason);
 		emit remoteMouseButtonRequested(remotePoint.x(), remotePoint.y(), nButton, true);
 		pEvent->accept();
@@ -302,6 +315,7 @@ void KVideoRenderWidget::mouseReleaseEvent(QMouseEvent *pEvent)
 	QPoint remotePoint;
 	if (nButton != 0 && pEvent != nullptr && mapToRemotePoint(pEvent->position(), &remotePoint))
 	{
+		cancelPendingMouseMove();
 		emit remoteMouseButtonRequested(remotePoint.x(), remotePoint.y(), nButton, false);
 		pEvent->accept();
 		return;
@@ -317,12 +331,33 @@ void KVideoRenderWidget::wheelEvent(QWheelEvent *pEvent)
 	{
 		const int nDelta = pEvent->angleDelta().y();
 		if (nDelta != 0)
+		{
+			cancelPendingMouseMove();
 			emit remoteMouseWheelRequested(remotePoint.x(), remotePoint.y(), nDelta);
+		}
 		pEvent->accept();
 		return;
 	}
 
 	QWidget::wheelEvent(pEvent);
+}
+
+void KVideoRenderWidget::flushPendingMouseMove()
+{
+	if (!m_bHasPendingMouseMove)
+		return;
+
+	m_mouseMoveFlushTimer.stop();
+	const QPoint remotePoint = m_pendingMouseMovePoint;
+	m_bHasPendingMouseMove = false;
+	m_mouseMoveThrottleTimer.restart();
+	emit remoteMouseMoveRequested(remotePoint.x(), remotePoint.y());
+}
+
+void KVideoRenderWidget::cancelPendingMouseMove()
+{
+	m_mouseMoveFlushTimer.stop();
+	m_bHasPendingMouseMove = false;
 }
 
 bool KVideoRenderWidget::initializeD3d(QString *pErrorMessage)
