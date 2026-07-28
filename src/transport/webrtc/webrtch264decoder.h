@@ -13,7 +13,6 @@
 #include <api/video_codecs/video_decoder_factory.h>
 
 struct AVCodecContext;
-struct AVCodecParserContext;
 struct AVFrame;
 struct AVPacket;
 struct SwsContext;
@@ -41,7 +40,6 @@ private:
 
 private:
 	webrtc::DecodedImageCallback *m_pCallback = nullptr;
-	AVCodecParserContext *m_pParserContext = nullptr;
 	AVCodecContext *m_pCodecContext = nullptr;
 	AVFrame *m_pFrame = nullptr;
 	AVPacket *m_pPacket = nullptr;
@@ -49,6 +47,8 @@ private:
 	int m_nSwsWidth = 0;
 	int m_nSwsHeight = 0;
 	int m_nSwsFormat = -1;
+	quint64 m_nDecodeInputCount = 0;
+	quint64 m_nDecodeOutputCount = 0;
 };
 
 class KWebRtcH264DecoderFactory : public webrtc::VideoDecoderFactory

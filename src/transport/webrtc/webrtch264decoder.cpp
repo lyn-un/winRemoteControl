@@ -29,6 +29,7 @@ namespace
 	constexpr char kH264LevelAsymmetryAllowed[] = "level-asymmetry-allowed";
 	constexpr char kH264PacketizationMode[] = "packetization-mode";
 	constexpr int kYuvPlaneCount = 3;
+	constexpr quint64 kDecodeTraceFrameInterval = 30;
 
 	static bool equalsIgnoreCase(const std::string &left, const char *right)
 	{
@@ -80,33 +81,25 @@ int32_t KWebRtcH264Decoder::Decode(const webrtc::EncodedImage &inputImage, int64
 	if (inputImage.data() == nullptr || inputImage.size() == 0)
 		return WEBRTC_VIDEO_CODEC_ERR_PARAMETER;
 
-	const unsigned char *pInputData = inputImage.data();
-	int nInputSize = static_cast<int>(inputImage.size());
-
-	while (nInputSize > 0)
+	// WebRTC delivers one complete Annex-B access unit per EncodedImage (frame
+	// boundaries are guaranteed by RTP packetization), so no av_parser framing
+	// is needed. Feeding the image directly avoids the parser potentially
+	// holding back a frame until the next one arrives.
+	++m_nDecodeInputCount;
+	if (KLatencyTraceLogger::isEnabled()
+		&& (m_nDecodeInputCount == 1 || m_nDecodeInputCount % kDecodeTraceFrameInterval == 0))
 	{
-		unsigned char *pPacketData = nullptr;
-		int nPacketSize = 0;
-		const int nParsedSize = av_parser_parse2(m_pParserContext,
-			m_pCodecContext,
-			&pPacketData,
-			&nPacketSize,
-			pInputData,
-			nInputSize,
-			AV_NOPTS_VALUE,
-			AV_NOPTS_VALUE,
-			0);
-		if (nParsedSize < 0)
-			return WEBRTC_VIDEO_CODEC_ERROR;
-
-		pInputData += nParsedSize;
-		nInputSize -= nParsedSize;
-
-		if (nPacketSize > 0 && !sendPacket(pPacketData, nPacketSize, inputImage))
-			return WEBRTC_VIDEO_CODEC_ERROR;
+		KLatencyTraceLogger::write(QStringLiteral("controller"),
+			QStringLiteral("h264_decode_input"),
+			QStringLiteral("decodeIndex=%1 rtpTimestamp=%2 bytes=%3")
+				.arg(m_nDecodeInputCount)
+				.arg(inputImage.RtpTimestamp())
+				.arg(static_cast<qulonglong>(inputImage.size())));
 	}
 
-	return WEBRTC_VIDEO_CODEC_OK;
+	return sendPacket(inputImage.data(), static_cast<int>(inputImage.size()), inputImage)
+		? WEBRTC_VIDEO_CODEC_OK
+		: WEBRTC_VIDEO_CODEC_ERROR;
 }
 
 int32_t KWebRtcH264Decoder::RegisterDecodeCompleteCallback(webrtc::DecodedImageCallback *pCallback)
@@ -131,7 +124,7 @@ webrtc::VideoDecoder::DecoderInfo KWebRtcH264Decoder::GetDecoderInfo() const
 
 bool KWebRtcH264Decoder::openDecoder()
 {
-	if (m_pCodecContext != nullptr && m_pParserContext != nullptr)
+	if (m_pCodecContext != nullptr)
 		return true;
 
 	releaseDecoder();
@@ -145,12 +138,10 @@ bool KWebRtcH264Decoder::openDecoder()
 		return false;
 	}
 
-	m_pParserContext = av_parser_init(AV_CODEC_ID_H264);
 	m_pCodecContext = avcodec_alloc_context3(pCodec);
 	m_pFrame = av_frame_alloc();
 	m_pPacket = av_packet_alloc();
-	if (m_pParserContext == nullptr
-		|| m_pCodecContext == nullptr
+	if (m_pCodecContext == nullptr
 		|| m_pFrame == nullptr
 		|| m_pPacket == nullptr)
 	{
@@ -180,6 +171,9 @@ bool KWebRtcH264Decoder::sendPacket(const unsigned char *pData,
 	const webrtc::EncodedImage &inputImage)
 {
 	av_packet_unref(m_pPacket);
+	// av_new_packet allocates with AV_INPUT_BUFFER_PADDING_SIZE zero padding,
+	// which FFmpeg bitstream readers may over-read into; the EncodedImage
+	// buffer has no such guarantee, so the copy is kept deliberately.
 	const int nPacketResult = av_new_packet(m_pPacket, nSize);
 	if (nPacketResult < 0)
 		return false;
@@ -262,6 +256,19 @@ bool KWebRtcH264Decoder::receiveFrames(const webrtc::EncodedImage &inputImage)
 		if (!bConverted)
 			return false;
 
+		++m_nDecodeOutputCount;
+		if (KLatencyTraceLogger::isEnabled()
+			&& (m_nDecodeOutputCount == 1 || m_nDecodeOutputCount % kDecodeTraceFrameInterval == 0))
+		{
+			KLatencyTraceLogger::write(QStringLiteral("controller"),
+				QStringLiteral("h264_decode_output"),
+				QStringLiteral("decodeIndex=%1 rtpTimestamp=%2 width=%3 height=%4")
+					.arg(m_nDecodeOutputCount)
+					.arg(inputImage.RtpTimestamp())
+					.arg(spBuffer->width())
+					.arg(spBuffer->height()));
+		}
+
 		webrtc::VideoFrame decodedFrame = webrtc::VideoFrame::Builder()
 			.set_video_frame_buffer(spBuffer)
 			.set_timestamp_rtp(inputImage.RtpTimestamp())
@@ -332,14 +339,11 @@ void KWebRtcH264Decoder::releaseDecoder()
 		avcodec_free_context(&m_pCodecContext);
 		m_pCodecContext = nullptr;
 	}
-	if (m_pParserContext != nullptr)
-	{
-		av_parser_close(m_pParserContext);
-		m_pParserContext = nullptr;
-	}
 	m_nSwsWidth = 0;
 	m_nSwsHeight = 0;
 	m_nSwsFormat = -1;
+	m_nDecodeInputCount = 0;
+	m_nDecodeOutputCount = 0;
 }
 
 QString KWebRtcH264Decoder::ffmpegErrorMessage(const QString &strPrefix, int nErrorCode)
