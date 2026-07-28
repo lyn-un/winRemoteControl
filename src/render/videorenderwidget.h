@@ -46,6 +46,7 @@ protected:
 	void mousePressEvent(QMouseEvent *pEvent) override;
 	void mouseReleaseEvent(QMouseEvent *pEvent) override;
 	void wheelEvent(QWheelEvent *pEvent) override;
+	void leaveEvent(QEvent *pEvent) override;
 	QPaintEngine *paintEngine() const override;
 
 private slots:
@@ -72,6 +73,7 @@ private:
 	void render();
 	void cancelPendingMouseMove();
 	bool mapToRemotePoint(const QPointF &localPoint, QPoint *pRemotePoint) const;
+	bool mapEdgeClampedRemotePoint(const QPointF &localPoint, QPoint *pRemotePoint) const;
 	static int qtMouseButtonToRemoteButton(Qt::MouseButton button);
 	static QString hresultMessage(const QString &strPrefix, HRESULT hr);
 

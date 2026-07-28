@@ -272,7 +272,20 @@ void KVideoRenderWidget::setRemoteScreenSize(int nWidth, int nHeight)
 void KVideoRenderWidget::mouseMoveEvent(QMouseEvent *pEvent)
 {
 	QPoint remotePoint;
-	if (pEvent != nullptr && mapToRemotePoint(pEvent->position(), &remotePoint))
+	bool bMapped = false;
+	if (pEvent != nullptr)
+	{
+		bMapped = mapToRemotePoint(pEvent->position(), &remotePoint);
+		if (!bMapped)
+		{
+			// Fast moves often overshoot the displayed frame rect (letterbox
+			// margins or the widget edge). Clamp to the nearest edge and keep
+			// sending so the remote cursor tracks to the screen edge instead
+			// of freezing at the last in-rect position.
+			bMapped = mapEdgeClampedRemotePoint(pEvent->position(), &remotePoint);
+		}
+	}
+	if (bMapped)
 	{
 		m_pendingMouseMovePoint = remotePoint;
 		m_bHasPendingMouseMove = true;
@@ -340,6 +353,14 @@ void KVideoRenderWidget::wheelEvent(QWheelEvent *pEvent)
 	}
 
 	QWidget::wheelEvent(pEvent);
+}
+
+void KVideoRenderWidget::leaveEvent(QEvent *pEvent)
+{
+	// No further move events arrive once the cursor leaves the widget, so
+	// flush the latest pending position immediately.
+	flushPendingMouseMove();
+	QWidget::leaveEvent(pEvent);
 }
 
 void KVideoRenderWidget::flushPendingMouseMove()
@@ -719,6 +740,17 @@ bool KVideoRenderWidget::mapToRemotePoint(const QPointF &localPoint, QPoint *pRe
 	const int nRemoteY = std::clamp(static_cast<int>(fRelativeY * nTargetHeight), 0, nTargetHeight - 1);
 	*pRemotePoint = QPoint(nRemoteX, nRemoteY);
 	return true;
+}
+
+bool KVideoRenderWidget::mapEdgeClampedRemotePoint(const QPointF &localPoint, QPoint *pRemotePoint) const
+{
+	if (m_frameDisplayRect.isEmpty())
+		return false;
+
+	const QPointF clampedPoint(
+		std::clamp(localPoint.x(), m_frameDisplayRect.left(), m_frameDisplayRect.right()),
+		std::clamp(localPoint.y(), m_frameDisplayRect.top(), m_frameDisplayRect.bottom()));
+	return mapToRemotePoint(clampedPoint, pRemotePoint);
 }
 
 int KVideoRenderWidget::qtMouseButtonToRemoteButton(Qt::MouseButton button)

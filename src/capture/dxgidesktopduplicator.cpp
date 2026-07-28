@@ -253,6 +253,7 @@ bool KDxgiDesktopDuplicator::initialize(QString *pErrorMessage)
 void KDxgiDesktopDuplicator::shutdown()
 {
 	m_spStagingTexture.Reset();
+	m_spLastDesktopTexture.Reset();
 	m_spDuplication.Reset();
 	m_spContext.Reset();
 	m_spDevice.Reset();
@@ -265,6 +266,7 @@ void KDxgiDesktopDuplicator::shutdown()
 	m_pointerShapeInfo = {};
 	m_vecPointerShapeBuffer.clear();
 	m_nPointerUpdateCount = 0;
+	m_nPointerOnlyFrameCount = 0;
 }
 
 bool KDxgiDesktopDuplicator::detectHdrOutput(const Microsoft::WRL::ComPtr<IDXGIOutput> &spOutput,
@@ -413,6 +415,16 @@ KDxgiDesktopDuplicator::CaptureResult KDxgiDesktopDuplicator::captureNextFrame(K
 		return ErrorCaptureResult;
 	}
 
+	// Pointer-only updates carry no desktop image (AccumulatedFrames == 0 and the
+	// desktop resource is NULL on spec-conforming drivers). Recompose the cached
+	// clean desktop with the latest pointer instead of failing, otherwise the
+	// capture loop would die here whenever only the pointer moves.
+	if (frameInfo.AccumulatedFrames == 0 || !spDesktopResource)
+	{
+		m_spDuplication->ReleaseFrame();
+		return capturePointerOnlyFrame(pFrame, pErrorMessage);
+	}
+
 	Microsoft::WRL::ComPtr<ID3D11Texture2D> spDesktopTexture;
 	HRESULT hr = spDesktopResource.As(&spDesktopTexture);
 	if (FAILED(hr))
@@ -425,55 +437,17 @@ KDxgiDesktopDuplicator::CaptureResult KDxgiDesktopDuplicator::captureNextFrame(K
 
 	D3D11_TEXTURE2D_DESC sourceDesc = {};
 	spDesktopTexture->GetDesc(&sourceDesc);
-	if (m_bHdrOutput && sourceDesc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT)
-	{
-		qWarning() << "HDR is enabled, but captured format is not FP16:"
-			<< static_cast<unsigned int>(sourceDesc.Format);
-	}
+	// Keep a clean (pointer-free) GPU copy of the desktop so pointer-only frames
+	// can be recomposed without waiting for the next desktop update. Cache
+	// failure is not fatal: pointer-only frames degrade to timeouts.
+	if (ensureLastDesktopTexture(sourceDesc, pErrorMessage))
+		m_spContext->CopyResource(m_spLastDesktopTexture.Get(), spDesktopTexture.Get());
 
-	if (!createStagingTexture(sourceDesc, pErrorMessage))
-	{
-		m_spDuplication->ReleaseFrame();
-		return ErrorCaptureResult;
-	}
-
-	m_spContext->CopyResource(m_spStagingTexture.Get(), spDesktopTexture.Get());
-
-	D3D11_MAPPED_SUBRESOURCE mappedResource = {};
-	hr = m_spContext->Map(m_spStagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mappedResource);
-	if (FAILED(hr))
-	{
-		m_spDuplication->ReleaseFrame();
-		if (pErrorMessage != nullptr)
-			*pErrorMessage = hresultMessage(QStringLiteral("Map staging texture failed"), hr);
-		return ErrorCaptureResult;
-	}
-
-	const int nWidth = static_cast<int>(sourceDesc.Width);
-	const int nHeight = static_cast<int>(sourceDesc.Height);
-	pFrame->nWidth = nWidth;
-	pFrame->nHeight = nHeight;
-	pFrame->nFrameIndex = ++m_nFrameIndex;
-	pFrame->nTimestampMs = QDateTime::currentMSecsSinceEpoch();
-	if (!CopyMappedFrameToBgra(sourceDesc, mappedResource, pFrame, m_fSdrWhiteScale))
-	{
-		m_spContext->Unmap(m_spStagingTexture.Get(), 0);
-		m_spDuplication->ReleaseFrame();
-		if (pErrorMessage != nullptr)
-		{
-			*pErrorMessage = QStringLiteral("Unsupported desktop texture format: %1")
-				.arg(static_cast<unsigned int>(sourceDesc.Format));
-		}
-		return ErrorCaptureResult;
-	}
-
-	m_spContext->Unmap(m_spStagingTexture.Get(), 0);
-	if (!composePointer(pFrame, pErrorMessage))
-	{
-		m_spDuplication->ReleaseFrame();
-		return ErrorCaptureResult;
-	}
+	const bool bCopied = copyTextureToBgraFrame(spDesktopTexture.Get(), pFrame, pErrorMessage);
 	m_spDuplication->ReleaseFrame();
+	if (!bCopied)
+		return ErrorCaptureResult;
+
 	if (pFrame->nFrameIndex == 1)
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controlled"),
@@ -712,6 +686,119 @@ bool KDxgiDesktopDuplicator::composePointer(KCaptureFrame *pFrame, QString *pErr
 	}
 
 	return true;
+}
+
+KDxgiDesktopDuplicator::CaptureResult KDxgiDesktopDuplicator::capturePointerOnlyFrame(
+	KCaptureFrame *pFrame,
+	QString *pErrorMessage)
+{
+	if (!m_spLastDesktopTexture)
+	{
+		// No clean desktop frame cached yet (can only happen before the first
+		// desktop update); report a timeout so the initial-frame fallback applies.
+		return TimeoutCaptureResult;
+	}
+
+	++m_nPointerOnlyFrameCount;
+	if (m_nPointerOnlyFrameCount == 1 || m_nPointerOnlyFrameCount % 30 == 0)
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controlled"),
+			QStringLiteral("pointer_only_frame"),
+			QStringLiteral("count=%1 pointerX=%2 pointerY=%3")
+				.arg(m_nPointerOnlyFrameCount)
+				.arg(m_pointerPosition.Position.x)
+				.arg(m_pointerPosition.Position.y));
+	}
+
+	return copyTextureToBgraFrame(m_spLastDesktopTexture.Get(), pFrame, pErrorMessage)
+		? CapturedCaptureResult
+		: ErrorCaptureResult;
+}
+
+bool KDxgiDesktopDuplicator::ensureLastDesktopTexture(const D3D11_TEXTURE2D_DESC &sourceDesc,
+	QString *pErrorMessage)
+{
+	if (m_spLastDesktopTexture)
+	{
+		D3D11_TEXTURE2D_DESC cachedDesc = {};
+		m_spLastDesktopTexture->GetDesc(&cachedDesc);
+		if (cachedDesc.Width == sourceDesc.Width
+			&& cachedDesc.Height == sourceDesc.Height
+			&& cachedDesc.Format == sourceDesc.Format)
+		{
+			return true;
+		}
+		m_spLastDesktopTexture.Reset();
+	}
+
+	D3D11_TEXTURE2D_DESC cacheDesc = sourceDesc;
+	cacheDesc.BindFlags = 0;
+	cacheDesc.MiscFlags = 0;
+	cacheDesc.CPUAccessFlags = 0;
+	cacheDesc.Usage = D3D11_USAGE_DEFAULT;
+	cacheDesc.MipLevels = 1;
+	cacheDesc.ArraySize = 1;
+	cacheDesc.SampleDesc.Count = 1;
+	cacheDesc.SampleDesc.Quality = 0;
+
+	const HRESULT hr = m_spDevice->CreateTexture2D(&cacheDesc, nullptr, &m_spLastDesktopTexture);
+	if (FAILED(hr))
+	{
+		m_spLastDesktopTexture.Reset();
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = hresultMessage(QStringLiteral("Create cached desktop texture failed"), hr);
+		return false;
+	}
+
+	return true;
+}
+
+bool KDxgiDesktopDuplicator::copyTextureToBgraFrame(ID3D11Texture2D *pSourceTexture,
+	KCaptureFrame *pFrame,
+	QString *pErrorMessage)
+{
+	if (pSourceTexture == nullptr || pFrame == nullptr)
+		return false;
+
+	D3D11_TEXTURE2D_DESC sourceDesc = {};
+	pSourceTexture->GetDesc(&sourceDesc);
+	if (m_bHdrOutput && sourceDesc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT)
+	{
+		qWarning() << "HDR is enabled, but captured format is not FP16:"
+			<< static_cast<unsigned int>(sourceDesc.Format);
+	}
+
+	if (!createStagingTexture(sourceDesc, pErrorMessage))
+		return false;
+
+	m_spContext->CopyResource(m_spStagingTexture.Get(), pSourceTexture);
+
+	D3D11_MAPPED_SUBRESOURCE mappedResource = {};
+	const HRESULT hr = m_spContext->Map(m_spStagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mappedResource);
+	if (FAILED(hr))
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = hresultMessage(QStringLiteral("Map staging texture failed"), hr);
+		return false;
+	}
+
+	pFrame->nWidth = static_cast<int>(sourceDesc.Width);
+	pFrame->nHeight = static_cast<int>(sourceDesc.Height);
+	pFrame->nFrameIndex = ++m_nFrameIndex;
+	pFrame->nTimestampMs = QDateTime::currentMSecsSinceEpoch();
+	if (!CopyMappedFrameToBgra(sourceDesc, mappedResource, pFrame, m_fSdrWhiteScale))
+	{
+		m_spContext->Unmap(m_spStagingTexture.Get(), 0);
+		if (pErrorMessage != nullptr)
+		{
+			*pErrorMessage = QStringLiteral("Unsupported desktop texture format: %1")
+				.arg(static_cast<unsigned int>(sourceDesc.Format));
+		}
+		return false;
+	}
+
+	m_spContext->Unmap(m_spStagingTexture.Get(), 0);
+	return composePointer(pFrame, pErrorMessage);
 }
 
 bool KDxgiDesktopDuplicator::createStagingTexture(const D3D11_TEXTURE2D_DESC &sourceDesc, QString *pErrorMessage)
