@@ -6,6 +6,7 @@
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QPoint>
 #include <QtCore/QRectF>
+#include <QtCore/QSet>
 #include <QtCore/QTimer>
 #include <QtWidgets/QWidget>
 
@@ -37,11 +38,17 @@ signals:
 	void remoteMouseMoveRequested(int nX, int nY);
 	void remoteMouseButtonRequested(int nX, int nY, int nButton, bool bPressed);
 	void remoteMouseWheelRequested(int nX, int nY, int nDelta);
+	void remoteKeyRequested(int nVirtualKey, bool bPressed, bool bExtended);
 	void inputFeedbackRendered(quint64 nSeq);
 
 protected:
+	bool event(QEvent *pEvent) override;
 	void resizeEvent(QResizeEvent *pEvent) override;
 	void showEvent(QShowEvent *pEvent) override;
+	void hideEvent(QHideEvent *pEvent) override;
+	void focusOutEvent(QFocusEvent *pEvent) override;
+	void keyPressEvent(QKeyEvent *pEvent) override;
+	void keyReleaseEvent(QKeyEvent *pEvent) override;
 	void mouseMoveEvent(QMouseEvent *pEvent) override;
 	void mousePressEvent(QMouseEvent *pEvent) override;
 	void mouseReleaseEvent(QMouseEvent *pEvent) override;
@@ -72,8 +79,11 @@ private:
 	void releaseAll();
 	void render();
 	void cancelPendingMouseMove();
+	void handleRemoteKeyEvent(QKeyEvent *pEvent, bool bPressed);
+	void releaseRemoteKeys();
 	bool mapToRemotePoint(const QPointF &localPoint, QPoint *pRemotePoint) const;
 	bool mapEdgeClampedRemotePoint(const QPointF &localPoint, QPoint *pRemotePoint) const;
+	static bool isExtendedVirtualKey(int nVirtualKey, quint32 nNativeScanCode);
 	static int qtMouseButtonToRemoteButton(Qt::MouseButton button);
 	static QString hresultMessage(const QString &strPrefix, HRESULT hr);
 
@@ -82,6 +92,7 @@ private:
 	QElapsedTimer m_mouseMoveThrottleTimer;
 	QTimer m_mouseMoveFlushTimer;
 	QPoint m_pendingMouseMovePoint;
+	QSet<quint32> m_pressedRemoteKeys;
 	bool m_bHasPendingFrame = false;
 	bool m_bPresentQueued = false;
 	bool m_bInitialized = false;

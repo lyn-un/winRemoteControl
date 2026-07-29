@@ -63,6 +63,7 @@ private:
 	bool initializePeer(KWebRtcPeer::Role role, QString *pErrorMessage);
 	void wirePeer();
 	void handleRemoteFrame(const KDecodedVideoFrame &frame);
+	void handleInputChannelChanged(bool bOpen);
 	void handleSessionChannelChanged(bool bOpen);
 	void handleSessionMessage(const QString &strMessage);
 	void handleInputInjected(quint64 nSeq, qint64 nInjectedMs);

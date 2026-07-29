@@ -117,6 +117,7 @@ void KWebRtcSessionService::disconnectSession()
 	m_nLastInjectedInputSeq = 0;
 	m_nLastInjectedInputMs = -1;
 	emit inputTraceUpdated(0, -1);
+	m_pInputInjector->releaseAllKeys();
 	emit stopCaptureRequested();
 	if (m_pSignaling != nullptr)
 		m_pSignaling->stop();
@@ -165,6 +166,7 @@ void KWebRtcSessionService::startStreaming()
 
 void KWebRtcSessionService::stopStreaming()
 {
+	m_pInputInjector->releaseAllKeys();
 	emit stopCaptureRequested();
 	emit webRtcStateChanged(QStringLiteral("Stopped"));
 }
@@ -228,7 +230,7 @@ void KWebRtcSessionService::wirePeer()
 	connect(m_pInputInjector, &KInputInjector::inputInjected,
 		this, &KWebRtcSessionService::handleInputInjected);
 	connect(m_pPeer, &KWebRtcPeer::inputChannelChanged,
-		this, &KWebRtcSessionService::inputChannelChanged);
+		this, &KWebRtcSessionService::handleInputChannelChanged);
 	connect(m_pPeer, &KWebRtcPeer::sessionMessageReceived,
 		this, &KWebRtcSessionService::handleSessionMessage);
 	connect(m_pPeer, &KWebRtcPeer::sessionChannelChanged,
@@ -247,6 +249,13 @@ void KWebRtcSessionService::handleRemoteFrame(const KDecodedVideoFrame &frame)
 
 	emit remoteFrameReady(frame);
 	emit remoteFrameStatsReady(frame.nWidth, frame.nHeight, frame.nFrameIndex, frame.nTimestampMs);
+}
+
+void KWebRtcSessionService::handleInputChannelChanged(bool bOpen)
+{
+	if (!bOpen)
+		m_pInputInjector->releaseAllKeys();
+	emit inputChannelChanged(bOpen);
 }
 
 void KWebRtcSessionService::handleSessionChannelChanged(bool bOpen)
@@ -321,6 +330,7 @@ void KWebRtcSessionService::handleSessionMessage(const QString &strMessage)
 
 	if (strType == QString::fromLatin1(kStopStreaming) && m_strRole == QStringLiteral("controlled"))
 	{
+		m_pInputInjector->releaseAllKeys();
 		emit stopCaptureRequested();
 		emit webRtcStateChanged(QStringLiteral("Stopped"));
 		return;

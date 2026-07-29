@@ -143,6 +143,8 @@ void KMainWindow::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWindow)
 		m_pSessionViewModel, &KSessionViewModel::sendRemoteMouseButton);
 	connect(pWindow->videoRenderWidget(), &KVideoRenderWidget::remoteMouseWheelRequested,
 		m_pSessionViewModel, &KSessionViewModel::sendRemoteMouseWheel);
+	connect(pWindow->videoRenderWidget(), &KVideoRenderWidget::remoteKeyRequested,
+		m_pSessionViewModel, &KSessionViewModel::sendRemoteKey);
 	connect(pWindow->videoRenderWidget(), &KVideoRenderWidget::inputFeedbackRendered,
 		m_pSessionViewModel, &KSessionViewModel::handleInputFeedbackRendered);
 }

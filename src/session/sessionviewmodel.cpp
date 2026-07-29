@@ -144,6 +144,19 @@ void KSessionViewModel::sendRemoteMouseWheel(int nX, int nY, int nDelta)
 	sendInputJsonMessage(object, true);
 }
 
+void KSessionViewModel::sendRemoteKey(int nVirtualKey, bool bPressed, bool bExtended)
+{
+	if (nVirtualKey <= 0 || nVirtualKey > 0xFF)
+		return;
+
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("key"));
+	object.insert(QStringLiteral("vk"), nVirtualKey);
+	object.insert(QStringLiteral("pressed"), bPressed);
+	object.insert(QStringLiteral("extended"), bExtended);
+	sendInputJsonMessage(object, false);
+}
+
 void KSessionViewModel::sendStreamConfig(const KStreamConfig &config)
 {
 	if (isSameStreamConfig(m_streamConfig, config))

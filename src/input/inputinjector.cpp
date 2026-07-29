@@ -15,6 +15,7 @@ namespace
 	constexpr char kMouseMove[] = "mouseMove";
 	constexpr char kMouseButton[] = "mouseButton";
 	constexpr char kMouseWheel[] = "mouseWheel";
+	constexpr char kKey[] = "key";
 	constexpr char kButton[] = "button";
 	constexpr char kLeft[] = "left";
 	constexpr char kRight[] = "right";
@@ -24,6 +25,9 @@ namespace
 	constexpr char kDelta[] = "delta";
 	constexpr char kSeq[] = "seq";
 	constexpr char kTrace[] = "trace";
+	constexpr char kVirtualKey[] = "vk";
+	constexpr char kExtended[] = "extended";
+	constexpr quint32 kExtendedKeyMask = 0x10000;
 
 	static QString inputTraceExtra(const QJsonObject &object)
 	{
@@ -42,6 +46,7 @@ KInputInjector::KInputInjector(QObject *pParent)
 
 KInputInjector::~KInputInjector()
 {
+	releaseAllKeys();
 }
 
 void KInputInjector::handleInputMessage(const QString &strMessage)
@@ -86,6 +91,29 @@ void KInputInjector::handleInputMessage(const QString &strMessage)
 			object.value(QString::fromLatin1(kDelta)).toInt(),
 			&strError);
 	}
+	else if (strType == QString::fromLatin1(kKey))
+	{
+		const QJsonValue virtualKeyValue = object.value(QString::fromLatin1(kVirtualKey));
+		const QJsonValue pressedValue = object.value(QString::fromLatin1(kPressed));
+		const QJsonValue extendedValue = object.value(QString::fromLatin1(kExtended));
+		const int nVirtualKey = virtualKeyValue.toInt();
+		if (!virtualKeyValue.isDouble()
+			|| !pressedValue.isBool()
+			|| (!extendedValue.isUndefined() && !extendedValue.isBool())
+			|| nVirtualKey <= 0
+			|| nVirtualKey > 0xFF)
+		{
+			bOk = false;
+			strError = QStringLiteral("Invalid remote key message");
+		}
+		else
+		{
+			bOk = sendKey(nVirtualKey,
+				pressedValue.toBool(),
+				extendedValue.toBool(false),
+				&strError);
+		}
+	}
 
 	if (!bOk && !strError.isEmpty())
 		emit inputError(strError);
@@ -103,6 +131,24 @@ void KInputInjector::handleInputMessage(const QString &strMessage)
 				.arg(timer.isValid() ? timer.elapsed() : -1)
 				.arg(bOk ? 1 : 0));
 	}
+}
+
+void KInputInjector::releaseAllKeys()
+{
+	const QSet<quint32> pressedKeys = m_pressedKeys;
+	for (const quint32 nKeyId : pressedKeys)
+	{
+		QString strError;
+		if (!sendKey(static_cast<int>(nKeyId & 0xFF),
+				false,
+				(nKeyId & kExtendedKeyMask) != 0,
+				&strError)
+			&& !strError.isEmpty())
+		{
+			emit inputError(strError);
+		}
+	}
+	m_pressedKeys.clear();
 }
 
 bool KInputInjector::sendMouseMove(int nX, int nY, QString *pErrorMessage)
@@ -183,6 +229,33 @@ bool KInputInjector::sendMouseWheel(int nX, int nY, int nDelta, QString *pErrorM
 		return false;
 	}
 
+	return true;
+}
+
+bool KInputInjector::sendKey(int nVirtualKey,
+	bool bPressed,
+	bool bExtended,
+	QString *pErrorMessage)
+{
+	INPUT input = {};
+	input.type = INPUT_KEYBOARD;
+	input.ki.wVk = static_cast<WORD>(nVirtualKey);
+	input.ki.dwFlags = (bPressed ? 0 : KEYEVENTF_KEYUP)
+		| (bExtended ? KEYEVENTF_EXTENDEDKEY : 0);
+
+	if (SendInput(1, &input, sizeof(INPUT)) != 1)
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = lastWin32ErrorMessage(QStringLiteral("Send keyboard input failed"));
+		return false;
+	}
+
+	const quint32 nKeyId = static_cast<quint32>(nVirtualKey)
+		| (bExtended ? kExtendedKeyMask : 0);
+	if (bPressed)
+		m_pressedKeys.insert(nKeyId);
+	else
+		m_pressedKeys.remove(nKeyId);
 	return true;
 }
 

@@ -43,6 +43,7 @@ public slots:
 	void sendRemoteMouseMove(int nX, int nY);
 	void sendRemoteMouseButton(int nX, int nY, int nButton, bool bPressed);
 	void sendRemoteMouseWheel(int nX, int nY, int nDelta);
+	void sendRemoteKey(int nVirtualKey, bool bPressed, bool bExtended);
 	void sendStreamConfig(const KStreamConfig &config);
 	void handleInputFeedbackRendered(quint64 nSeq);
 

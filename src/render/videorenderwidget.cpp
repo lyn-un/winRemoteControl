@@ -5,6 +5,9 @@
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QMetaObject>
 #include <QtCore/QString>
+#include <QtGui/QFocusEvent>
+#include <QtGui/QHideEvent>
+#include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QPaintEngine>
 #include <QtGui/QWheelEvent>
@@ -22,6 +25,7 @@ namespace
 	constexpr int kRemoteMouseButtonRight = 2;
 	constexpr qint64 kMouseMoveThrottleMs = 16;
 	constexpr quint64 kVideoTraceFrameInterval = 30;
+	constexpr quint32 kExtendedKeyMask = 0x10000;
 
 	const char *kVertexShaderSource =
 		"struct VSInput { float2 position : POSITION; float2 texcoord : TEXCOORD0; };"
@@ -197,6 +201,7 @@ void KVideoRenderWidget::presentFrame(const KDecodedVideoFrame &frame)
 void KVideoRenderWidget::clearFrame()
 {
 	cancelPendingMouseMove();
+	releaseRemoteKeys();
 	{
 		std::lock_guard<std::mutex> guard(m_frameMutex);
 		m_bHasPendingFrame = false;
@@ -211,6 +216,22 @@ void KVideoRenderWidget::clearFrame()
 	m_spContext->OMSetRenderTargets(1, m_spRenderTargetView.GetAddressOf(), nullptr);
 	m_spContext->ClearRenderTargetView(m_spRenderTargetView.Get(), kClearColor);
 	m_spSwapChain->Present(0, 0);
+}
+
+bool KVideoRenderWidget::event(QEvent *pEvent)
+{
+	if (pEvent != nullptr
+		&& (pEvent->type() == QEvent::KeyPress || pEvent->type() == QEvent::KeyRelease))
+	{
+		QKeyEvent *pKeyEvent = static_cast<QKeyEvent *>(pEvent);
+		if (pKeyEvent->key() == Qt::Key_Tab || pKeyEvent->key() == Qt::Key_Backtab)
+		{
+			handleRemoteKeyEvent(pKeyEvent, pEvent->type() == QEvent::KeyPress);
+			return true;
+		}
+	}
+
+	return QWidget::event(pEvent);
 }
 
 void KVideoRenderWidget::resizeEvent(QResizeEvent *pEvent)
@@ -256,6 +277,28 @@ void KVideoRenderWidget::showEvent(QShowEvent *pEvent)
 	QString strError;
 	if (!initializeD3d(&strError))
 		emit renderError(strError);
+}
+
+void KVideoRenderWidget::hideEvent(QHideEvent *pEvent)
+{
+	releaseRemoteKeys();
+	QWidget::hideEvent(pEvent);
+}
+
+void KVideoRenderWidget::focusOutEvent(QFocusEvent *pEvent)
+{
+	releaseRemoteKeys();
+	QWidget::focusOutEvent(pEvent);
+}
+
+void KVideoRenderWidget::keyPressEvent(QKeyEvent *pEvent)
+{
+	handleRemoteKeyEvent(pEvent, true);
+}
+
+void KVideoRenderWidget::keyReleaseEvent(QKeyEvent *pEvent)
+{
+	handleRemoteKeyEvent(pEvent, false);
 }
 
 QPaintEngine *KVideoRenderWidget::paintEngine() const
@@ -379,6 +422,77 @@ void KVideoRenderWidget::cancelPendingMouseMove()
 {
 	m_mouseMoveFlushTimer.stop();
 	m_bHasPendingMouseMove = false;
+}
+
+void KVideoRenderWidget::handleRemoteKeyEvent(QKeyEvent *pEvent, bool bPressed)
+{
+	if (pEvent == nullptr)
+		return;
+
+	const int nVirtualKey = static_cast<int>(pEvent->nativeVirtualKey());
+	if (nVirtualKey <= 0 || nVirtualKey > 0xFF)
+	{
+		if (bPressed)
+			QWidget::keyPressEvent(pEvent);
+		else
+			QWidget::keyReleaseEvent(pEvent);
+		return;
+	}
+
+	const bool bExtended = isExtendedVirtualKey(nVirtualKey, pEvent->nativeScanCode());
+	const quint32 nKeyId = static_cast<quint32>(nVirtualKey)
+		| (bExtended ? kExtendedKeyMask : 0);
+	if (bPressed)
+		m_pressedRemoteKeys.insert(nKeyId);
+	else
+		m_pressedRemoteKeys.remove(nKeyId);
+
+	emit remoteKeyRequested(nVirtualKey, bPressed, bExtended);
+	pEvent->accept();
+}
+
+void KVideoRenderWidget::releaseRemoteKeys()
+{
+	const QSet<quint32> pressedKeys = m_pressedRemoteKeys;
+	m_pressedRemoteKeys.clear();
+	for (const quint32 nKeyId : pressedKeys)
+	{
+		emit remoteKeyRequested(static_cast<int>(nKeyId & 0xFF),
+			false,
+			(nKeyId & kExtendedKeyMask) != 0);
+	}
+}
+
+bool KVideoRenderWidget::isExtendedVirtualKey(int nVirtualKey, quint32 nNativeScanCode)
+{
+	if ((nNativeScanCode & 0x100) != 0)
+		return true;
+
+	switch (nVirtualKey)
+	{
+	case VK_RCONTROL:
+	case VK_RMENU:
+	case VK_CANCEL:
+	case VK_INSERT:
+	case VK_DELETE:
+	case VK_HOME:
+	case VK_END:
+	case VK_PRIOR:
+	case VK_NEXT:
+	case VK_LEFT:
+	case VK_RIGHT:
+	case VK_UP:
+	case VK_DOWN:
+	case VK_NUMLOCK:
+	case VK_SNAPSHOT:
+	case VK_DIVIDE:
+	case VK_LWIN:
+	case VK_RWIN:
+	case VK_APPS:
+		return true;
+	default:
+		return false;
+	}
 }
 
 bool KVideoRenderWidget::initializeD3d(QString *pErrorMessage)
