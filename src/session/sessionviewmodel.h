@@ -73,11 +73,18 @@ private slots:
 		int nScreenHeight);
 
 private:
+	struct KPendingInputTrace
+	{
+		qint64 nSentMs = 0;
+		QString strType;
+		bool bKeyPressed = false;
+	};
+
 	void initConnections();
 	void sendInputJsonMessage(QJsonObject object, bool bTrace);
 	bool shouldTraceMouseMove();
 	void resetInputRoundTripTrace();
-	void recordInputSent(quint64 nSeq);
+	void recordInputSent(quint64 nSeq, const QJsonObject &object);
 	void logInputRoundTripStats();
 
 	KCaptureService *m_pCaptureService = nullptr;
@@ -87,7 +94,7 @@ private:
 	QSize m_remoteScreenSize;
 	QElapsedTimer m_inputMoveTraceTimer;
 	QElapsedTimer m_inputRoundTripTimer;
-	QMap<quint64, qint64> m_inputSentTimesMs;
+	QMap<quint64, KPendingInputTrace> m_inputSentTraces;
 	QVector<qint64> m_inputRoundTripSamples;
 	KStreamConfig m_streamConfig;
 };

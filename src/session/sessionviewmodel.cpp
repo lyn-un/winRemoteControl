@@ -22,6 +22,8 @@ namespace
 	constexpr char kY[] = "y";
 	constexpr char kSeq[] = "seq";
 	constexpr char kTrace[] = "trace";
+	constexpr char kPressed[] = "pressed";
+	constexpr char kKey[] = "key";
 
 	bool isSameStreamConfig(const KStreamConfig &lhs, const KStreamConfig &rhs)
 	{
@@ -256,7 +258,7 @@ void KSessionViewModel::sendInputJsonMessage(QJsonObject object, bool bTrace)
 				.arg(object.value(QString::fromLatin1(kY)).toInt()));
 	}
 
-	recordInputSent(nSeq);
+	recordInputSent(nSeq, object);
 	m_pWebRtcSessionService->sendInputMessage(
 		QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
 }
@@ -266,22 +268,36 @@ void KSessionViewModel::handleInputFeedbackRendered(quint64 nSeq)
 	if (!KLatencyTraceLogger::isEnabled() || !m_inputRoundTripTimer.isValid() || nSeq == 0)
 		return;
 
-	const auto sentTimeIt = m_inputSentTimesMs.constFind(nSeq);
-	const qint64 nSentMs = sentTimeIt != m_inputSentTimesMs.constEnd() ? sentTimeIt.value() : -1;
-	while (!m_inputSentTimesMs.isEmpty() && m_inputSentTimesMs.firstKey() <= nSeq)
-		m_inputSentTimesMs.erase(m_inputSentTimesMs.begin());
+	const auto sentTraceIt = m_inputSentTraces.constFind(nSeq);
+	const bool bFoundSentTrace = sentTraceIt != m_inputSentTraces.constEnd();
+	const KPendingInputTrace sentTrace =
+		bFoundSentTrace ? sentTraceIt.value() : KPendingInputTrace();
+	while (!m_inputSentTraces.isEmpty() && m_inputSentTraces.firstKey() <= nSeq)
+		m_inputSentTraces.erase(m_inputSentTraces.begin());
 
-	if (nSentMs < 0)
+	if (!bFoundSentTrace)
 		return;
 
-	const qint64 nRoundTripMs = m_inputRoundTripTimer.elapsed() - nSentMs;
+	const qint64 nRoundTripMs = m_inputRoundTripTimer.elapsed() - sentTrace.nSentMs;
 	if (nRoundTripMs < 0)
 		return;
 
+	const bool bKeyInput = sentTrace.strType == QString::fromLatin1(kKey);
+	const bool bIncludeInStats = !bKeyInput || sentTrace.bKeyPressed;
+	const QString strPressed = bKeyInput
+		? QStringLiteral(" pressed=%1").arg(sentTrace.bKeyPressed ? 1 : 0)
+		: QString();
 	KLatencyTraceLogger::write(QStringLiteral("controller"),
 		QStringLiteral("input_roundtrip"),
-		QStringLiteral("seq=%1 roundTripMs=%2").arg(nSeq).arg(nRoundTripMs));
+		QStringLiteral("seq=%1 type=%2%3 roundTripMs=%4 includedInStats=%5")
+			.arg(nSeq)
+			.arg(sentTrace.strType)
+			.arg(strPressed)
+			.arg(nRoundTripMs)
+			.arg(bIncludeInStats ? 1 : 0));
 
+	if (!bIncludeInStats)
+		return;
 	if (m_inputRoundTripSamples.size() >= kInputRoundTripWindowSize)
 		m_inputRoundTripSamples.remove(0);
 	m_inputRoundTripSamples.append(nRoundTripMs);
@@ -292,22 +308,27 @@ void KSessionViewModel::handleInputFeedbackRendered(quint64 nSeq)
 
 void KSessionViewModel::resetInputRoundTripTrace()
 {
-	m_inputSentTimesMs.clear();
+	m_inputSentTraces.clear();
 	m_inputRoundTripSamples.clear();
 	m_nInputRoundTripSampleCount = 0;
 	m_inputRoundTripTimer.invalidate();
 }
 
-void KSessionViewModel::recordInputSent(quint64 nSeq)
+void KSessionViewModel::recordInputSent(quint64 nSeq, const QJsonObject &object)
 {
 	if (!KLatencyTraceLogger::isEnabled())
 		return;
 
 	if (!m_inputRoundTripTimer.isValid())
 		m_inputRoundTripTimer.start();
-	while (m_inputSentTimesMs.size() >= kMaxPendingInputTraceCount)
-		m_inputSentTimesMs.erase(m_inputSentTimesMs.begin());
-	m_inputSentTimesMs.insert(nSeq, m_inputRoundTripTimer.elapsed());
+	while (m_inputSentTraces.size() >= kMaxPendingInputTraceCount)
+		m_inputSentTraces.erase(m_inputSentTraces.begin());
+
+	KPendingInputTrace trace;
+	trace.nSentMs = m_inputRoundTripTimer.elapsed();
+	trace.strType = object.value(QString::fromLatin1(kType)).toString();
+	trace.bKeyPressed = object.value(QString::fromLatin1(kPressed)).toBool(false);
+	m_inputSentTraces.insert(nSeq, trace);
 }
 
 void KSessionViewModel::logInputRoundTripStats()
@@ -326,7 +347,7 @@ void KSessionViewModel::logInputRoundTripStats()
 	const qint64 nAverageMs = (nTotalMs + sortedSamples.size() / 2) / sortedSamples.size();
 	KLatencyTraceLogger::write(QStringLiteral("controller"),
 		QStringLiteral("input_roundtrip_stats"),
-		QStringLiteral("samples=%1 totalSamples=%2 avgMs=%3 p50Ms=%4 p95Ms=%5 maxMs=%6")
+		QStringLiteral("scope=exclude_key_release samples=%1 totalSamples=%2 avgMs=%3 p50Ms=%4 p95Ms=%5 maxMs=%6")
 			.arg(sortedSamples.size())
 			.arg(m_nInputRoundTripSampleCount)
 			.arg(nAverageMs)
