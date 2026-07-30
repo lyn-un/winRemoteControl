@@ -101,9 +101,11 @@ namespace
 	constexpr char kInputMouseMove[] = "mouseMove";
 	constexpr char kInputMouseButton[] = "mouseButton";
 	constexpr char kInputMouseWheel[] = "mouseWheel";
+	constexpr char kInputKey[] = "key";
 	constexpr char kInputType[] = "type";
 	constexpr char kInputSeq[] = "seq";
 	constexpr char kInputTrace[] = "trace";
+	constexpr char kInputPressed[] = "pressed";
 	constexpr char kLatencyPing[] = "latencyPing";
 	constexpr char kLatencyPong[] = "latencyPong";
 	constexpr char kLatencyId[] = "id";
@@ -165,9 +167,16 @@ namespace
 		return document.isObject() ? document.object() : QJsonObject();
 	}
 
+	static bool isKeyInputMessage(const QJsonObject &object)
+	{
+		return object.value(QString::fromLatin1(kInputType)).toString()
+			== QString::fromLatin1(kInputKey);
+	}
+
 	static bool shouldTraceInputMessage(const QJsonObject &object)
 	{
-		return object.value(QString::fromLatin1(kInputTrace)).toBool(false);
+		return object.value(QString::fromLatin1(kInputTrace)).toBool(false)
+			|| (KLatencyTraceLogger::isEnabled() && isKeyInputMessage(object));
 	}
 
 	static bool isLatencyMessageType(const QString &strType)
@@ -178,9 +187,15 @@ namespace
 
 	static QString inputTraceExtra(const QJsonObject &object)
 	{
-		return QStringLiteral("seq=%1 type=%2")
+		QString strExtra = QStringLiteral("seq=%1 type=%2")
 			.arg(object.value(QString::fromLatin1(kInputSeq)).toString())
 			.arg(object.value(QString::fromLatin1(kInputType)).toString());
+		if (isKeyInputMessage(object))
+		{
+			strExtra += QStringLiteral(" pressed=%1")
+				.arg(object.value(QString::fromLatin1(kInputPressed)).toBool() ? 1 : 0);
+		}
+		return strExtra;
 	}
 
 	class KWebRtcRawVideoSource : public webrtc::VideoSourceInterface<webrtc::VideoFrame>
@@ -502,12 +517,15 @@ void KWebRtcPeer::sendInputMessage(const QString &strMessage)
 	const QJsonObject object = jsonObjectFromMessage(strMessage);
 	if (shouldTraceInputMessage(object))
 	{
-		KLatencyTraceLogger::write(roleToString(m_role),
-			QStringLiteral("input_send"),
-			QStringLiteral("%1 size=%2 buffered=%3")
+		const QString strExtra = isKeyInputMessage(object)
+			? inputTraceExtra(object)
+			: QStringLiteral("%1 size=%2 buffered=%3")
 				.arg(inputTraceExtra(object))
 				.arg(utf8Message.size())
-				.arg(static_cast<qulonglong>(m_spInputDataChannel->buffered_amount())));
+				.arg(static_cast<qulonglong>(m_spInputDataChannel->buffered_amount()));
+		KLatencyTraceLogger::write(roleToString(m_role),
+			QStringLiteral("input_send"),
+			strExtra);
 	}
 
 	webrtc::DataBuffer buffer(std::string(utf8Message.constData(),
@@ -985,15 +1003,18 @@ void KWebRtcPeer::OnMessage(const webrtc::DataBuffer &buffer)
 		else if (strMessageType == QString::fromLatin1(kLatencyPong))
 			handleLatencyPong(object);
 	}
-	else if (isMouseInputMessage(strMessage))
+	else if (isInputMessage(strMessage))
 	{
 		if (shouldTraceInputMessage(object))
 		{
+			const QString strExtra = isKeyInputMessage(object)
+				? inputTraceExtra(object)
+				: QStringLiteral("%1 size=%2")
+					.arg(inputTraceExtra(object))
+					.arg(static_cast<int>(buffer.data.size()));
 			KLatencyTraceLogger::write(roleToString(m_role),
 				QStringLiteral("input_recv"),
-				QStringLiteral("%1 size=%2")
-					.arg(inputTraceExtra(object))
-					.arg(static_cast<int>(buffer.data.size())));
+				strExtra);
 		}
 
 		emit inputMessageReceived(strMessage);
@@ -1368,7 +1389,7 @@ void KWebRtcPeer::setSessionDataChannel(webrtc::scoped_refptr<webrtc::DataChanne
 	OnStateChange();
 }
 
-bool KWebRtcPeer::isMouseInputMessage(const QString &strMessage)
+bool KWebRtcPeer::isInputMessage(const QString &strMessage)
 {
 	const QJsonDocument document = QJsonDocument::fromJson(strMessage.toUtf8());
 	if (!document.isObject())
@@ -1377,7 +1398,8 @@ bool KWebRtcPeer::isMouseInputMessage(const QString &strMessage)
 	const QString strType = document.object().value(QStringLiteral("type")).toString();
 	return strType == QStringLiteral("mouseMove")
 		|| strType == QStringLiteral("mouseButton")
-		|| strType == QStringLiteral("mouseWheel");
+		|| strType == QStringLiteral("mouseWheel")
+		|| strType == QStringLiteral("key");
 }
 
 void KWebRtcPeer::sendSessionDescription(const webrtc::SessionDescriptionInterface *pDescription)

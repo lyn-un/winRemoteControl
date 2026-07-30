@@ -31,6 +31,15 @@ namespace
 
 	static QString inputTraceExtra(const QJsonObject &object)
 	{
+		if (object.value(QString::fromLatin1(kType)).toString()
+			== QString::fromLatin1(kKey))
+		{
+			return QStringLiteral("seq=%1 type=%2 pressed=%3")
+				.arg(object.value(QString::fromLatin1(kSeq)).toString())
+				.arg(object.value(QString::fromLatin1(kType)).toString())
+				.arg(object.value(QString::fromLatin1(kPressed)).toBool() ? 1 : 0);
+		}
+
 		return QStringLiteral("seq=%1 type=%2 x=%3 y=%4")
 			.arg(object.value(QString::fromLatin1(kSeq)).toString())
 			.arg(object.value(QString::fromLatin1(kType)).toString())
@@ -59,7 +68,8 @@ void KInputInjector::handleInputMessage(const QString &strMessage)
 	const QString strType = object.value(QString::fromLatin1(kType)).toString();
 	const int nX = object.value(QString::fromLatin1(kX)).toInt();
 	const int nY = object.value(QString::fromLatin1(kY)).toInt();
-	const bool bTrace = object.value(QString::fromLatin1(kTrace)).toBool(false);
+	const bool bTrace = object.value(QString::fromLatin1(kTrace)).toBool(false)
+		|| (strType == QString::fromLatin1(kKey) && KLatencyTraceLogger::isEnabled());
 
 	QString strError;
 	bool bOk = true;

@@ -104,7 +104,7 @@ private:
 	bool addRemoteVideoReceiver(QString *pErrorMessage);
 	void setInputDataChannel(webrtc::scoped_refptr<webrtc::DataChannelInterface> spChannel);
 	void setSessionDataChannel(webrtc::scoped_refptr<webrtc::DataChannelInterface> spChannel);
-	static bool isMouseInputMessage(const QString &strMessage);
+	static bool isInputMessage(const QString &strMessage);
 	void handleLocalDescription(webrtc::SessionDescriptionInterface *pDescription);
 	void handleLocalDescriptionFailure(webrtc::RTCError error);
 	void handleRemoteDescriptionSuccess(webrtc::SdpType sdpType);
