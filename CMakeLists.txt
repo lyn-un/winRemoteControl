@@ -101,11 +101,22 @@ target_link_libraries(wrc_windows_adapters PUBLIC
 	user32
 )
 
-add_library(wrc_session_application STATIC
+add_library(wrc_diagnostics STATIC
 	src/common/latencytracelogger.cpp
 	src/common/latencytracelogger.h
 	src/common/sessiontracelogger.cpp
 	src/common/sessiontracelogger.h
+)
+
+target_include_directories(wrc_diagnostics PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_diagnostics PUBLIC
+	Qt6::Core
+)
+
+add_library(wrc_session_application STATIC
 	src/input/inputinjector.cpp
 	src/input/inputinjector.h
 	src/session/sessioncoordinator.cpp
@@ -120,6 +131,7 @@ target_include_directories(wrc_session_application PUBLIC
 target_link_libraries(wrc_session_application PUBLIC
 	wrc_core
 	wrc_protocol
+	wrc_diagnostics
 	Qt6::Core
 )
 
@@ -134,7 +146,7 @@ target_include_directories(wrc_signaling_adapter PUBLIC
 
 target_link_libraries(wrc_signaling_adapter PUBLIC
 	wrc_core
-	wrc_session_application
+	wrc_diagnostics
 	Qt6::Core
 	Qt6::Network
 )
@@ -207,6 +219,7 @@ target_link_libraries(wrc_webrtc_adapter PUBLIC
 	wrc_core
 	wrc_protocol
 	wrc_ffmpeg_adapter
+	wrc_diagnostics
 	Qt6::Core
 	"${WEBRTC_OUT}/obj/webrtc.lib"
 	ws2_32
@@ -252,8 +265,8 @@ target_include_directories(wrc_windows_capture_adapter PRIVATE
 target_link_libraries(wrc_windows_capture_adapter PUBLIC
 	wrc_core
 	wrc_ffmpeg_adapter
-	wrc_session_application
 	wrc_webrtc_adapter
+	wrc_diagnostics
 	Qt6::Core
 	Qt6::Gui
 	d3d11
@@ -289,6 +302,7 @@ target_include_directories(wrc_qt_presentation PUBLIC
 target_link_libraries(wrc_qt_presentation PUBLIC
 	wrc_core
 	wrc_session_application
+	wrc_diagnostics
 	Qt6::Widgets
 	Qt6::Gui
 	d3d11
@@ -322,6 +336,7 @@ target_include_directories(winRemoteControl PRIVATE
 target_link_libraries(winRemoteControl PRIVATE
 	wrc_core
 	wrc_protocol
+	wrc_diagnostics
 	wrc_session_application
 	wrc_signaling_adapter
 	wrc_webrtc_adapter
