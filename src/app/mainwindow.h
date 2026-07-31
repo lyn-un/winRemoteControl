@@ -7,7 +7,6 @@
 
 class KRemoteDesktopWindow;
 class KApplicationComposition;
-class KSessionViewModel;
 class KWebViewWidget;
 
 class KMainWindow : public QMainWindow
@@ -28,11 +27,9 @@ private:
 	void initConnections();
 	void openRemoteDesktopWindow();
 	void closeRemoteDesktopWindow();
-	void wireRemoteDesktopWindow(KRemoteDesktopWindow *pWindow);
 
 	QString m_strFrontendPath;
 	KApplicationComposition *m_pComposition = nullptr;
-	KSessionViewModel *m_pSessionViewModel = nullptr;
 	KWebViewWidget *m_pWebViewWidget = nullptr;
 	KRemoteDesktopWindow *m_pRemoteDesktopWindow = nullptr;
 };

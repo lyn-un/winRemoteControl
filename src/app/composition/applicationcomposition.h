@@ -4,7 +4,9 @@
 #include <QtCore/QObject>
 
 class KCaptureService;
+class KRemoteDesktopWindow;
 class KSessionViewModel;
+class KWebViewWidget;
 class KWebRtcSessionService;
 
 class KApplicationComposition : public QObject
@@ -17,6 +19,11 @@ public:
 	KApplicationComposition &operator=(const KApplicationComposition &) = delete;
 
 	KSessionViewModel *sessionViewModel() const;
+	void wireDashboard(KWebViewWidget *pWebViewWidget);
+	void wireRemoteDesktopWindow(KRemoteDesktopWindow *pWindow);
+	void enterRemoteDesktop();
+	void leaveRemoteDesktop();
+	void disconnectSession();
 	void shutdown();
 
 private:
