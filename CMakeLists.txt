@@ -176,6 +176,8 @@ target_link_libraries(wrc_webrtc_adapter PUBLIC
 
 qt_add_executable(winRemoteControl WIN32
 	src/app/main.cpp
+	src/app/composition/applicationcomposition.cpp
+	src/app/composition/applicationcomposition.h
 	src/app/mainwindow.cpp
 	src/app/mainwindow.h
 	src/app/remotedesktopwindow.cpp

@@ -158,8 +158,6 @@ void KSessionViewModel::handleCaptureStatusChanged(const QString &strStatus)
 	emit statusChanged(strStatus);
 	if (strStatus == QStringLiteral("Stopped") || strStatus == QStringLiteral("Error"))
 		emit clearPreviewRequested();
-	if (strStatus == QStringLiteral("Error"))
-		m_pWebRtcSessionService->handleCaptureFailure();
 }
 
 void KSessionViewModel::handleWebRtcStateChanged(const QString &strState)
@@ -207,19 +205,6 @@ void KSessionViewModel::initConnections()
 		this, &KSessionViewModel::frameReady);
 	connect(m_pCaptureService, &KCaptureService::decodedFrameReady,
 		this, &KSessionViewModel::renderFrameReady);
-	connect(m_pCaptureService, &KCaptureService::webRtcFrameReady,
-		m_pWebRtcSessionService, &KWebRtcSessionService::pushVideoFrame);
-
-	connect(m_pWebRtcSessionService, &KWebRtcSessionService::startCaptureRequested,
-		m_pCaptureService, &KCaptureService::startWebRtcCapture);
-	connect(m_pWebRtcSessionService, &KWebRtcSessionService::stopCaptureRequested,
-		m_pCaptureService, &KCaptureService::stopCapture);
-	connect(m_pWebRtcSessionService, &KWebRtcSessionService::streamConfigChanged,
-		m_pCaptureService, &KCaptureService::setStreamConfig);
-	connect(m_pWebRtcSessionService, &KWebRtcSessionService::inputTraceUpdated,
-		m_pCaptureService, &KCaptureService::setInputTraceState);
-	connect(m_pWebRtcSessionService, &KWebRtcSessionService::inputFeedbackFrameRequested,
-		m_pCaptureService, &KCaptureService::requestImmediateFrame);
 	connect(m_pWebRtcSessionService, &KWebRtcSessionService::signalingChanged,
 		this, &KSessionViewModel::signalingChanged);
 	connect(m_pWebRtcSessionService, &KWebRtcSessionService::webRtcStateChanged,

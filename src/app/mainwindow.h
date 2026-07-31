@@ -6,10 +6,9 @@
 #include <QtWidgets/QMainWindow>
 
 class KRemoteDesktopWindow;
-class KCaptureService;
+class KApplicationComposition;
 class KSessionViewModel;
 class KWebViewWidget;
-class KWebRtcSessionService;
 
 class KMainWindow : public QMainWindow
 {
@@ -32,8 +31,7 @@ private:
 	void wireRemoteDesktopWindow(KRemoteDesktopWindow *pWindow);
 
 	QString m_strFrontendPath;
-	KCaptureService *m_pCaptureService = nullptr;
-	KWebRtcSessionService *m_pWebRtcSessionService = nullptr;
+	KApplicationComposition *m_pComposition = nullptr;
 	KSessionViewModel *m_pSessionViewModel = nullptr;
 	KWebViewWidget *m_pWebViewWidget = nullptr;
 	KRemoteDesktopWindow *m_pRemoteDesktopWindow = nullptr;
