@@ -2,6 +2,7 @@
 #define _WINREMOTECONTROL_CAPTURESERVICE_H_
 
 #include "core/media/decodedvideoframe.h"
+#include "core/media/capturecontroller.h"
 #include "capture/captureworker.h"
 #include "core/media/streamconfig.h"
 #include "core/media/videoframe.h"
@@ -13,7 +14,7 @@
 
 class QThread;
 
-class KCaptureService : public QObject
+class KCaptureService : public KCaptureController
 {
 	Q_OBJECT
 
@@ -25,19 +26,15 @@ public:
 	KCaptureService &operator=(const KCaptureService &) = delete;
 
 public slots:
-	void startCapture();
+	void startCapture() override;
 	void startWebRtcCapture();
-	void stopCapture();
+	void stopCapture() override;
 	void setStreamConfig(const KStreamConfig &config);
 	void setInputTraceState(quint64 nSeq, qint64 nInjectedMs);
 	void requestImmediateFrame();
 
 signals:
-	void statusChanged(const QString &strStatus);
-	void captureError(const QString &strMessage);
-	void decodedFrameReady(const KDecodedVideoFrame &frame);
 	void webRtcFrameReady(const KVideoFrame &frame);
-	void frameReady(int nWidth, int nHeight, quint64 nFrameIndex, qint64 nTimestampMs);
 
 private:
 	void startCaptureWithMode(KCaptureWorker::WorkMode mode);

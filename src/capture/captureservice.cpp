@@ -12,7 +12,7 @@ namespace
 }
 
 KCaptureService::KCaptureService(QObject *pParent)
-	: QObject(pParent)
+	: KCaptureController(pParent)
 {
 }
 

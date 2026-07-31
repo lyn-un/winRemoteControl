@@ -11,7 +11,7 @@
 #include <QtCore/QSize>
 #include <QtCore/QString>
 
-class KCaptureService;
+class KCaptureController;
 class KSessionController;
 
 class KSessionViewModel : public QObject
@@ -19,7 +19,7 @@ class KSessionViewModel : public QObject
 	Q_OBJECT
 
 public:
-	explicit KSessionViewModel(KCaptureService *pCaptureService,
+	explicit KSessionViewModel(KCaptureController *pCaptureController,
 		KSessionController *pSessionController,
 		QObject *pParent = nullptr);
 	~KSessionViewModel() override;
@@ -76,7 +76,7 @@ private:
 	void initConnections();
 	void sendInputMessage(KInputMessage message, bool bTrace);
 
-	KCaptureService *m_pCaptureService = nullptr;
+	KCaptureController *m_pCaptureController = nullptr;
 	KSessionController *m_pSessionController = nullptr;
 	quint64 m_nInputSequence = 0;
 	QSize m_remoteScreenSize;

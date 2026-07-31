@@ -1,7 +1,7 @@
 #include "session/sessionviewmodel.h"
 
-#include "capture/captureservice.h"
 #include "common/latencytracelogger.h"
+#include "core/media/capturecontroller.h"
 #include "session/sessioncontroller.h"
 
 namespace
@@ -17,14 +17,14 @@ namespace
 	}
 }
 
-KSessionViewModel::KSessionViewModel(KCaptureService *pCaptureService,
+KSessionViewModel::KSessionViewModel(KCaptureController *pCaptureController,
 	KSessionController *pSessionController,
 	QObject *pParent)
 	: QObject(pParent)
-	, m_pCaptureService(pCaptureService)
+	, m_pCaptureController(pCaptureController)
 	, m_pSessionController(pSessionController)
 {
-	Q_ASSERT(m_pCaptureService != nullptr);
+	Q_ASSERT(m_pCaptureController != nullptr);
 	Q_ASSERT(m_pSessionController != nullptr);
 	initConnections();
 }
@@ -40,12 +40,12 @@ QSize KSessionViewModel::remoteScreenSize() const
 
 void KSessionViewModel::startLocalPreview()
 {
-	m_pCaptureService->startCapture();
+	m_pCaptureController->startCapture();
 }
 
 void KSessionViewModel::stopCapture()
 {
-	m_pCaptureService->stopCapture();
+	m_pCaptureController->stopCapture();
 }
 
 void KSessionViewModel::setRole(const QString &strRole)
@@ -197,13 +197,13 @@ void KSessionViewModel::handleRemoteDeviceInfoChanged(const QString &strComputer
 
 void KSessionViewModel::initConnections()
 {
-	connect(m_pCaptureService, &KCaptureService::statusChanged,
+	connect(m_pCaptureController, &KCaptureController::statusChanged,
 		this, &KSessionViewModel::handleCaptureStatusChanged);
-	connect(m_pCaptureService, &KCaptureService::captureError,
+	connect(m_pCaptureController, &KCaptureController::captureError,
 		this, &KSessionViewModel::errorOccurred);
-	connect(m_pCaptureService, &KCaptureService::frameReady,
+	connect(m_pCaptureController, &KCaptureController::frameReady,
 		this, &KSessionViewModel::frameReady);
-	connect(m_pCaptureService, &KCaptureService::decodedFrameReady,
+	connect(m_pCaptureController, &KCaptureController::decodedFrameReady,
 		this, &KSessionViewModel::renderFrameReady);
 	connect(m_pSessionController, &KSessionController::signalingChanged,
 		this, &KSessionViewModel::signalingChanged);

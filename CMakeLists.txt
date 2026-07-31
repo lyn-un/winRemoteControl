@@ -56,6 +56,7 @@ target_link_libraries(wrc_protocol PUBLIC
 
 add_library(wrc_core STATIC
 	src/core/input/inputinjectorinterface.h
+	src/core/media/capturecontroller.h
 	src/core/session/deviceinfoprovider.h
 	src/core/session/sessionstatemachine.cpp
 	src/core/session/sessionstatemachine.h
