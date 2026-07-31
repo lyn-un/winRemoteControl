@@ -2,7 +2,7 @@
 
 #include "capture/captureservice.h"
 #include "common/latencytracelogger.h"
-#include "transport/webrtc/webrtcsessionservice.h"
+#include "session/sessioncontroller.h"
 
 namespace
 {
@@ -18,14 +18,14 @@ namespace
 }
 
 KSessionViewModel::KSessionViewModel(KCaptureService *pCaptureService,
-	KWebRtcSessionService *pWebRtcSessionService,
+	KSessionController *pSessionController,
 	QObject *pParent)
 	: QObject(pParent)
 	, m_pCaptureService(pCaptureService)
-	, m_pWebRtcSessionService(pWebRtcSessionService)
+	, m_pSessionController(pSessionController)
 {
 	Q_ASSERT(m_pCaptureService != nullptr);
-	Q_ASSERT(m_pWebRtcSessionService != nullptr);
+	Q_ASSERT(m_pSessionController != nullptr);
 	initConnections();
 }
 
@@ -50,47 +50,47 @@ void KSessionViewModel::stopCapture()
 
 void KSessionViewModel::setRole(const QString &strRole)
 {
-	m_pWebRtcSessionService->setRole(strRole);
+	m_pSessionController->setRole(strRole);
 }
 
 void KSessionViewModel::startSignalingServer(quint16 nPort)
 {
-	m_pWebRtcSessionService->startSignalingServer(nPort);
+	m_pSessionController->startSignalingServer(nPort);
 }
 
 void KSessionViewModel::connectSignaling(const QString &strHost, quint16 nPort)
 {
-	m_pWebRtcSessionService->connectSignaling(strHost, nPort);
+	m_pSessionController->connectSignaling(strHost, nPort);
 }
 
 void KSessionViewModel::disconnectSession()
 {
 	m_remoteScreenSize = QSize();
 	m_inputFeedbackTracker.reset();
-	m_pWebRtcSessionService->disconnectSession();
+	m_pSessionController->disconnectSession();
 	emit clearPreviewRequested();
 }
 
 void KSessionViewModel::enterRemoteDesktop()
 {
-	m_pWebRtcSessionService->enterRemoteDesktop(m_streamConfig);
+	m_pSessionController->enterRemoteDesktop(m_streamConfig);
 }
 
 void KSessionViewModel::leaveRemoteDesktop()
 {
 	m_inputFeedbackTracker.reset();
-	m_pWebRtcSessionService->leaveRemoteDesktop();
+	m_pSessionController->leaveRemoteDesktop();
 	emit clearPreviewRequested();
 }
 
 void KSessionViewModel::startStreaming()
 {
-	m_pWebRtcSessionService->startStreaming();
+	m_pSessionController->startStreaming();
 }
 
 void KSessionViewModel::stopStreaming()
 {
-	m_pWebRtcSessionService->stopStreaming();
+	m_pSessionController->stopStreaming();
 }
 
 void KSessionViewModel::sendRemoteMouseMove(int nX, int nY)
@@ -150,7 +150,7 @@ void KSessionViewModel::sendStreamConfig(const KStreamConfig &config)
 		return;
 
 	m_streamConfig = config;
-	m_pWebRtcSessionService->sendStreamConfig(config);
+	m_pSessionController->sendStreamConfig(config);
 }
 
 void KSessionViewModel::handleCaptureStatusChanged(const QString &strStatus)
@@ -205,27 +205,27 @@ void KSessionViewModel::initConnections()
 		this, &KSessionViewModel::frameReady);
 	connect(m_pCaptureService, &KCaptureService::decodedFrameReady,
 		this, &KSessionViewModel::renderFrameReady);
-	connect(m_pWebRtcSessionService, &KWebRtcSessionService::signalingChanged,
+	connect(m_pSessionController, &KSessionController::signalingChanged,
 		this, &KSessionViewModel::signalingChanged);
-	connect(m_pWebRtcSessionService, &KWebRtcSessionService::webRtcStateChanged,
+	connect(m_pSessionController, &KSessionController::webRtcStateChanged,
 		this, &KSessionViewModel::handleWebRtcStateChanged);
-	connect(m_pWebRtcSessionService, &KWebRtcSessionService::sessionChannelChanged,
+	connect(m_pSessionController, &KSessionController::sessionChannelChanged,
 		this, &KSessionViewModel::sessionChannelChanged);
-	connect(m_pWebRtcSessionService, &KWebRtcSessionService::remoteDeviceInfoChanged,
+	connect(m_pSessionController, &KSessionController::remoteDeviceInfoChanged,
 		this, &KSessionViewModel::handleRemoteDeviceInfoChanged);
-	connect(m_pWebRtcSessionService, &KWebRtcSessionService::sessionError,
+	connect(m_pSessionController, &KSessionController::sessionError,
 		this, &KSessionViewModel::errorOccurred);
-	connect(m_pWebRtcSessionService, &KWebRtcSessionService::remoteFrameReady,
+	connect(m_pSessionController, &KSessionController::remoteFrameReady,
 		this, &KSessionViewModel::renderFrameReady);
-	connect(m_pWebRtcSessionService, &KWebRtcSessionService::remoteFrameStatsReady,
+	connect(m_pSessionController, &KSessionController::remoteFrameStatsReady,
 		this, &KSessionViewModel::frameReady);
-	connect(m_pWebRtcSessionService, &KWebRtcSessionService::networkStatsReady,
+	connect(m_pSessionController, &KSessionController::networkStatsReady,
 		this, &KSessionViewModel::networkStatsReady);
 }
 
 void KSessionViewModel::sendInputMessage(KInputMessage message, bool bTrace)
 {
-	if (m_pWebRtcSessionService == nullptr)
+	if (m_pSessionController == nullptr)
 		return;
 
 	message.nSequence = ++m_nInputSequence;
@@ -243,7 +243,7 @@ void KSessionViewModel::sendInputMessage(KInputMessage message, bool bTrace)
 	}
 
 	m_inputFeedbackTracker.recordInputSent(message);
-	m_pWebRtcSessionService->sendInputMessage(message);
+	m_pSessionController->sendInputMessage(message);
 }
 
 void KSessionViewModel::handleInputFeedbackRendered(quint64 nSeq)

@@ -106,6 +106,7 @@ add_library(wrc_session_application STATIC
 	src/common/sessiontracelogger.h
 	src/input/inputinjector.cpp
 	src/input/inputinjector.h
+	src/session/sessioncontroller.h
 	src/transport/webrtc/webrtcsessionservice.cpp
 	src/transport/webrtc/webrtcsessionservice.h
 	src/transport/webrtc/webrtcsignaling.cpp

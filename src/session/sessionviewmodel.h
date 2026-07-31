@@ -12,7 +12,7 @@
 #include <QtCore/QString>
 
 class KCaptureService;
-class KWebRtcSessionService;
+class KSessionController;
 
 class KSessionViewModel : public QObject
 {
@@ -20,7 +20,7 @@ class KSessionViewModel : public QObject
 
 public:
 	explicit KSessionViewModel(KCaptureService *pCaptureService,
-		KWebRtcSessionService *pWebRtcSessionService,
+		KSessionController *pSessionController,
 		QObject *pParent = nullptr);
 	~KSessionViewModel() override;
 
@@ -77,7 +77,7 @@ private:
 	void sendInputMessage(KInputMessage message, bool bTrace);
 
 	KCaptureService *m_pCaptureService = nullptr;
-	KWebRtcSessionService *m_pWebRtcSessionService = nullptr;
+	KSessionController *m_pSessionController = nullptr;
 	quint64 m_nInputSequence = 0;
 	QSize m_remoteScreenSize;
 	KInputFeedbackTracker m_inputFeedbackTracker;

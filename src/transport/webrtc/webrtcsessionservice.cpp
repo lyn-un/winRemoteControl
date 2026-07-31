@@ -42,7 +42,7 @@ KWebRtcSessionService::KWebRtcSessionService(
 	std::unique_ptr<IKInputInjector> spInputInjector,
 	std::unique_ptr<KRemotePeerTransport> spRemotePeerTransport,
 	QObject *pParent)
-	: QObject(pParent)
+	: KSessionController(pParent)
 	, m_spDeviceInfoProvider(std::move(spDeviceInfoProvider))
 	, m_spRemotePeerTransport(std::move(spRemotePeerTransport))
 	, m_pSignaling(new KWebRtcSignaling(this))

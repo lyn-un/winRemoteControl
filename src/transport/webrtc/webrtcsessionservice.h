@@ -9,6 +9,7 @@
 #include "core/protocol/sessionmessage.h"
 #include "core/session/sessionstatemachine.h"
 #include "core/transport/remotepeertransport.h"
+#include "session/sessioncontroller.h"
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
@@ -21,7 +22,7 @@ class KWebRtcSignaling;
 class KInputInjector;
 class QTimer;
 
-class KWebRtcSessionService : public QObject
+class KWebRtcSessionService : public KSessionController
 {
 	Q_OBJECT
 
@@ -36,38 +37,18 @@ public:
 	KWebRtcSessionService &operator=(const KWebRtcSessionService &) = delete;
 
 public slots:
-	void setRole(const QString &strRole);
-	void startSignalingServer(quint16 nPort);
-	void connectSignaling(const QString &strHost, quint16 nPort);
-	void disconnectSession();
-	void enterRemoteDesktop(const KStreamConfig &config);
-	void leaveRemoteDesktop();
-	void startStreaming();
-	void stopStreaming();
-	void pushVideoFrame(const KVideoFrame &frame);
-	void sendInputMessage(const KInputMessage &message);
-	void sendStreamConfig(const KStreamConfig &config);
-	void handleCaptureFailure();
-
-signals:
-	void signalingChanged(const QString &strState);
-	void webRtcStateChanged(const QString &strState);
-	void sessionError(const QString &strMessage);
-	void remoteDeviceInfoChanged(const QString &strComputerName,
-		const QString &strWallpaperMime,
-		const QString &strWallpaperData,
-		int nScreenWidth,
-		int nScreenHeight);
-	void remoteFrameReady(const KDecodedVideoFrame &frame);
-	void remoteFrameStatsReady(int nWidth, int nHeight, quint64 nFrameIndex, qint64 nTimestampMs);
-	void networkStatsReady(const KNetworkStats &stats);
-	void startCaptureRequested();
-	void stopCaptureRequested();
-	void streamConfigChanged(const KStreamConfig &config);
-	void inputChannelChanged(bool bOpen);
-	void sessionChannelChanged(bool bOpen);
-	void inputTraceUpdated(quint64 nSeq, qint64 nInjectedMs);
-	void inputFeedbackFrameRequested();
+	void setRole(const QString &strRole) override;
+	void startSignalingServer(quint16 nPort) override;
+	void connectSignaling(const QString &strHost, quint16 nPort) override;
+	void disconnectSession() override;
+	void enterRemoteDesktop(const KStreamConfig &config) override;
+	void leaveRemoteDesktop() override;
+	void startStreaming() override;
+	void stopStreaming() override;
+	void pushVideoFrame(const KVideoFrame &frame) override;
+	void sendInputMessage(const KInputMessage &message) override;
+	void sendStreamConfig(const KStreamConfig &config) override;
+	void handleCaptureFailure() override;
 
 private:
 	bool initializePeer(KSessionRole role, QString *pErrorMessage);
