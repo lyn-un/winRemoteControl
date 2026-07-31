@@ -13,6 +13,10 @@
 #include <QtCore/QObject>
 #include <QtCore/QString>
 
+#include <memory>
+
+class IKDeviceInfoProvider;
+class IKInputInjector;
 class KWebRtcSignaling;
 class KInputInjector;
 class QTimer;
@@ -22,7 +26,9 @@ class KWebRtcSessionService : public QObject
 	Q_OBJECT
 
 public:
-	explicit KWebRtcSessionService(QObject *pParent = nullptr);
+	explicit KWebRtcSessionService(std::unique_ptr<IKDeviceInfoProvider> spDeviceInfoProvider,
+		std::unique_ptr<IKInputInjector> spInputInjector,
+		QObject *pParent = nullptr);
 	~KWebRtcSessionService() override;
 
 	KWebRtcSessionService(const KWebRtcSessionService &) = delete;
@@ -87,7 +93,6 @@ private:
 	void handlePeerConnectionTerminated(const QString &strReason);
 	void handleDisconnectGraceTimeout();
 	void sendDeviceInfoMessage();
-	static QString readWallpaperBase64(QString *pMimeType);
 
 	KSessionStateMachine m_sessionStateMachine;
 	bool m_bDeviceInfoRequested = false;
@@ -96,6 +101,7 @@ private:
 	quint64 m_nLastInjectedInputSeq = 0;
 	quint64 m_nDisconnectGraceGeneration = 0;
 	qint64 m_nLastInjectedInputMs = -1;
+	std::unique_ptr<IKDeviceInfoProvider> m_spDeviceInfoProvider;
 	KWebRtcSignaling *m_pSignaling = nullptr;
 	KWebRtcPeer *m_pPeer = nullptr;
 	KInputInjector *m_pInputInjector = nullptr;

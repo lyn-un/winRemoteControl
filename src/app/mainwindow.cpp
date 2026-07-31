@@ -1,17 +1,31 @@
 #include "app/mainwindow.h"
 
+#include "adapters/windows/device/windowsdeviceinfoprovider.h"
+#include "adapters/windows/input/windowsinputinjector.h"
 #include "app/remotedesktopwindow.h"
+#include "capture/captureservice.h"
 #include "render/videorenderwidget.h"
 #include "session/sessionviewmodel.h"
+#include "transport/webrtc/webrtcsessionservice.h"
 #include "ui_bridge/webviewwidget.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
 #include <QtGui/QCloseEvent>
 
+#include <memory>
+
 KMainWindow::KMainWindow(QWidget *pParent)
 	: QMainWindow(pParent)
-	, m_pSessionViewModel(new KSessionViewModel(this))
+	, m_pCaptureService(new KCaptureService(this))
+	, m_pWebRtcSessionService(new KWebRtcSessionService(
+		std::make_unique<KWindowsDeviceInfoProvider>(),
+		std::make_unique<KWindowsInputInjector>(),
+		this))
+	, m_pSessionViewModel(new KSessionViewModel(
+		m_pCaptureService,
+		m_pWebRtcSessionService,
+		this))
 	, m_pWebViewWidget(new KWebViewWidget(this))
 {
 	setWindowTitle(QStringLiteral("winRemoteControl Preview"));
@@ -26,6 +40,8 @@ KMainWindow::KMainWindow(QWidget *pParent)
 
 KMainWindow::~KMainWindow()
 {
+	m_pSessionViewModel->disconnectSession();
+	m_pCaptureService->stopCapture();
 }
 
 void KMainWindow::closeEvent(QCloseEvent *pEvent)

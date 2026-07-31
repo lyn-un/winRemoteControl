@@ -23,18 +23,20 @@ namespace
 	}
 }
 
-KSessionViewModel::KSessionViewModel(QObject *pParent)
+KSessionViewModel::KSessionViewModel(KCaptureService *pCaptureService,
+	KWebRtcSessionService *pWebRtcSessionService,
+	QObject *pParent)
 	: QObject(pParent)
-	, m_pCaptureService(new KCaptureService(this))
-	, m_pWebRtcSessionService(new KWebRtcSessionService(this))
+	, m_pCaptureService(pCaptureService)
+	, m_pWebRtcSessionService(pWebRtcSessionService)
 {
+	Q_ASSERT(m_pCaptureService != nullptr);
+	Q_ASSERT(m_pWebRtcSessionService != nullptr);
 	initConnections();
 }
 
 KSessionViewModel::~KSessionViewModel()
 {
-	disconnectSession();
-	m_pCaptureService->stopCapture();
 }
 
 QSize KSessionViewModel::remoteScreenSize() const

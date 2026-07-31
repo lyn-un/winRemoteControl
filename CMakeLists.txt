@@ -37,6 +37,8 @@ target_link_libraries(wrc_protocol PUBLIC
 )
 
 add_library(wrc_core STATIC
+	src/core/input/inputinjectorinterface.h
+	src/core/session/deviceinfoprovider.h
 	src/core/session/sessionstatemachine.cpp
 	src/core/session/sessionstatemachine.h
 )
@@ -46,7 +48,33 @@ target_include_directories(wrc_core PUBLIC
 )
 
 target_link_libraries(wrc_core PUBLIC
+	wrc_protocol
 	Qt6::Core
+)
+
+add_library(wrc_windows_adapters STATIC
+	src/adapters/windows/device/windowsdeviceinfoprovider.cpp
+	src/adapters/windows/device/windowsdeviceinfoprovider.h
+	src/adapters/windows/input/windowsinputinjector.cpp
+	src/adapters/windows/input/windowsinputinjector.h
+)
+
+target_compile_definitions(wrc_windows_adapters PRIVATE
+	UNICODE
+	_UNICODE
+	WIN32_LEAN_AND_MEAN
+	NOMINMAX
+)
+
+target_include_directories(wrc_windows_adapters PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_windows_adapters PUBLIC
+	wrc_core
+	Qt6::Core
+	Qt6::Gui
+	user32
 )
 
 qt_add_executable(winRemoteControl WIN32
@@ -123,6 +151,7 @@ target_link_directories(winRemoteControl PRIVATE
 target_link_libraries(winRemoteControl PRIVATE
 	wrc_core
 	wrc_protocol
+	wrc_windows_adapters
 	Qt6::Widgets
 	Qt6::Gui
 	Qt6::Network

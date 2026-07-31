@@ -2,24 +2,17 @@
 
 #include "common/latencytracelogger.h"
 #include "common/sessiontracelogger.h"
+#include "core/input/inputinjectorinterface.h"
+#include "core/session/deviceinfoprovider.h"
 #include "input/inputinjector.h"
 #include "transport/webrtc/webrtcsignaling.h"
 
-#include <QtCore/QBuffer>
-#include <QtCore/QSysInfo>
 #include <QtCore/QTimer>
-#include <QtGui/QImage>
-#include <QtGui/QImageReader>
 
-#include <Windows.h>
+#include <utility>
 
 namespace
 {
-	constexpr int kWallpaperInitialMaxEdge = 640;
-	constexpr int kWallpaperMinEdge = 240;
-	constexpr int kWallpaperJpegQuality = 65;
-	constexpr int kWallpaperMaxBase64Bytes = 96 * 1024;
-	constexpr int kWallpaperPathBufferLength = MAX_PATH;
 	constexpr int kDisconnectGraceMs = 5000;
 
 	static QString roleToString(KSessionRole role)
@@ -44,10 +37,14 @@ namespace
 	}
 }
 
-KWebRtcSessionService::KWebRtcSessionService(QObject *pParent)
+KWebRtcSessionService::KWebRtcSessionService(
+	std::unique_ptr<IKDeviceInfoProvider> spDeviceInfoProvider,
+	std::unique_ptr<IKInputInjector> spInputInjector,
+	QObject *pParent)
 	: QObject(pParent)
+	, m_spDeviceInfoProvider(std::move(spDeviceInfoProvider))
 	, m_pSignaling(new KWebRtcSignaling(this))
-	, m_pInputInjector(new KInputInjector(this))
+	, m_pInputInjector(new KInputInjector(std::move(spInputInjector), this))
 	, m_pDisconnectGraceTimer(new QTimer(this))
 {
 	m_pDisconnectGraceTimer->setSingleShot(true);
@@ -685,82 +682,18 @@ void KWebRtcSessionService::handleDisconnectGraceTimeout()
 
 void KWebRtcSessionService::sendDeviceInfoMessage()
 {
-	QString strMimeType;
-	const QString strWallpaperData = readWallpaperBase64(&strMimeType);
 	KSessionMessage message;
 	message.type = DeviceInfoSessionMessageType;
-	message.deviceInfo.strComputerName = QSysInfo::machineHostName();
-	message.deviceInfo.nScreenWidth = ::GetSystemMetrics(SM_CXSCREEN);
-	message.deviceInfo.nScreenHeight = ::GetSystemMetrics(SM_CYSCREEN);
-	message.deviceInfo.strWallpaperMime = strMimeType;
-	message.deviceInfo.strWallpaperData = strWallpaperData;
+	if (m_spDeviceInfoProvider != nullptr)
+		message.deviceInfo = m_spDeviceInfoProvider->deviceInfo();
 	const QString strMessage = KSessionMessageCodec::encode(message);
 	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 		QStringLiteral("prepare"),
 		KSessionMessageCodec::typeName(DeviceInfoSessionMessageType),
 		strMessage.toUtf8().size(),
 		QStringLiteral("wallpaper=%1 wallpaperBytes=%2 messageBytes=%3")
-			.arg(strWallpaperData.isEmpty() ? 0 : 1)
-			.arg(strWallpaperData.size())
+			.arg(message.deviceInfo.strWallpaperData.isEmpty() ? 0 : 1)
+			.arg(message.deviceInfo.strWallpaperData.size())
 			.arg(strMessage.toUtf8().size()));
 	sendSessionMessage(message);
-}
-
-QString KWebRtcSessionService::readWallpaperBase64(QString *pMimeType)
-{
-	wchar_t szWallpaperPath[kWallpaperPathBufferLength] = {};
-	if (!SystemParametersInfoW(SPI_GETDESKWALLPAPER,
-			kWallpaperPathBufferLength,
-			szWallpaperPath,
-			0))
-	{
-		return QString();
-	}
-
-	const QString strWallpaperPath = QString::fromWCharArray(szWallpaperPath);
-	if (strWallpaperPath.isEmpty())
-		return QString();
-
-	QImageReader imageReader(strWallpaperPath);
-	QImage image = imageReader.read();
-	if (image.isNull())
-		return QString();
-
-	const int nMaxEdge = qMax(image.width(), image.height());
-	if (nMaxEdge > kWallpaperInitialMaxEdge)
-	{
-		image = image.scaled(kWallpaperInitialMaxEdge,
-			kWallpaperInitialMaxEdge,
-			Qt::KeepAspectRatio,
-			Qt::SmoothTransformation);
-	}
-
-	QByteArray base64Data;
-	for (;;)
-	{
-		QByteArray imageData;
-		QBuffer buffer(&imageData);
-		if (!buffer.open(QIODevice::WriteOnly))
-			return QString();
-		if (!image.save(&buffer, "JPG", kWallpaperJpegQuality))
-			return QString();
-
-		base64Data = imageData.toBase64();
-		if (base64Data.size() <= kWallpaperMaxBase64Bytes)
-			break;
-
-		const int nCurrentMaxEdge = qMax(image.width(), image.height());
-		if (nCurrentMaxEdge <= kWallpaperMinEdge)
-			return QString();
-
-		const int nNextMaxEdge = qMax(kWallpaperMinEdge, nCurrentMaxEdge * 3 / 4);
-		image = image.scaled(nNextMaxEdge,
-			nNextMaxEdge,
-			Qt::KeepAspectRatio,
-			Qt::SmoothTransformation);
-	}
-
-	if (pMimeType != nullptr)
-		*pMimeType = QStringLiteral("image/jpeg");
-	return QString::fromLatin1(base64Data);
 }

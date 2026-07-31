@@ -21,7 +21,9 @@ class KSessionViewModel : public QObject
 	Q_OBJECT
 
 public:
-	explicit KSessionViewModel(QObject *pParent = nullptr);
+	explicit KSessionViewModel(KCaptureService *pCaptureService,
+		KWebRtcSessionService *pWebRtcSessionService,
+		QObject *pParent = nullptr);
 	~KSessionViewModel() override;
 
 	KSessionViewModel(const KSessionViewModel &) = delete;
