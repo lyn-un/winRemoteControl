@@ -125,6 +125,36 @@ target_link_libraries(wrc_session_application PUBLIC
 	Qt6::Network
 )
 
+add_library(wrc_ffmpeg_adapter STATIC
+	src/codec/h264decoder.cpp
+	src/codec/h264decoder.h
+	src/codec/h264encoder.cpp
+	src/codec/h264encoder.h
+)
+
+target_include_directories(wrc_ffmpeg_adapter PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_include_directories(wrc_ffmpeg_adapter PRIVATE
+	"${FFMPEG_ROOT}/include"
+	"${WEBRTC_ROOT}"
+	"${WEBRTC_ROOT}/third_party/libyuv/include"
+)
+
+target_link_directories(wrc_ffmpeg_adapter PUBLIC
+	"${FFMPEG_ROOT}/lib"
+)
+
+target_link_libraries(wrc_ffmpeg_adapter PUBLIC
+	wrc_foundation
+	Qt6::Core
+	avcodec
+	avutil
+	swscale
+	"${WEBRTC_OUT}/obj/webrtc.lib"
+)
+
 add_library(wrc_webrtc_adapter STATIC
 	src/transport/webrtc/webrtcpeer.cpp
 	src/transport/webrtc/webrtcpeer.h
@@ -162,6 +192,7 @@ target_include_directories(wrc_webrtc_adapter PUBLIC
 target_link_libraries(wrc_webrtc_adapter PUBLIC
 	wrc_core
 	wrc_protocol
+	wrc_ffmpeg_adapter
 	Qt6::Core
 	"${WEBRTC_OUT}/obj/webrtc.lib"
 	ws2_32
@@ -176,20 +207,9 @@ target_link_libraries(wrc_webrtc_adapter PUBLIC
 	strmiids
 )
 
-qt_add_executable(winRemoteControl WIN32
-	src/app/main.cpp
-	src/app/composition/applicationcomposition.cpp
-	src/app/composition/applicationcomposition.h
-	src/app/mainwindow.cpp
-	src/app/mainwindow.h
-	src/app/remotedesktopwindow.cpp
-	src/app/remotedesktopwindow.h
+add_library(wrc_windows_capture_adapter STATIC
 	src/common/framewatermark.cpp
 	src/common/framewatermark.h
-	src/codec/h264decoder.cpp
-	src/codec/h264decoder.h
-	src/codec/h264encoder.cpp
-	src/codec/h264encoder.h
 	src/capture/captureframe.h
 	src/capture/captureservice.cpp
 	src/capture/captureservice.h
@@ -197,6 +217,39 @@ qt_add_executable(winRemoteControl WIN32
 	src/capture/captureworker.h
 	src/capture/dxgidesktopduplicator.cpp
 	src/capture/dxgidesktopduplicator.h
+)
+
+target_compile_definitions(wrc_windows_capture_adapter PRIVATE
+	UNICODE
+	_UNICODE
+	WIN32_LEAN_AND_MEAN
+	NOMINMAX
+)
+
+target_include_directories(wrc_windows_capture_adapter PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_include_directories(wrc_windows_capture_adapter PRIVATE
+	"${WEBRTC_ROOT}"
+	"${WEBRTC_ROOT}/third_party/libyuv/include"
+)
+
+target_link_libraries(wrc_windows_capture_adapter PUBLIC
+	wrc_core
+	wrc_ffmpeg_adapter
+	wrc_session_application
+	wrc_webrtc_adapter
+	Qt6::Core
+	Qt6::Gui
+	d3d11
+	dxgi
+	dxguid
+)
+
+add_library(wrc_qt_presentation STATIC
+	src/app/remotedesktopwindow.cpp
+	src/app/remotedesktopwindow.h
 	src/render/videorenderwidget.cpp
 	src/render/videorenderwidget.h
 	src/session/inputfeedbacktracker.cpp
@@ -205,6 +258,40 @@ qt_add_executable(winRemoteControl WIN32
 	src/session/sessionviewmodel.h
 	src/ui_bridge/webviewwidget.cpp
 	src/ui_bridge/webviewwidget.h
+)
+
+target_compile_definitions(wrc_qt_presentation PRIVATE
+	UNICODE
+	_UNICODE
+	WIN32_LEAN_AND_MEAN
+	NOMINMAX
+)
+
+target_include_directories(wrc_qt_presentation PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+	"${WEBVIEW2_ROOT}/build/native/include"
+)
+
+target_link_libraries(wrc_qt_presentation PUBLIC
+	wrc_core
+	wrc_session_application
+	Qt6::Widgets
+	Qt6::Gui
+	d3d11
+	dxgi
+	dxguid
+	d3dcompiler
+	ole32
+	shlwapi
+	"${WEBVIEW2_ROOT}/build/native/x64/WebView2Loader.dll.lib"
+)
+
+qt_add_executable(winRemoteControl WIN32
+	src/app/main.cpp
+	src/app/composition/applicationcomposition.cpp
+	src/app/composition/applicationcomposition.h
+	src/app/mainwindow.cpp
+	src/app/mainwindow.h
 )
 
 target_compile_definitions(winRemoteControl PRIVATE
@@ -216,12 +303,6 @@ target_compile_definitions(winRemoteControl PRIVATE
 
 target_include_directories(winRemoteControl PRIVATE
 	"${CMAKE_CURRENT_SOURCE_DIR}/src"
-	"${WEBVIEW2_ROOT}/build/native/include"
-	"${FFMPEG_ROOT}/include"
-)
-
-target_link_directories(winRemoteControl PRIVATE
-	"${FFMPEG_ROOT}/lib"
 )
 
 target_link_libraries(winRemoteControl PRIVATE
@@ -230,19 +311,12 @@ target_link_libraries(winRemoteControl PRIVATE
 	wrc_session_application
 	wrc_webrtc_adapter
 	wrc_windows_adapters
+	wrc_windows_capture_adapter
+	wrc_qt_presentation
 	Qt6::Widgets
 	Qt6::Gui
 	Qt6::Network
-	d3d11
-	dxgi
-	dxguid
-	d3dcompiler
 	ole32
-	shlwapi
-	avcodec
-	avutil
-	swscale
-	"${WEBVIEW2_ROOT}/build/native/x64/WebView2Loader.dll.lib"
 )
 
 if(BUILD_TESTING)
