@@ -1,7 +1,7 @@
 #ifndef _WINREMOTECONTROL_VIDEORENDERWIDGET_H_
 #define _WINREMOTECONTROL_VIDEORENDERWIDGET_H_
 
-#include "codec/decodedvideoframe.h"
+#include "core/media/decodedvideoframe.h"
 
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QPoint>

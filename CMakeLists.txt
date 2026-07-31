@@ -21,6 +21,23 @@ set(FFMPEG_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ffmpeg")
 set(WEBRTC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/webrtc/src")
 set(WEBRTC_OUT "${WEBRTC_ROOT}/out/wrc_release_x64_msvcstl")
 
+add_library(wrc_foundation INTERFACE)
+
+target_sources(wrc_foundation INTERFACE
+	src/core/media/decodedvideoframe.h
+	src/core/media/networkstats.h
+	src/core/media/streamconfig.h
+	src/core/media/videoframe.h
+)
+
+target_include_directories(wrc_foundation INTERFACE
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_foundation INTERFACE
+	Qt6::Core
+)
+
 add_library(wrc_protocol STATIC
 	src/core/protocol/inputmessage.cpp
 	src/core/protocol/inputmessage.h
@@ -33,6 +50,7 @@ target_include_directories(wrc_protocol PUBLIC
 )
 
 target_link_libraries(wrc_protocol PUBLIC
+	wrc_foundation
 	Qt6::Core
 )
 
@@ -41,6 +59,7 @@ add_library(wrc_core STATIC
 	src/core/session/deviceinfoprovider.h
 	src/core/session/sessionstatemachine.cpp
 	src/core/session/sessionstatemachine.h
+	src/core/transport/remotepeertransport.h
 )
 
 target_include_directories(wrc_core PUBLIC
@@ -48,6 +67,7 @@ target_include_directories(wrc_core PUBLIC
 )
 
 target_link_libraries(wrc_core PUBLIC
+	wrc_foundation
 	wrc_protocol
 	Qt6::Core
 )
@@ -77,20 +97,38 @@ target_link_libraries(wrc_windows_adapters PUBLIC
 	user32
 )
 
+add_library(wrc_session_application STATIC
+	src/common/latencytracelogger.cpp
+	src/common/latencytracelogger.h
+	src/common/sessiontracelogger.cpp
+	src/common/sessiontracelogger.h
+	src/input/inputinjector.cpp
+	src/input/inputinjector.h
+	src/transport/webrtc/webrtcsessionservice.cpp
+	src/transport/webrtc/webrtcsessionservice.h
+	src/transport/webrtc/webrtcsignaling.cpp
+	src/transport/webrtc/webrtcsignaling.h
+)
+
+target_include_directories(wrc_session_application PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_session_application PUBLIC
+	wrc_core
+	wrc_protocol
+	Qt6::Core
+	Qt6::Network
+)
+
 qt_add_executable(winRemoteControl WIN32
 	src/app/main.cpp
 	src/app/mainwindow.cpp
 	src/app/mainwindow.h
 	src/app/remotedesktopwindow.cpp
 	src/app/remotedesktopwindow.h
-	src/common/latencytracelogger.cpp
-	src/common/latencytracelogger.h
 	src/common/framewatermark.cpp
 	src/common/framewatermark.h
-	src/common/sessiontracelogger.cpp
-	src/common/sessiontracelogger.h
-	src/common/streamconfig.h
-	src/codec/decodedvideoframe.h
 	src/codec/h264decoder.cpp
 	src/codec/h264decoder.h
 	src/codec/h264encoder.cpp
@@ -102,8 +140,6 @@ qt_add_executable(winRemoteControl WIN32
 	src/capture/captureworker.h
 	src/capture/dxgidesktopduplicator.cpp
 	src/capture/dxgidesktopduplicator.h
-	src/input/inputinjector.cpp
-	src/input/inputinjector.h
 	src/render/videorenderwidget.cpp
 	src/render/videorenderwidget.h
 	src/session/sessionviewmodel.cpp
@@ -114,12 +150,6 @@ qt_add_executable(winRemoteControl WIN32
 	src/transport/webrtc/webrtch264decoder.h
 	src/transport/webrtc/webrtch264encoder.cpp
 	src/transport/webrtc/webrtch264encoder.h
-	src/transport/webrtc/webrtcnetworkstats.h
-	src/transport/webrtc/webrtcsessionservice.cpp
-	src/transport/webrtc/webrtcsessionservice.h
-	src/transport/webrtc/webrtcsignaling.cpp
-	src/transport/webrtc/webrtcsignaling.h
-	src/transport/webrtc/webrtcvideoframe.h
 	src/ui_bridge/webviewwidget.cpp
 	src/ui_bridge/webviewwidget.h
 )
@@ -151,6 +181,7 @@ target_link_directories(winRemoteControl PRIVATE
 target_link_libraries(winRemoteControl PRIVATE
 	wrc_core
 	wrc_protocol
+	wrc_session_application
 	wrc_windows_adapters
 	Qt6::Widgets
 	Qt6::Gui
@@ -196,6 +227,16 @@ if(BUILD_TESTING)
 		Qt6::Core
 	)
 	add_test(NAME wrc_session_state_tests COMMAND wrc_session_state_tests)
+
+	add_executable(wrc_session_service_tests
+		tests/unit/sessionservicetest.cpp
+	)
+	target_link_libraries(wrc_session_service_tests PRIVATE
+		wrc_session_application
+		Qt6::Core
+		Qt6::Network
+	)
+	add_test(NAME wrc_session_service_tests COMMAND wrc_session_service_tests)
 endif()
 
 set(WEBVIEW2_LOADER "${WEBVIEW2_ROOT}/build/native/x64/WebView2Loader.dll")

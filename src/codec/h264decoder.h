@@ -1,7 +1,7 @@
 #ifndef _WINREMOTECONTROL_H264DECODER_H_
 #define _WINREMOTECONTROL_H264DECODER_H_
 
-#include "codec/decodedvideoframe.h"
+#include "core/media/decodedvideoframe.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QString>

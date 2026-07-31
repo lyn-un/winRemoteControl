@@ -1,14 +1,14 @@
 #ifndef _WINREMOTECONTROL_WEBRTCSESSIONSERVICE_H_
 #define _WINREMOTECONTROL_WEBRTCSESSIONSERVICE_H_
 
-#include "codec/decodedvideoframe.h"
-#include "common/streamconfig.h"
+#include "core/media/decodedvideoframe.h"
+#include "core/media/networkstats.h"
+#include "core/media/streamconfig.h"
+#include "core/media/videoframe.h"
 #include "core/protocol/inputmessage.h"
 #include "core/protocol/sessionmessage.h"
 #include "core/session/sessionstatemachine.h"
-#include "transport/webrtc/webrtcnetworkstats.h"
-#include "transport/webrtc/webrtcpeer.h"
-#include "transport/webrtc/webrtcvideoframe.h"
+#include "core/transport/remotepeertransport.h"
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
@@ -28,6 +28,7 @@ class KWebRtcSessionService : public QObject
 public:
 	explicit KWebRtcSessionService(std::unique_ptr<IKDeviceInfoProvider> spDeviceInfoProvider,
 		std::unique_ptr<IKInputInjector> spInputInjector,
+		std::unique_ptr<KRemotePeerTransport> spRemotePeerTransport,
 		QObject *pParent = nullptr);
 	~KWebRtcSessionService() override;
 
@@ -43,7 +44,7 @@ public slots:
 	void leaveRemoteDesktop();
 	void startStreaming();
 	void stopStreaming();
-	void pushVideoFrame(const KWebRtcVideoFrame &frame);
+	void pushVideoFrame(const KVideoFrame &frame);
 	void sendInputMessage(const KInputMessage &message);
 	void sendStreamConfig(const KStreamConfig &config);
 	void handleCaptureFailure();
@@ -59,7 +60,7 @@ signals:
 		int nScreenHeight);
 	void remoteFrameReady(const KDecodedVideoFrame &frame);
 	void remoteFrameStatsReady(int nWidth, int nHeight, quint64 nFrameIndex, qint64 nTimestampMs);
-	void networkStatsReady(const KWebRtcNetworkStats &stats);
+	void networkStatsReady(const KNetworkStats &stats);
 	void startCaptureRequested();
 	void stopCaptureRequested();
 	void streamConfigChanged(const KStreamConfig &config);
@@ -69,7 +70,7 @@ signals:
 	void inputFeedbackFrameRequested();
 
 private:
-	bool initializePeer(KWebRtcPeer::Role role, QString *pErrorMessage);
+	bool initializePeer(KSessionRole role, QString *pErrorMessage);
 	void wirePeer();
 	void sendSessionMessage(const KSessionMessage &message);
 	void finishSession(KSessionEndReason reason,
@@ -79,10 +80,10 @@ private:
 		bool bReportError);
 	void resetInputTraceState();
 	void handleRemoteFrame(const KDecodedVideoFrame &frame);
-	void handleInputMessage(const QString &strMessage);
+	void handleInputMessage(const KInputMessage &message);
 	void handleInputChannelChanged(bool bOpen);
 	void handleSessionChannelChanged(bool bOpen);
-	void handleSessionMessage(const QString &strMessage);
+	void handleSessionMessage(const KSessionMessage &message);
 	void handleInputInjected(quint64 nSeq, qint64 nInjectedMs);
 	void handleOutgoingConnectionEstablished();
 	void handleOutgoingConnectionFailed(const QString &strMessage);
@@ -102,8 +103,8 @@ private:
 	quint64 m_nDisconnectGraceGeneration = 0;
 	qint64 m_nLastInjectedInputMs = -1;
 	std::unique_ptr<IKDeviceInfoProvider> m_spDeviceInfoProvider;
+	std::unique_ptr<KRemotePeerTransport> m_spRemotePeerTransport;
 	KWebRtcSignaling *m_pSignaling = nullptr;
-	KWebRtcPeer *m_pPeer = nullptr;
 	KInputInjector *m_pInputInjector = nullptr;
 	QTimer *m_pDisconnectGraceTimer = nullptr;
 };

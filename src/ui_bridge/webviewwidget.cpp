@@ -95,7 +95,7 @@ void KWebViewWidget::sendFrameReady(int nWidth, int nHeight, quint64 nFrameIndex
 	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
 }
 
-void KWebViewWidget::sendNetworkStatsChanged(const KWebRtcNetworkStats &stats)
+void KWebViewWidget::sendNetworkStatsChanged(const KNetworkStats &stats)
 {
 	QJsonObject object;
 	object.insert(QStringLiteral("type"), QStringLiteral("networkStatsChanged"));

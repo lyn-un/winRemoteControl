@@ -1,8 +1,8 @@
 #ifndef _WINREMOTECONTROL_WEBVIEWWIDGET_H_
 #define _WINREMOTECONTROL_WEBVIEWWIDGET_H_
 
-#include "common/streamconfig.h"
-#include "transport/webrtc/webrtcnetworkstats.h"
+#include "core/media/networkstats.h"
+#include "core/media/streamconfig.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QPoint>
@@ -43,7 +43,7 @@ public slots:
 		int nScreenHeight);
 	void sendCaptureError(const QString &strMessage);
 	void sendFrameReady(int nWidth, int nHeight, quint64 nFrameIndex, qint64 nTimestampMs);
-	void sendNetworkStatsChanged(const KWebRtcNetworkStats &stats);
+	void sendNetworkStatsChanged(const KNetworkStats &stats);
 
 signals:
 	void startCaptureRequested();

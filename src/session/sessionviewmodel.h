@@ -1,10 +1,10 @@
 #ifndef _WINREMOTECONTROL_SESSIONVIEWMODEL_H_
 #define _WINREMOTECONTROL_SESSIONVIEWMODEL_H_
 
-#include "codec/decodedvideoframe.h"
-#include "common/streamconfig.h"
+#include "core/media/decodedvideoframe.h"
+#include "core/media/networkstats.h"
+#include "core/media/streamconfig.h"
 #include "core/protocol/inputmessage.h"
-#include "transport/webrtc/webrtcnetworkstats.h"
 
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QMap>
@@ -62,7 +62,7 @@ signals:
 	void errorOccurred(const QString &strMessage);
 	void frameReady(int nWidth, int nHeight, quint64 nFrameIndex, qint64 nTimestampMs);
 	void renderFrameReady(const KDecodedVideoFrame &frame);
-	void networkStatsReady(const KWebRtcNetworkStats &stats);
+	void networkStatsReady(const KNetworkStats &stats);
 	void clearPreviewRequested();
 
 private slots:

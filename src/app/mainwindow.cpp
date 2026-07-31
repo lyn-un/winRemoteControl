@@ -6,6 +6,7 @@
 #include "capture/captureservice.h"
 #include "render/videorenderwidget.h"
 #include "session/sessionviewmodel.h"
+#include "transport/webrtc/webrtcpeer.h"
 #include "transport/webrtc/webrtcsessionservice.h"
 #include "ui_bridge/webviewwidget.h"
 
@@ -21,6 +22,7 @@ KMainWindow::KMainWindow(QWidget *pParent)
 	, m_pWebRtcSessionService(new KWebRtcSessionService(
 		std::make_unique<KWindowsDeviceInfoProvider>(),
 		std::make_unique<KWindowsInputInjector>(),
+		std::make_unique<KWebRtcPeer>(),
 		this))
 	, m_pSessionViewModel(new KSessionViewModel(
 		m_pCaptureService,

@@ -1,7 +1,7 @@
 #ifndef _WINREMOTECONTROL_REMOTEDESKTOPWINDOW_H_
 #define _WINREMOTECONTROL_REMOTEDESKTOPWINDOW_H_
 
-#include "common/streamconfig.h"
+#include "core/media/streamconfig.h"
 
 #include <QtCore/QPoint>
 #include <QtCore/QRect>

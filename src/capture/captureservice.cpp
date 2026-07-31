@@ -112,7 +112,7 @@ void KCaptureService::clearWorker()
 	m_pCaptureWorker = nullptr;
 }
 
-void KCaptureService::enqueueWebRtcFrame(const KWebRtcVideoFrame &frame)
+void KCaptureService::enqueueWebRtcFrame(const KVideoFrame &frame)
 {
 	if (!m_bAcceptWebRtcFrames || frame.nWidth <= 0 || frame.nHeight <= 0)
 		return;
@@ -160,7 +160,7 @@ void KCaptureService::enqueueWebRtcFrame(const KWebRtcVideoFrame &frame)
 
 void KCaptureService::flushLatestWebRtcFrame()
 {
-	KWebRtcVideoFrame frame;
+	KVideoFrame frame;
 	{
 		std::lock_guard<std::mutex> guard(m_webRtcFrameMutex);
 		if (!m_bHasPendingWebRtcFrame || !m_bAcceptWebRtcFrames)
@@ -171,7 +171,7 @@ void KCaptureService::flushLatestWebRtcFrame()
 		}
 
 		frame = std::move(m_pendingWebRtcFrame);
-		m_pendingWebRtcFrame = KWebRtcVideoFrame();
+		m_pendingWebRtcFrame = KVideoFrame();
 		m_bHasPendingWebRtcFrame = false;
 	}
 
@@ -197,7 +197,7 @@ void KCaptureService::flushLatestWebRtcFrame()
 void KCaptureService::clearPendingWebRtcFrame()
 {
 	std::lock_guard<std::mutex> guard(m_webRtcFrameMutex);
-	m_pendingWebRtcFrame = KWebRtcVideoFrame();
+	m_pendingWebRtcFrame = KVideoFrame();
 	m_bHasPendingWebRtcFrame = false;
 	m_bWebRtcFrameFlushQueued = false;
 	m_nDroppedWebRtcSourceFrames = 0;

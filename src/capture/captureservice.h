@@ -1,10 +1,10 @@
 #ifndef _WINREMOTECONTROL_CAPTURESERVICE_H_
 #define _WINREMOTECONTROL_CAPTURESERVICE_H_
 
-#include "codec/decodedvideoframe.h"
+#include "core/media/decodedvideoframe.h"
 #include "capture/captureworker.h"
-#include "common/streamconfig.h"
-#include "transport/webrtc/webrtcvideoframe.h"
+#include "core/media/streamconfig.h"
+#include "core/media/videoframe.h"
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
@@ -36,13 +36,13 @@ signals:
 	void statusChanged(const QString &strStatus);
 	void captureError(const QString &strMessage);
 	void decodedFrameReady(const KDecodedVideoFrame &frame);
-	void webRtcFrameReady(const KWebRtcVideoFrame &frame);
+	void webRtcFrameReady(const KVideoFrame &frame);
 	void frameReady(int nWidth, int nHeight, quint64 nFrameIndex, qint64 nTimestampMs);
 
 private:
 	void startCaptureWithMode(KCaptureWorker::WorkMode mode);
 	void clearWorker();
-	void enqueueWebRtcFrame(const KWebRtcVideoFrame &frame);
+	void enqueueWebRtcFrame(const KVideoFrame &frame);
 	void flushLatestWebRtcFrame();
 	void clearPendingWebRtcFrame();
 
@@ -52,7 +52,7 @@ private:
 	quint64 m_nLastInputSeq = 0;
 	qint64 m_nLastInputInjectedMs = -1;
 	std::mutex m_webRtcFrameMutex;
-	KWebRtcVideoFrame m_pendingWebRtcFrame;
+	KVideoFrame m_pendingWebRtcFrame;
 	bool m_bHasPendingWebRtcFrame = false;
 	bool m_bWebRtcFrameFlushQueued = false;
 	bool m_bAcceptWebRtcFrames = false;

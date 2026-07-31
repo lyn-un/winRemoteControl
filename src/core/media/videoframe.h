@@ -1,10 +1,10 @@
-#ifndef _WINREMOTECONTROL_WEBRTCVIDEOFRAME_H_
-#define _WINREMOTECONTROL_WEBRTCVIDEOFRAME_H_
+#ifndef _WINREMOTECONTROL_VIDEOFRAME_H_
+#define _WINREMOTECONTROL_VIDEOFRAME_H_
 
 #include <QtCore/QByteArray>
 #include <QtCore/QMetaType>
 
-struct KWebRtcVideoFrame
+struct KVideoFrame
 {
 	int nWidth = 0;
 	int nHeight = 0;
@@ -20,6 +20,6 @@ struct KWebRtcVideoFrame
 	int nStrideV = 0;
 };
 
-Q_DECLARE_METATYPE(KWebRtcVideoFrame)
+Q_DECLARE_METATYPE(KVideoFrame)
 
-#endif // _WINREMOTECONTROL_WEBRTCVIDEOFRAME_H_
+#endif // _WINREMOTECONTROL_VIDEOFRAME_H_

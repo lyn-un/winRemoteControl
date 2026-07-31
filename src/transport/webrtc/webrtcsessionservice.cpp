@@ -40,13 +40,16 @@ namespace
 KWebRtcSessionService::KWebRtcSessionService(
 	std::unique_ptr<IKDeviceInfoProvider> spDeviceInfoProvider,
 	std::unique_ptr<IKInputInjector> spInputInjector,
+	std::unique_ptr<KRemotePeerTransport> spRemotePeerTransport,
 	QObject *pParent)
 	: QObject(pParent)
 	, m_spDeviceInfoProvider(std::move(spDeviceInfoProvider))
+	, m_spRemotePeerTransport(std::move(spRemotePeerTransport))
 	, m_pSignaling(new KWebRtcSignaling(this))
 	, m_pInputInjector(new KInputInjector(std::move(spInputInjector), this))
 	, m_pDisconnectGraceTimer(new QTimer(this))
 {
+	Q_ASSERT(m_spRemotePeerTransport != nullptr);
 	m_pDisconnectGraceTimer->setSingleShot(true);
 	connect(m_pDisconnectGraceTimer, &QTimer::timeout,
 		this, &KWebRtcSessionService::handleDisconnectGraceTimeout);
@@ -64,6 +67,7 @@ KWebRtcSessionService::KWebRtcSessionService(
 		this, &KWebRtcSessionService::handleSignalingConnectionLost);
 	connect(m_pInputInjector, &KInputInjector::inputError,
 		this, &KWebRtcSessionService::sessionError);
+	wirePeer();
 }
 
 KWebRtcSessionService::~KWebRtcSessionService()
@@ -93,7 +97,7 @@ void KWebRtcSessionService::startSignalingServer(quint16 nPort)
 	if (m_sessionStateMachine.state() != IdleSessionState)
 		finishSession(RestartListenerSessionEndReason, QString(), false, true, false);
 	QString strError;
-	if (!initializePeer(KWebRtcPeer::ControlledRole, &strError))
+	if (!initializePeer(ControlledSessionRole, &strError))
 	{
 		emit sessionError(strError);
 		return;
@@ -115,7 +119,7 @@ void KWebRtcSessionService::connectSignaling(const QString &strHost, quint16 nPo
 		finishSession(NewConnectionSessionEndReason, QString(), false, true, false);
 	m_pSignaling->stop();
 	QString strError;
-	if (!initializePeer(KWebRtcPeer::ControllerRole, &strError))
+	if (!initializePeer(ControllerSessionRole, &strError))
 	{
 		emit sessionError(strError);
 		return;
@@ -193,10 +197,10 @@ void KWebRtcSessionService::stopStreaming()
 	leaveRemoteDesktop();
 }
 
-void KWebRtcSessionService::pushVideoFrame(const KWebRtcVideoFrame &frame)
+void KWebRtcSessionService::pushVideoFrame(const KVideoFrame &frame)
 {
-	if (m_pPeer != nullptr && m_sessionStateMachine.canSendVideo())
-		m_pPeer->pushVideoFrame(frame);
+	if (m_sessionStateMachine.canSendVideo())
+		m_spRemotePeerTransport->pushVideoFrame(frame);
 }
 
 void KWebRtcSessionService::sendInputMessage(const KInputMessage &message)
@@ -205,9 +209,6 @@ void KWebRtcSessionService::sendInputMessage(const KInputMessage &message)
 	{
 		return;
 	}
-	if (m_pPeer == nullptr)
-		return;
-
 	const QString strMessage = KInputMessageCodec::encode(message);
 	if (shouldTraceInputMessage(message))
 	{
@@ -217,14 +218,14 @@ void KWebRtcSessionService::sendInputMessage(const KInputMessage &message)
 				.arg(inputTraceExtra(message))
 				.arg(strMessage.toUtf8().size()));
 	}
-	m_pPeer->sendInputMessage(strMessage);
+	m_spRemotePeerTransport->sendInputMessage(message);
 }
 
 void KWebRtcSessionService::sendSessionMessage(const KSessionMessage &message)
 {
 	const QString strType = KSessionMessageCodec::typeName(message.type);
 	const QString strMessage = KSessionMessageCodec::encode(message);
-	if (m_pPeer == nullptr || !m_bSessionChannelOpen)
+	if (!m_bSessionChannelOpen)
 	{
 		KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 			QStringLiteral("send_drop"),
@@ -238,7 +239,7 @@ void KWebRtcSessionService::sendSessionMessage(const KSessionMessage &message)
 		QStringLiteral("send"),
 		strType,
 		strMessage.toUtf8().size());
-	m_pPeer->sendSessionMessage(strMessage);
+	m_spRemotePeerTransport->sendSessionMessage(message);
 }
 
 void KWebRtcSessionService::sendStreamConfig(const KStreamConfig &config)
@@ -301,17 +302,15 @@ void KWebRtcSessionService::finishSession(KSessionEndReason reason,
 	resetInputTraceState();
 	emit stopCaptureRequested();
 	emit sessionChannelChanged(false);
-	emit networkStatsReady(KWebRtcNetworkStats());
-
-	if (m_pPeer != nullptr)
-		m_pPeer->shutdown();
+	emit networkStatsReady(KNetworkStats());
+	m_spRemotePeerTransport->shutdown();
 
 	bool bListening = false;
 	if (bKeepListening && role == ControlledSessionRole)
 	{
 		m_pSignaling->disconnectPeer();
 		QString strError;
-		if (initializePeer(KWebRtcPeer::ControlledRole, &strError))
+		if (initializePeer(ControlledSessionRole, &strError))
 		{
 			bListening = true;
 			m_sessionStateMachine.finish(true);
@@ -351,50 +350,45 @@ void KWebRtcSessionService::resetInputTraceState()
 	emit inputTraceUpdated(0, -1);
 }
 
-bool KWebRtcSessionService::initializePeer(KWebRtcPeer::Role role, QString *pErrorMessage)
+bool KWebRtcSessionService::initializePeer(KSessionRole role, QString *pErrorMessage)
 {
 	m_bDeviceInfoRequested = false;
-	if (m_pPeer == nullptr)
-	{
-		m_pPeer = new KWebRtcPeer(this);
-		wirePeer();
-	}
-
-	m_pPeer->shutdown();
-	return m_pPeer->initialize(role, pErrorMessage);
+	m_spRemotePeerTransport->shutdown();
+	return m_spRemotePeerTransport->initialize(role, pErrorMessage);
 }
 
 void KWebRtcSessionService::wirePeer()
 {
-	connect(m_pPeer, &KWebRtcPeer::signalingMessageReady,
+	KRemotePeerTransport *pTransport = m_spRemotePeerTransport.get();
+	connect(pTransport, &KRemotePeerTransport::signalingMessageReady,
 		m_pSignaling, &KWebRtcSignaling::sendJsonMessage);
 	connect(m_pSignaling, &KWebRtcSignaling::messageReceived,
-		m_pPeer, &KWebRtcPeer::handleSignalingMessage);
-	connect(m_pPeer, &KWebRtcPeer::stateChanged,
+		pTransport, &KRemotePeerTransport::handleSignalingMessage);
+	connect(pTransport, &KRemotePeerTransport::stateChanged,
 		this, &KWebRtcSessionService::webRtcStateChanged);
-	connect(m_pPeer, &KWebRtcPeer::peerError,
+	connect(pTransport, &KRemotePeerTransport::transportError,
 		this, &KWebRtcSessionService::sessionError);
-	connect(m_pPeer, &KWebRtcPeer::remoteFrameReady,
+	connect(pTransport, &KRemotePeerTransport::remoteFrameReady,
 		this, &KWebRtcSessionService::handleRemoteFrame, Qt::DirectConnection);
-	connect(m_pPeer, &KWebRtcPeer::networkStatsReady,
+	connect(pTransport, &KRemotePeerTransport::networkStatsReady,
 		this, &KWebRtcSessionService::networkStatsReady);
-	connect(m_pPeer, &KWebRtcPeer::inputMessageReceived,
+	connect(pTransport, &KRemotePeerTransport::inputMessageReceived,
 		this, &KWebRtcSessionService::handleInputMessage);
 	connect(m_pInputInjector, &KInputInjector::inputInjected,
 		this, &KWebRtcSessionService::handleInputInjected);
-	connect(m_pPeer, &KWebRtcPeer::inputChannelChanged,
+	connect(pTransport, &KRemotePeerTransport::inputChannelChanged,
 		this, &KWebRtcSessionService::handleInputChannelChanged);
-	connect(m_pPeer, &KWebRtcPeer::sessionMessageReceived,
+	connect(pTransport, &KRemotePeerTransport::sessionMessageReceived,
 		this, &KWebRtcSessionService::handleSessionMessage);
-	connect(m_pPeer, &KWebRtcPeer::sessionChannelChanged,
+	connect(pTransport, &KRemotePeerTransport::sessionChannelChanged,
 		this, &KWebRtcSessionService::handleSessionChannelChanged);
-	connect(m_pPeer, &KWebRtcPeer::sessionChannelChanged,
+	connect(pTransport, &KRemotePeerTransport::sessionChannelChanged,
 		this, &KWebRtcSessionService::sessionChannelChanged);
-	connect(m_pPeer, &KWebRtcPeer::peerConnectionInterrupted,
+	connect(pTransport, &KRemotePeerTransport::connectionInterrupted,
 		this, &KWebRtcSessionService::handlePeerConnectionInterrupted);
-	connect(m_pPeer, &KWebRtcPeer::peerConnectionRestored,
+	connect(pTransport, &KRemotePeerTransport::connectionRestored,
 		this, &KWebRtcSessionService::handlePeerConnectionRestored);
-	connect(m_pPeer, &KWebRtcPeer::peerConnectionTerminated,
+	connect(pTransport, &KRemotePeerTransport::connectionTerminated,
 		this, &KWebRtcSessionService::handlePeerConnectionTerminated);
 }
 
@@ -410,22 +404,11 @@ void KWebRtcSessionService::handleRemoteFrame(const KDecodedVideoFrame &frame)
 	emit remoteFrameStatsReady(frame.nWidth, frame.nHeight, frame.nFrameIndex, frame.nTimestampMs);
 }
 
-void KWebRtcSessionService::handleInputMessage(const QString &strMessage)
+void KWebRtcSessionService::handleInputMessage(const KInputMessage &message)
 {
-	KInputMessage message;
-	QString strError;
-	if (!KInputMessageCodec::decode(strMessage, &message, &strError))
-	{
-		KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
-			QStringLiteral("protocol_reject"),
-			QStringLiteral("input"),
-			strMessage.toUtf8().size(),
-			strError);
-		return;
-	}
-
 	if (shouldTraceInputMessage(message))
 	{
+		const QString strMessage = KInputMessageCodec::encode(message);
 		KLatencyTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 			QStringLiteral("input_recv"),
 			QStringLiteral("%1 size=%2")
@@ -503,20 +486,9 @@ void KWebRtcSessionService::handleSessionChannelChanged(bool bOpen)
 	}
 }
 
-void KWebRtcSessionService::handleSessionMessage(const QString &strMessage)
+void KWebRtcSessionService::handleSessionMessage(const KSessionMessage &message)
 {
-	KSessionMessage message;
-	QString strError;
-	if (!KSessionMessageCodec::decode(strMessage, &message, &strError))
-	{
-		KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
-			QStringLiteral("protocol_reject"),
-			QStringLiteral("session"),
-			strMessage.toUtf8().size(),
-			strError);
-		return;
-	}
-
+	const QString strMessage = KSessionMessageCodec::encode(message);
 	const QString strType = KSessionMessageCodec::typeName(message.type);
 	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 		QStringLiteral("handle"),
@@ -578,8 +550,7 @@ void KWebRtcSessionService::handleSessionMessage(const QString &strMessage)
 	if (message.type == StreamConfigSessionMessageType
 		&& m_sessionStateMachine.role() == ControlledSessionRole)
 	{
-		if (m_pPeer != nullptr)
-			m_pPeer->setStreamConfig(message.streamConfig);
+		m_spRemotePeerTransport->setStreamConfig(message.streamConfig);
 		emit streamConfigChanged(message.streamConfig);
 	}
 }
@@ -594,12 +565,12 @@ void KWebRtcSessionService::handleInputInjected(quint64 nSeq, qint64 nInjectedMs
 
 void KWebRtcSessionService::handleOutgoingConnectionEstablished()
 {
-	if (!m_sessionStateMachine.isConnecting() || m_pPeer == nullptr)
+	if (!m_sessionStateMachine.isConnecting())
 		return;
 
 	m_sessionStateMachine.beginNegotiating();
 	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
-	m_pPeer->createOffer();
+	m_spRemotePeerTransport->createOffer();
 }
 
 void KWebRtcSessionService::handleOutgoingConnectionFailed(const QString &strMessage)

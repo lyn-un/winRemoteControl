@@ -53,7 +53,7 @@ void KCaptureWorker::startWork()
 	QString strError;
 	QElapsedTimer frameTimer;
 	QElapsedTimer initialFrameRetryTimer;
-	KWebRtcVideoFrame lastVideoFrame;
+	KVideoFrame lastVideoFrame;
 	int nInitialFrameRetryCount = 0;
 	if (!duplicator.initialize(&strError))
 	{
@@ -129,7 +129,7 @@ void KCaptureWorker::startWork()
 			const qint64 nLastInputAgeMs =
 				nLastInputInjectedMs >= 0 ? frame.nTimestampMs - nLastInputInjectedMs : -1;
 
-			KWebRtcVideoFrame videoFrame;
+			KVideoFrame videoFrame;
 			if (!convertBgraToI420(frame, currentConfig, nLastInputSeq, nLastInputAgeMs, &videoFrame))
 			{
 				m_bRunning = false;
@@ -348,7 +348,7 @@ bool KCaptureWorker::convertBgraToI420(KCaptureFrame &captureFrame,
 	const KStreamConfig &config,
 	quint64 nLastInputSeq,
 	qint64 nLastInputAgeMs,
-	KWebRtcVideoFrame *pVideoFrame)
+	KVideoFrame *pVideoFrame)
 {
 	if (pVideoFrame == nullptr || captureFrame.nWidth < 2 || captureFrame.nHeight < 2
 		|| captureFrame.vecBgraBuffer.empty())

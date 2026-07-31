@@ -1,10 +1,7 @@
 #ifndef _WINREMOTECONTROL_WEBRTCPEER_H_
 #define _WINREMOTECONTROL_WEBRTCPEER_H_
 
-#include "codec/decodedvideoframe.h"
-#include "common/streamconfig.h"
-#include "transport/webrtc/webrtcnetworkstats.h"
-#include "transport/webrtc/webrtcvideoframe.h"
+#include "core/transport/remotepeertransport.h"
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
@@ -32,50 +29,27 @@ namespace webrtc
 class RTCStatsReport;
 }
 
-class KWebRtcPeer : public QObject
+class KWebRtcPeer : public KRemotePeerTransport
 	, public webrtc::PeerConnectionObserver
 	, public webrtc::VideoSinkInterface<webrtc::VideoFrame>
 {
 	Q_OBJECT
 
 public:
-	enum Role
-	{
-		ControlledRole,
-		ControllerRole
-	};
-
 	explicit KWebRtcPeer(QObject *pParent = nullptr);
 	~KWebRtcPeer() override;
 
 	KWebRtcPeer(const KWebRtcPeer &) = delete;
 	KWebRtcPeer &operator=(const KWebRtcPeer &) = delete;
 
-	bool initialize(Role role, QString *pErrorMessage);
-	void shutdown();
-	void createOffer();
-	void handleSignalingMessage(const QString &strMessage);
-
-public slots:
-	void pushVideoFrame(const KWebRtcVideoFrame &frame);
-	void sendInputMessage(const QString &strMessage);
-	void sendSessionMessage(const QString &strMessage);
-	void setStreamConfig(const KStreamConfig &config);
-
-signals:
-	void signalingMessageReady(const QString &strMessage);
-	void stateChanged(const QString &strState);
-	void peerError(const QString &strMessage);
-	void remoteFrameReady(const KDecodedVideoFrame &frame);
-	void remoteFrameStatsReady(int nWidth, int nHeight, quint64 nFrameIndex, qint64 nTimestampMs);
-	void networkStatsReady(const KWebRtcNetworkStats &stats);
-	void inputMessageReceived(const QString &strMessage);
-	void inputChannelChanged(bool bOpen);
-	void sessionMessageReceived(const QString &strMessage);
-	void sessionChannelChanged(bool bOpen);
-	void peerConnectionInterrupted();
-	void peerConnectionRestored();
-	void peerConnectionTerminated(const QString &strReason);
+	bool initialize(KSessionRole role, QString *pErrorMessage) override;
+	void shutdown() override;
+	void createOffer() override;
+	void handleSignalingMessage(const QString &strMessage) override;
+	void pushVideoFrame(const KVideoFrame &frame) override;
+	void sendInputMessage(const KInputMessage &message) override;
+	void sendSessionMessage(const KSessionMessage &message) override;
+	void setStreamConfig(const KStreamConfig &config) override;
 
 private:
 	enum DataChannelKind
@@ -129,7 +103,7 @@ private:
 	void handleLatencyPong(const QJsonObject &object);
 	static QString rtcErrorMessage(const QString &strPrefix, const webrtc::RTCError &error);
 
-	Role m_role = ControllerRole;
+	KSessionRole m_role = ControllerSessionRole;
 	class QTimer *m_pStatsTimer = nullptr;
 	std::unique_ptr<webrtc::Thread> m_spNetworkThread;
 	std::unique_ptr<webrtc::Thread> m_spWorkerThread;

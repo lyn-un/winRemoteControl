@@ -1,10 +1,10 @@
-#ifndef _WINREMOTECONTROL_WEBRTCNETWORKSTATS_H_
-#define _WINREMOTECONTROL_WEBRTCNETWORKSTATS_H_
+#ifndef _WINREMOTECONTROL_NETWORKSTATS_H_
+#define _WINREMOTECONTROL_NETWORKSTATS_H_
 
 #include <QtCore/QMetaType>
 #include <QtCore/QString>
 
-struct KWebRtcNetworkStats
+struct KNetworkStats
 {
 	int nRttMs = -1;
 	int nJitterMs = -1;
@@ -21,6 +21,6 @@ struct KWebRtcNetworkStats
 	QString strQuality = QStringLiteral("unknown");
 };
 
-Q_DECLARE_METATYPE(KWebRtcNetworkStats)
+Q_DECLARE_METATYPE(KNetworkStats)
 
-#endif // _WINREMOTECONTROL_WEBRTCNETWORKSTATS_H_
+#endif // _WINREMOTECONTROL_NETWORKSTATS_H_

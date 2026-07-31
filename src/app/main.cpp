@@ -1,10 +1,10 @@
 #include "app/mainwindow.h"
 
-#include "codec/decodedvideoframe.h"
+#include "core/media/decodedvideoframe.h"
 #include "common/latencytracelogger.h"
-#include "common/streamconfig.h"
-#include "transport/webrtc/webrtcnetworkstats.h"
-#include "transport/webrtc/webrtcvideoframe.h"
+#include "core/media/networkstats.h"
+#include "core/media/streamconfig.h"
+#include "core/media/videoframe.h"
 
 #include <QtCore/QMetaType>
 #include <QtNetwork/QNetworkProxy>
@@ -25,8 +25,8 @@ int main(int nArgc, char *pArgv[])
 	QNetworkProxy::setApplicationProxy(QNetworkProxy::NoProxy);
 	qRegisterMetaType<KDecodedVideoFrame>("KDecodedVideoFrame");
 	qRegisterMetaType<KStreamConfig>("KStreamConfig");
-	qRegisterMetaType<KWebRtcNetworkStats>("KWebRtcNetworkStats");
-	qRegisterMetaType<KWebRtcVideoFrame>("KWebRtcVideoFrame");
+	qRegisterMetaType<KNetworkStats>("KNetworkStats");
+	qRegisterMetaType<KVideoFrame>("KVideoFrame");
 
 	KMainWindow mainWindow;
 	mainWindow.resize(1280, 760);

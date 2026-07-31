@@ -1,9 +1,9 @@
 #ifndef _WINREMOTECONTROL_CAPTUREWORKER_H_
 #define _WINREMOTECONTROL_CAPTUREWORKER_H_
 
-#include "codec/decodedvideoframe.h"
-#include "common/streamconfig.h"
-#include "transport/webrtc/webrtcvideoframe.h"
+#include "core/media/decodedvideoframe.h"
+#include "core/media/streamconfig.h"
+#include "core/media/videoframe.h"
 
 #include <QtCore/QObject>
 #include <QtCore/QElapsedTimer>
@@ -44,7 +44,7 @@ signals:
 	void statusChanged(const QString &strStatus);
 	void captureError(const QString &strMessage);
 	void decodedFrameReady(const KDecodedVideoFrame &frame);
-	void webRtcFrameReady(const KWebRtcVideoFrame &frame);
+	void webRtcFrameReady(const KVideoFrame &frame);
 	void frameReady(int nWidth, int nHeight, quint64 nFrameIndex, qint64 nTimestampMs);
 	void workFinished();
 
@@ -58,7 +58,7 @@ private:
 		const KStreamConfig &config,
 		quint64 nLastInputSeq,
 		qint64 nLastInputAgeMs,
-		KWebRtcVideoFrame *pVideoFrame);
+		KVideoFrame *pVideoFrame);
 	static bool resizeBgraFrame(const KCaptureFrame &captureFrame,
 		int nTargetWidth,
 		int nTargetHeight,

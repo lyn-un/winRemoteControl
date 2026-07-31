@@ -1,7 +1,7 @@
 #ifndef _WINREMOTECONTROL_CORE_PROTOCOL_SESSIONMESSAGE_H_
 #define _WINREMOTECONTROL_CORE_PROTOCOL_SESSIONMESSAGE_H_
 
-#include "common/streamconfig.h"
+#include "core/media/streamconfig.h"
 
 #include <QtCore/QString>
 
