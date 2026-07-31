@@ -4,16 +4,10 @@
 #include "common/latencytracelogger.h"
 #include "transport/webrtc/webrtcsessionservice.h"
 
-#include <algorithm>
-
 namespace
 {
 	constexpr int kRemoteMouseButtonLeft = 1;
 	constexpr int kRemoteMouseButtonRight = 2;
-	constexpr qint64 kInputMoveTraceIntervalMs = 500;
-	constexpr qsizetype kMaxPendingInputTraceCount = 2048;
-	constexpr qsizetype kInputRoundTripWindowSize = 120;
-	constexpr quint64 kInputRoundTripStatsInterval = 30;
 	bool isSameStreamConfig(const KStreamConfig &lhs, const KStreamConfig &rhs)
 	{
 		return lhs.nFps == rhs.nFps
@@ -72,7 +66,7 @@ void KSessionViewModel::connectSignaling(const QString &strHost, quint16 nPort)
 void KSessionViewModel::disconnectSession()
 {
 	m_remoteScreenSize = QSize();
-	resetInputRoundTripTrace();
+	m_inputFeedbackTracker.reset();
 	m_pWebRtcSessionService->disconnectSession();
 	emit clearPreviewRequested();
 }
@@ -84,7 +78,7 @@ void KSessionViewModel::enterRemoteDesktop()
 
 void KSessionViewModel::leaveRemoteDesktop()
 {
-	resetInputRoundTripTrace();
+	m_inputFeedbackTracker.reset();
 	m_pWebRtcSessionService->leaveRemoteDesktop();
 	emit clearPreviewRequested();
 }
@@ -105,7 +99,7 @@ void KSessionViewModel::sendRemoteMouseMove(int nX, int nY)
 	message.type = MouseMoveInputMessageType;
 	message.nX = nX;
 	message.nY = nY;
-	sendInputMessage(message, shouldTraceMouseMove());
+	sendInputMessage(message, m_inputFeedbackTracker.shouldTraceMouseMove());
 }
 
 void KSessionViewModel::sendRemoteMouseButton(int nX, int nY, int nButton, bool bPressed)
@@ -185,7 +179,7 @@ void KSessionViewModel::handleWebRtcStateChanged(const QString &strState)
 		|| strState == QStringLiteral("Failed"))
 	{
 		m_remoteScreenSize = QSize();
-		resetInputRoundTripTrace();
+		m_inputFeedbackTracker.reset();
 	}
 }
 
@@ -263,117 +257,11 @@ void KSessionViewModel::sendInputMessage(KInputMessage message, bool bTrace)
 				.arg(message.nY));
 	}
 
-	recordInputSent(message);
+	m_inputFeedbackTracker.recordInputSent(message);
 	m_pWebRtcSessionService->sendInputMessage(message);
 }
 
 void KSessionViewModel::handleInputFeedbackRendered(quint64 nSeq)
 {
-	if (!KLatencyTraceLogger::isEnabled() || !m_inputRoundTripTimer.isValid() || nSeq == 0)
-		return;
-
-	const auto sentTraceIt = m_inputSentTraces.constFind(nSeq);
-	const bool bFoundSentTrace = sentTraceIt != m_inputSentTraces.constEnd();
-	const KPendingInputTrace sentTrace =
-		bFoundSentTrace ? sentTraceIt.value() : KPendingInputTrace();
-	while (!m_inputSentTraces.isEmpty() && m_inputSentTraces.firstKey() <= nSeq)
-		m_inputSentTraces.erase(m_inputSentTraces.begin());
-
-	if (!bFoundSentTrace)
-		return;
-
-	const qint64 nRoundTripMs = m_inputRoundTripTimer.elapsed() - sentTrace.nSentMs;
-	if (nRoundTripMs < 0)
-		return;
-
-	const bool bKeyInput = sentTrace.strType == KInputMessageCodec::typeName(KeyInputMessageType);
-	const bool bIncludeInStats = !bKeyInput || sentTrace.bKeyPressed;
-	const QString strPressed = bKeyInput
-		? QStringLiteral(" pressed=%1").arg(sentTrace.bKeyPressed ? 1 : 0)
-		: QString();
-	KLatencyTraceLogger::write(QStringLiteral("controller"),
-		QStringLiteral("input_roundtrip"),
-		QStringLiteral("seq=%1 type=%2%3 roundTripMs=%4 includedInStats=%5")
-			.arg(nSeq)
-			.arg(sentTrace.strType)
-			.arg(strPressed)
-			.arg(nRoundTripMs)
-			.arg(bIncludeInStats ? 1 : 0));
-
-	if (!bIncludeInStats)
-		return;
-	if (m_inputRoundTripSamples.size() >= kInputRoundTripWindowSize)
-		m_inputRoundTripSamples.remove(0);
-	m_inputRoundTripSamples.append(nRoundTripMs);
-	++m_nInputRoundTripSampleCount;
-	if (m_nInputRoundTripSampleCount % kInputRoundTripStatsInterval == 0)
-		logInputRoundTripStats();
-}
-
-void KSessionViewModel::resetInputRoundTripTrace()
-{
-	m_inputSentTraces.clear();
-	m_inputRoundTripSamples.clear();
-	m_nInputRoundTripSampleCount = 0;
-	m_inputRoundTripTimer.invalidate();
-}
-
-void KSessionViewModel::recordInputSent(const KInputMessage &message)
-{
-	if (!KLatencyTraceLogger::isEnabled())
-		return;
-
-	if (!m_inputRoundTripTimer.isValid())
-		m_inputRoundTripTimer.start();
-	while (m_inputSentTraces.size() >= kMaxPendingInputTraceCount)
-		m_inputSentTraces.erase(m_inputSentTraces.begin());
-
-	KPendingInputTrace trace;
-	trace.nSentMs = m_inputRoundTripTimer.elapsed();
-	trace.strType = KInputMessageCodec::typeName(message.type);
-	trace.bKeyPressed = message.bPressed;
-	m_inputSentTraces.insert(message.nSequence, trace);
-}
-
-void KSessionViewModel::logInputRoundTripStats()
-{
-	if (m_inputRoundTripSamples.isEmpty())
-		return;
-
-	QVector<qint64> sortedSamples = m_inputRoundTripSamples;
-	std::sort(sortedSamples.begin(), sortedSamples.end());
-	qint64 nTotalMs = 0;
-	for (const qint64 nSampleMs : sortedSamples)
-		nTotalMs += nSampleMs;
-
-	const qsizetype nP50Index = (sortedSamples.size() - 1) * 50 / 100;
-	const qsizetype nP95Index = (sortedSamples.size() * 95 + 99) / 100 - 1;
-	const qint64 nAverageMs = (nTotalMs + sortedSamples.size() / 2) / sortedSamples.size();
-	KLatencyTraceLogger::write(QStringLiteral("controller"),
-		QStringLiteral("input_roundtrip_stats"),
-		QStringLiteral("scope=exclude_key_release samples=%1 totalSamples=%2 avgMs=%3 p50Ms=%4 p95Ms=%5 maxMs=%6")
-			.arg(sortedSamples.size())
-			.arg(m_nInputRoundTripSampleCount)
-			.arg(nAverageMs)
-			.arg(sortedSamples.at(nP50Index))
-			.arg(sortedSamples.at(nP95Index))
-			.arg(sortedSamples.constLast()));
-}
-
-bool KSessionViewModel::shouldTraceMouseMove()
-{
-	if (!KLatencyTraceLogger::isEnabled())
-		return false;
-
-	if (!m_inputMoveTraceTimer.isValid())
-	{
-		m_inputMoveTraceTimer.start();
-		return true;
-	}
-
-	if (m_inputMoveTraceTimer.elapsed() < kInputMoveTraceIntervalMs)
-		return false;
-
-	m_inputMoveTraceTimer.restart();
-	return true;
+	m_inputFeedbackTracker.handleRendered(nSeq);
 }

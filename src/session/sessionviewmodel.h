@@ -5,13 +5,11 @@
 #include "core/media/networkstats.h"
 #include "core/media/streamconfig.h"
 #include "core/protocol/inputmessage.h"
+#include "session/inputfeedbacktracker.h"
 
-#include <QtCore/QElapsedTimer>
-#include <QtCore/QMap>
 #include <QtCore/QObject>
 #include <QtCore/QSize>
 #include <QtCore/QString>
-#include <QtCore/QVector>
 
 class KCaptureService;
 class KWebRtcSessionService;
@@ -75,29 +73,14 @@ private slots:
 		int nScreenHeight);
 
 private:
-	struct KPendingInputTrace
-	{
-		qint64 nSentMs = 0;
-		QString strType;
-		bool bKeyPressed = false;
-	};
-
 	void initConnections();
 	void sendInputMessage(KInputMessage message, bool bTrace);
-	bool shouldTraceMouseMove();
-	void resetInputRoundTripTrace();
-	void recordInputSent(const KInputMessage &message);
-	void logInputRoundTripStats();
 
 	KCaptureService *m_pCaptureService = nullptr;
 	KWebRtcSessionService *m_pWebRtcSessionService = nullptr;
 	quint64 m_nInputSequence = 0;
-	quint64 m_nInputRoundTripSampleCount = 0;
 	QSize m_remoteScreenSize;
-	QElapsedTimer m_inputMoveTraceTimer;
-	QElapsedTimer m_inputRoundTripTimer;
-	QMap<quint64, KPendingInputTrace> m_inputSentTraces;
-	QVector<qint64> m_inputRoundTripSamples;
+	KInputFeedbackTracker m_inputFeedbackTracker;
 	KStreamConfig m_streamConfig;
 };
 

@@ -195,6 +195,8 @@ qt_add_executable(winRemoteControl WIN32
 	src/capture/dxgidesktopduplicator.h
 	src/render/videorenderwidget.cpp
 	src/render/videorenderwidget.h
+	src/session/inputfeedbacktracker.cpp
+	src/session/inputfeedbacktracker.h
 	src/session/sessionviewmodel.cpp
 	src/session/sessionviewmodel.h
 	src/ui_bridge/webviewwidget.cpp
