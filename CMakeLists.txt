@@ -123,6 +123,57 @@ target_link_libraries(wrc_session_application PUBLIC
 	Qt6::Network
 )
 
+add_library(wrc_webrtc_adapter STATIC
+	src/transport/webrtc/webrtcpeer.cpp
+	src/transport/webrtc/webrtcpeer.h
+	src/transport/webrtc/webrtcdatachannel.cpp
+	src/transport/webrtc/webrtcdatachannel.h
+	src/transport/webrtc/webrtclatencyprobe.cpp
+	src/transport/webrtc/webrtclatencyprobe.h
+	src/transport/webrtc/webrtcremoteframeprocessor.cpp
+	src/transport/webrtc/webrtcremoteframeprocessor.h
+	src/transport/webrtc/webrtch264decoder.cpp
+	src/transport/webrtc/webrtch264decoder.h
+	src/transport/webrtc/webrtch264encoder.cpp
+	src/transport/webrtc/webrtch264encoder.h
+)
+
+target_compile_definitions(wrc_webrtc_adapter PUBLIC
+	WEBRTC_WIN
+	WEBRTC_USE_H264
+	WEBRTC_ENABLE_PROTOBUF=0
+	UNICODE
+	_UNICODE
+	WIN32_LEAN_AND_MEAN
+	NOMINMAX
+)
+
+target_include_directories(wrc_webrtc_adapter PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+	"${FFMPEG_ROOT}/include"
+	"${WEBRTC_ROOT}"
+	"${WEBRTC_ROOT}/third_party/abseil-cpp"
+	"${WEBRTC_ROOT}/third_party/libyuv/include"
+	"${WEBRTC_OUT}/gen"
+)
+
+target_link_libraries(wrc_webrtc_adapter PUBLIC
+	wrc_core
+	wrc_protocol
+	Qt6::Core
+	"${WEBRTC_OUT}/obj/webrtc.lib"
+	ws2_32
+	winmm
+	secur32
+	crypt32
+	iphlpapi
+	bcrypt
+	dmoguids
+	wmcodecdspuuid
+	msdmo
+	strmiids
+)
+
 qt_add_executable(winRemoteControl WIN32
 	src/app/main.cpp
 	src/app/mainwindow.cpp
@@ -146,18 +197,6 @@ qt_add_executable(winRemoteControl WIN32
 	src/render/videorenderwidget.h
 	src/session/sessionviewmodel.cpp
 	src/session/sessionviewmodel.h
-	src/transport/webrtc/webrtcpeer.cpp
-	src/transport/webrtc/webrtcpeer.h
-	src/transport/webrtc/webrtcdatachannel.cpp
-	src/transport/webrtc/webrtcdatachannel.h
-	src/transport/webrtc/webrtclatencyprobe.cpp
-	src/transport/webrtc/webrtclatencyprobe.h
-	src/transport/webrtc/webrtcremoteframeprocessor.cpp
-	src/transport/webrtc/webrtcremoteframeprocessor.h
-	src/transport/webrtc/webrtch264decoder.cpp
-	src/transport/webrtc/webrtch264decoder.h
-	src/transport/webrtc/webrtch264encoder.cpp
-	src/transport/webrtc/webrtch264encoder.h
 	src/ui_bridge/webviewwidget.cpp
 	src/ui_bridge/webviewwidget.h
 )
@@ -167,19 +206,12 @@ target_compile_definitions(winRemoteControl PRIVATE
 	_UNICODE
 	WIN32_LEAN_AND_MEAN
 	NOMINMAX
-	WEBRTC_WIN
-	WEBRTC_USE_H264
-	WEBRTC_ENABLE_PROTOBUF=0
 )
 
 target_include_directories(winRemoteControl PRIVATE
 	"${CMAKE_CURRENT_SOURCE_DIR}/src"
 	"${WEBVIEW2_ROOT}/build/native/include"
 	"${FFMPEG_ROOT}/include"
-	"${WEBRTC_ROOT}"
-	"${WEBRTC_ROOT}/third_party/abseil-cpp"
-	"${WEBRTC_ROOT}/third_party/libyuv/include"
-	"${WEBRTC_OUT}/gen"
 )
 
 target_link_directories(winRemoteControl PRIVATE
@@ -190,6 +222,7 @@ target_link_libraries(winRemoteControl PRIVATE
 	wrc_core
 	wrc_protocol
 	wrc_session_application
+	wrc_webrtc_adapter
 	wrc_windows_adapters
 	Qt6::Widgets
 	Qt6::Gui
@@ -203,17 +236,6 @@ target_link_libraries(winRemoteControl PRIVATE
 	avcodec
 	avutil
 	swscale
-	"${WEBRTC_OUT}/obj/webrtc.lib"
-	ws2_32
-	winmm
-	secur32
-	crypt32
-	iphlpapi
-	bcrypt
-	dmoguids
-	wmcodecdspuuid
-	msdmo
-	strmiids
 	"${WEBVIEW2_ROOT}/build/native/x64/WebView2Loader.dll.lib"
 )
 
