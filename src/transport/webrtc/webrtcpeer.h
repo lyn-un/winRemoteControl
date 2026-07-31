@@ -72,6 +72,9 @@ signals:
 	void inputChannelChanged(bool bOpen);
 	void sessionMessageReceived(const QString &strMessage);
 	void sessionChannelChanged(bool bOpen);
+	void peerConnectionInterrupted();
+	void peerConnectionRestored();
+	void peerConnectionTerminated(const QString &strReason);
 
 private:
 	void OnSignalingChange(webrtc::PeerConnectionInterface::SignalingState new_state) override;

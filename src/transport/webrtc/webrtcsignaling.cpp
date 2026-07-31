@@ -3,6 +3,8 @@
 #include "common/latencytracelogger.h"
 
 #include <QtCore/QTimer>
+#include <QtCore/QJsonDocument>
+#include <QtCore/QJsonObject>
 #include <QtNetwork/QHostAddress>
 #include <QtNetwork/QNetworkProxy>
 #include <QtNetwork/QTcpServer>
@@ -11,6 +13,8 @@
 namespace
 {
 	constexpr int kConnectTimeoutMs = 3000;
+	constexpr char kMessageType[] = "type";
+	constexpr char kBusy[] = "busy";
 }
 
 KWebRtcSignaling::KWebRtcSignaling(QObject *pParent)
@@ -68,9 +72,23 @@ void KWebRtcSignaling::connectToHost(const QString &strHost, quint16 nPort)
 	pSocket->connectToHost(strHost, nPort);
 }
 
+void KWebRtcSignaling::disconnectPeer()
+{
+	m_bOutgoingConnectionPending = false;
+	m_bPeerBusy = false;
+	m_pConnectTimeoutTimer->stop();
+	m_connectElapsedTimer.invalidate();
+	closeSocket();
+	m_readBuffer.clear();
+	emit stateChanged(m_pServer != nullptr && m_pServer->isListening()
+		? QStringLiteral("Listening")
+		: QStringLiteral("Idle"));
+}
+
 void KWebRtcSignaling::stop()
 {
 	m_bOutgoingConnectionPending = false;
+	m_bPeerBusy = false;
 	m_pConnectTimeoutTimer->stop();
 	m_connectElapsedTimer.invalidate();
 	closeSocket();
@@ -110,9 +128,20 @@ void KWebRtcSignaling::handleNewConnection()
 		return;
 
 	pSocket->setProxy(QNetworkProxy::NoProxy);
+	if (m_bPeerBusy || isConnected())
+	{
+		pSocket->write(QByteArrayLiteral("{\"type\":\"busy\"}\n"));
+		pSocket->flush();
+		pSocket->disconnectFromHost();
+		pSocket->deleteLater();
+		return;
+	}
+
 	closeSocket();
 	setSocket(pSocket);
+	m_bPeerBusy = true;
 	emit stateChanged(QStringLiteral("Connected"));
+	emit incomingConnectionEstablished();
 }
 
 void KWebRtcSignaling::handleReadyRead()
@@ -129,8 +158,22 @@ void KWebRtcSignaling::handleReadyRead()
 
 		const QByteArray line = m_readBuffer.left(nLineEnd).trimmed();
 		m_readBuffer.remove(0, nLineEnd + 1);
-		if (!line.isEmpty())
-			emit messageReceived(QString::fromUtf8(line));
+		if (line.isEmpty())
+			continue;
+
+		const QJsonDocument document = QJsonDocument::fromJson(line);
+		if (document.isObject()
+			&& document.object().value(QString::fromLatin1(kMessageType)).toString()
+				== QString::fromLatin1(kBusy))
+		{
+			emit signalingError(QStringLiteral("The controlled host is already in another session"));
+			closeSocket();
+			emit stateChanged(QStringLiteral("ConnectionFailed"));
+			emit connectionLost();
+			return;
+		}
+
+		emit messageReceived(QString::fromUtf8(line));
 	}
 }
 
@@ -156,6 +199,7 @@ void KWebRtcSignaling::handleConnected()
 void KWebRtcSignaling::handleDisconnected()
 {
 	emit stateChanged(QStringLiteral("Disconnected"));
+	emit connectionLost();
 }
 
 void KWebRtcSignaling::handleSocketError()

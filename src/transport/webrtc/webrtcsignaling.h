@@ -23,6 +23,7 @@ public:
 
 	bool startServer(quint16 nPort, QString *pErrorMessage);
 	void connectToHost(const QString &strHost, quint16 nPort);
+	void disconnectPeer();
 	void stop();
 	bool isConnected() const;
 
@@ -35,6 +36,8 @@ signals:
 	void signalingError(const QString &strMessage);
 	void outgoingConnectionEstablished();
 	void outgoingConnectionFailed(const QString &strMessage);
+	void incomingConnectionEstablished();
+	void connectionLost();
 
 private slots:
 	void handleNewConnection();
@@ -55,6 +58,7 @@ private:
 	QByteArray m_readBuffer;
 	QElapsedTimer m_connectElapsedTimer;
 	bool m_bOutgoingConnectionPending = false;
+	bool m_bPeerBusy = false;
 };
 
 #endif // _WINREMOTECONTROL_WEBRTCSIGNALING_H_

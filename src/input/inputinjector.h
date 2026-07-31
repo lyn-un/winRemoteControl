@@ -19,6 +19,7 @@ public:
 public slots:
 	void handleInputMessage(const QString &strMessage);
 	void releaseAllKeys();
+	void releaseAllInputs();
 
 signals:
 	void inputError(const QString &strMessage);
@@ -29,10 +30,12 @@ private:
 	bool sendMouseButton(int nX, int nY, const QString &strButton, bool bPressed, QString *pErrorMessage);
 	bool sendMouseWheel(int nX, int nY, int nDelta, QString *pErrorMessage);
 	bool sendKey(int nVirtualKey, bool bPressed, bool bExtended, QString *pErrorMessage);
+	void releaseAllMouseButtons();
 	static int clampToRange(int nValue, int nMinValue, int nMaxValue);
 	static QString lastWin32ErrorMessage(const QString &strPrefix);
 
 	QSet<quint32> m_pressedKeys;
+	QSet<QString> m_pressedMouseButtons;
 };
 
 #endif // _WINREMOTECONTROL_INPUTINJECTOR_H_

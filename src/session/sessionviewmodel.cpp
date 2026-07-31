@@ -173,13 +173,29 @@ void KSessionViewModel::handleCaptureStatusChanged(const QString &strStatus)
 	emit statusChanged(strStatus);
 	if (strStatus == QStringLiteral("Stopped") || strStatus == QStringLiteral("Error"))
 		emit clearPreviewRequested();
+	if (strStatus == QStringLiteral("Error"))
+		m_pWebRtcSessionService->handleCaptureFailure();
 }
 
 void KSessionViewModel::handleWebRtcStateChanged(const QString &strState)
 {
 	emit webRtcStateChanged(strState);
-	if (strState == QStringLiteral("Disconnected") || strState == QStringLiteral("Stopped"))
+	if (strState == QStringLiteral("Interrupted")
+		|| strState == QStringLiteral("Disconnected")
+		|| strState == QStringLiteral("Listening")
+		|| strState == QStringLiteral("Failed")
+		|| strState == QStringLiteral("Stopped"))
+	{
 		emit clearPreviewRequested();
+	}
+
+	if (strState == QStringLiteral("Disconnected")
+		|| strState == QStringLiteral("Listening")
+		|| strState == QStringLiteral("Failed"))
+	{
+		m_remoteScreenSize = QSize();
+		resetInputRoundTripTrace();
+	}
 }
 
 void KSessionViewModel::handleRemoteDeviceInfoChanged(const QString &strComputerName,

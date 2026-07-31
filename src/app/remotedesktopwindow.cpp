@@ -84,6 +84,27 @@ void KRemoteDesktopWindow::handleFrameReady(int nWidth,
 	adjustInitialWindowSize(nWidth, nHeight);
 }
 
+void KRemoteDesktopWindow::handleSessionStateChanged(const QString &strState)
+{
+	const bool bUnavailable = strState == QStringLiteral("Interrupted")
+		|| strState == QStringLiteral("Disconnected")
+		|| strState == QStringLiteral("Failed")
+		|| strState == QStringLiteral("Stopping");
+	m_bSessionAvailable = !bUnavailable;
+	if (!m_bSessionAvailable)
+	{
+		m_pVideoRenderWidget->hide();
+		return;
+	}
+
+	if (m_previewRect.width() > 2 && m_previewRect.height() > 2)
+	{
+		m_pVideoRenderWidget->setGeometry(m_previewRect);
+		m_pVideoRenderWidget->show();
+		m_pVideoRenderWidget->raise();
+	}
+}
+
 void KRemoteDesktopWindow::loadFrontend(const QString &strFrontendPath)
 {
 	m_pWebViewWidget->loadLocalFile(strFrontendPath, QStringLiteral("desktop"));
@@ -130,7 +151,8 @@ void KRemoteDesktopWindow::initConnections()
 
 void KRemoteDesktopWindow::updatePreviewRect(const QRect &rect)
 {
-	if (rect.width() <= 2 || rect.height() <= 2)
+	m_previewRect = rect;
+	if (!m_bSessionAvailable || rect.width() <= 2 || rect.height() <= 2)
 	{
 		m_pVideoRenderWidget->hide();
 		return;

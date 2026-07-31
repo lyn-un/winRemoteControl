@@ -55,7 +55,7 @@ KInputInjector::KInputInjector(QObject *pParent)
 
 KInputInjector::~KInputInjector()
 {
-	releaseAllKeys();
+	releaseAllInputs();
 }
 
 void KInputInjector::handleInputMessage(const QString &strMessage)
@@ -161,6 +161,12 @@ void KInputInjector::releaseAllKeys()
 	m_pressedKeys.clear();
 }
 
+void KInputInjector::releaseAllInputs()
+{
+	releaseAllKeys();
+	releaseAllMouseButtons();
+}
+
 bool KInputInjector::sendMouseMove(int nX, int nY, QString *pErrorMessage)
 {
 	const int nScreenWidth = GetSystemMetrics(SM_CXSCREEN);
@@ -218,6 +224,10 @@ bool KInputInjector::sendMouseButton(int nX,
 			*pErrorMessage = lastWin32ErrorMessage(QStringLiteral("Send mouse button failed"));
 		return false;
 	}
+	if (bPressed)
+		m_pressedMouseButtons.insert(strButton);
+	else
+		m_pressedMouseButtons.remove(strButton);
 
 	return true;
 }
@@ -267,6 +277,28 @@ bool KInputInjector::sendKey(int nVirtualKey,
 	else
 		m_pressedKeys.remove(nKeyId);
 	return true;
+}
+
+void KInputInjector::releaseAllMouseButtons()
+{
+	const QSet<QString> pressedButtons = m_pressedMouseButtons;
+	m_pressedMouseButtons.clear();
+	for (const QString &strButton : pressedButtons)
+	{
+		DWORD dwFlags = 0;
+		if (strButton == QString::fromLatin1(kLeft))
+			dwFlags = MOUSEEVENTF_LEFTUP;
+		else if (strButton == QString::fromLatin1(kRight))
+			dwFlags = MOUSEEVENTF_RIGHTUP;
+		else
+			continue;
+
+		INPUT input = {};
+		input.type = INPUT_MOUSE;
+		input.mi.dwFlags = dwFlags;
+		if (SendInput(1, &input, sizeof(INPUT)) != 1)
+			emit inputError(lastWin32ErrorMessage(QStringLiteral("Release mouse button failed")));
+	}
 }
 
 int KInputInjector::clampToRange(int nValue, int nMinValue, int nMaxValue)

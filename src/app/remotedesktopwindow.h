@@ -28,6 +28,7 @@ public:
 public slots:
 	void setRemoteScreenSize(int nWidth, int nHeight);
 	void handleFrameReady(int nWidth, int nHeight, quint64 nFrameIndex, qint64 nTimestampMs);
+	void handleSessionStateChanged(const QString &strState);
 
 signals:
 	void desktopCloseRequested();
@@ -50,6 +51,8 @@ private:
 
 	bool m_bClosing = false;
 	bool m_bInitialSizeAdjusted = false;
+	bool m_bSessionAvailable = true;
+	QRect m_previewRect;
 	KStreamConfig m_streamConfig;
 	KWebViewWidget *m_pWebViewWidget = nullptr;
 	KVideoRenderWidget *m_pVideoRenderWidget = nullptr;

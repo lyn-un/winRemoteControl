@@ -13,6 +13,7 @@
 
 class KWebRtcSignaling;
 class KInputInjector;
+class QTimer;
 
 class KWebRtcSessionService : public QObject
 {
@@ -38,6 +39,7 @@ public slots:
 	void sendInputMessage(const QString &strMessage);
 	void sendSessionMessage(const QString &strMessage);
 	void sendStreamConfig(const KStreamConfig &config);
+	void handleCaptureFailure();
 
 signals:
 	void signalingChanged(const QString &strState);
@@ -60,15 +62,36 @@ signals:
 	void inputFeedbackFrameRequested();
 
 private:
+	enum SessionState
+	{
+		IdleSessionState,
+		ListeningSessionState,
+		ConnectingSessionState,
+		NegotiatingSessionState,
+		ConnectedSessionState,
+		StreamingSessionState,
+		InterruptedSessionState,
+		StoppingSessionState
+	};
+
 	bool initializePeer(KWebRtcPeer::Role role, QString *pErrorMessage);
 	void wirePeer();
+	void finishSession(const QString &strReason, bool bKeepListening, bool bNotifyRemote, bool bReportError);
+	void resetInputTraceState();
 	void handleRemoteFrame(const KDecodedVideoFrame &frame);
+	void handleInputMessage(const QString &strMessage);
 	void handleInputChannelChanged(bool bOpen);
 	void handleSessionChannelChanged(bool bOpen);
 	void handleSessionMessage(const QString &strMessage);
 	void handleInputInjected(quint64 nSeq, qint64 nInjectedMs);
 	void handleOutgoingConnectionEstablished();
 	void handleOutgoingConnectionFailed(const QString &strMessage);
+	void handleIncomingConnectionEstablished();
+	void handleSignalingConnectionLost();
+	void handlePeerConnectionInterrupted();
+	void handlePeerConnectionRestored();
+	void handlePeerConnectionTerminated(const QString &strReason);
+	void handleDisconnectGraceTimeout();
 	void sendDeviceInfoMessage();
 	QString createDeviceInfoMessage(const QString &strWallpaperMime, const QString &strWallpaperData) const;
 	QString createControlMessage(const QString &strType) const;
@@ -79,11 +102,18 @@ private:
 	QString m_strRole = QStringLiteral("controller");
 	bool m_bDeviceInfoRequested = false;
 	bool m_bControllerConnectionPending = false;
+	bool m_bEndingSession = false;
+	bool m_bInputAllowed = false;
+	bool m_bInputChannelOpen = false;
+	bool m_bSessionChannelOpen = false;
+	bool m_bStreaming = false;
 	quint64 m_nLastInjectedInputSeq = 0;
 	qint64 m_nLastInjectedInputMs = -1;
+	SessionState m_sessionState = IdleSessionState;
 	KWebRtcSignaling *m_pSignaling = nullptr;
 	KWebRtcPeer *m_pPeer = nullptr;
 	KInputInjector *m_pInputInjector = nullptr;
+	QTimer *m_pDisconnectGraceTimer = nullptr;
 };
 
 #endif // _WINREMOTECONTROL_WEBRTCSESSIONSERVICE_H_

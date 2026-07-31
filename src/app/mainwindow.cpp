@@ -121,6 +121,8 @@ void KMainWindow::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWindow)
 		pWindow->webViewWidget(), &KWebViewWidget::sendSignalingChanged);
 	connect(m_pSessionViewModel, &KSessionViewModel::webRtcStateChanged,
 		pWindow->webViewWidget(), &KWebViewWidget::sendWebRtcStateChanged);
+	connect(m_pSessionViewModel, &KSessionViewModel::webRtcStateChanged,
+		pWindow, &KRemoteDesktopWindow::handleSessionStateChanged);
 	connect(m_pSessionViewModel, &KSessionViewModel::remoteDeviceInfoChanged,
 		pWindow->webViewWidget(), &KWebViewWidget::sendDeviceInfoChanged);
 	connect(m_pSessionViewModel, &KSessionViewModel::remoteDeviceInfoChanged,

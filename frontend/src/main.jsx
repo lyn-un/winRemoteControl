@@ -110,6 +110,9 @@ function useNativeState() {
         }
         if (!message.open) {
           setDeviceInfo(null);
+          setFrame(null);
+          setFps(0);
+          frameTimes.current = [];
           setNetworkStats({
             quality: "unknown",
             rttMs: -1,
@@ -309,9 +312,11 @@ function DashboardPage() {
           <div className="controlled-card">
             <strong>{state.sessionOpen ? "控制端已连接" : "正在等待连接"}</strong>
             <p>对方点击“进入桌面”后，本机才会开始推送画面。</p>
-            <button className="secondary" onClick={() => sendCommand("stopStreaming")}>
-              停止推流
-            </button>
+            {state.sessionOpen && (
+              <button className="secondary danger-button" onClick={() => sendCommand("stopStreaming")}>
+                结束控制
+              </button>
+            )}
           </div>
         ) : (
           <div className="device-list">
@@ -351,6 +356,8 @@ function DesktopPage() {
   const state = useNativeState();
   const previewSlotRef = useRef(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const sessionUnavailable = ["Interrupted", "Stopping", "Disconnected", "Failed"]
+    .includes(state.webrtcState);
 
   const qualityPresets = {
     ultraFast: { label: "极速", fps: 60, width: 1280, height: 720, bitrateKbps: 4000 },
@@ -517,6 +524,19 @@ function DesktopPage() {
       </header>
       <section className="desktop-stage">
         <div ref={previewSlotRef} className="native-preview-slot desktop-slot" />
+        {sessionUnavailable && (
+          <div className="desktop-disconnected">
+            <strong>{state.webrtcState === "Interrupted" ? "连接暂时中断" : "远程连接已断开"}</strong>
+            <p>
+              {state.webrtcState === "Interrupted"
+                ? "正在等待网络恢复，恢复前不会继续发送输入。"
+                : "本次远程控制已经结束，请返回主界面重新连接。"}
+            </p>
+            {state.webrtcState !== "Interrupted" && (
+              <button className="primary" onClick={() => sendCommand("closeDesktop")}>返回主界面</button>
+            )}
+          </div>
+        )}
       </section>
       {state.error && <p className="desktop-error">{state.error}</p>}
     </main>

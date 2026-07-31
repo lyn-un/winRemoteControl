@@ -925,19 +925,26 @@ void KWebRtcPeer::OnRenegotiationNeeded()
 void KWebRtcPeer::OnIceConnectionChange(webrtc::PeerConnectionInterface::IceConnectionState new_state)
 {
 	emit stateChanged(stringViewToQString(webrtc::PeerConnectionInterface::AsString(new_state)));
-	if (m_role != ControllerRole)
-		return;
-
 	if (new_state == webrtc::PeerConnectionInterface::kIceConnectionConnected
 		|| new_state == webrtc::PeerConnectionInterface::kIceConnectionCompleted)
 	{
-		startStatsPolling(QStringLiteral("ice_connected"));
+		if (m_role == ControllerRole)
+			startStatsPolling(QStringLiteral("ice_connected"));
+		emit peerConnectionRestored();
 	}
-	else if (new_state == webrtc::PeerConnectionInterface::kIceConnectionDisconnected
-		|| new_state == webrtc::PeerConnectionInterface::kIceConnectionFailed
+	else if (new_state == webrtc::PeerConnectionInterface::kIceConnectionDisconnected)
+	{
+		stopStatsPolling();
+		emit peerConnectionInterrupted();
+	}
+	else if (new_state == webrtc::PeerConnectionInterface::kIceConnectionFailed
 		|| new_state == webrtc::PeerConnectionInterface::kIceConnectionClosed)
 	{
 		stopStatsPolling();
+		emit peerConnectionTerminated(
+			new_state == webrtc::PeerConnectionInterface::kIceConnectionFailed
+				? QStringLiteral("ice_failed")
+				: QStringLiteral("ice_closed"));
 	}
 }
 
