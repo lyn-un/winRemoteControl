@@ -2,12 +2,13 @@
 
 #include "adapters/windows/device/windowsdeviceinfoprovider.h"
 #include "adapters/windows/input/windowsinputinjector.h"
+#include "adapters/signaling/tcpsignalingtransport.h"
 #include "app/remotedesktopwindow.h"
 #include "capture/captureservice.h"
 #include "render/videorenderwidget.h"
 #include "session/sessionviewmodel.h"
 #include "transport/webrtc/webrtcpeer.h"
-#include "transport/webrtc/webrtcsessionservice.h"
+#include "session/sessioncoordinator.h"
 #include "ui_bridge/webviewwidget.h"
 
 #include <memory>
@@ -15,10 +16,11 @@
 KApplicationComposition::KApplicationComposition(QObject *pParent)
 	: QObject(pParent)
 	, m_pCaptureService(new KCaptureService(this))
-	, m_pSessionService(new KWebRtcSessionService(
+	, m_pSessionService(new KSessionCoordinator(
 		std::make_unique<KWindowsDeviceInfoProvider>(),
 		std::make_unique<KWindowsInputInjector>(),
 		std::make_unique<KWebRtcPeer>(),
+		std::make_unique<KTcpSignalingTransport>(),
 		this))
 	, m_pSessionViewModel(new KSessionViewModel(
 		m_pCaptureService,
@@ -157,18 +159,18 @@ void KApplicationComposition::shutdown()
 void KApplicationComposition::wireServices()
 {
 	connect(m_pCaptureService, &KCaptureService::webRtcFrameReady,
-		m_pSessionService, &KWebRtcSessionService::pushVideoFrame);
+		m_pSessionService, &KSessionCoordinator::pushVideoFrame);
 	connect(m_pCaptureService, &KCaptureService::captureError,
-		m_pSessionService, &KWebRtcSessionService::handleCaptureFailure);
+		m_pSessionService, &KSessionCoordinator::handleCaptureFailure);
 
-	connect(m_pSessionService, &KWebRtcSessionService::startCaptureRequested,
+	connect(m_pSessionService, &KSessionCoordinator::startCaptureRequested,
 		m_pCaptureService, &KCaptureService::startWebRtcCapture);
-	connect(m_pSessionService, &KWebRtcSessionService::stopCaptureRequested,
+	connect(m_pSessionService, &KSessionCoordinator::stopCaptureRequested,
 		m_pCaptureService, &KCaptureService::stopCapture);
-	connect(m_pSessionService, &KWebRtcSessionService::streamConfigChanged,
+	connect(m_pSessionService, &KSessionCoordinator::streamConfigChanged,
 		m_pCaptureService, &KCaptureService::setStreamConfig);
-	connect(m_pSessionService, &KWebRtcSessionService::inputTraceUpdated,
+	connect(m_pSessionService, &KSessionCoordinator::inputTraceUpdated,
 		m_pCaptureService, &KCaptureService::setInputTraceState);
-	connect(m_pSessionService, &KWebRtcSessionService::inputFeedbackFrameRequested,
+	connect(m_pSessionService, &KSessionCoordinator::inputFeedbackFrameRequested,
 		m_pCaptureService, &KCaptureService::requestImmediateFrame);
 }

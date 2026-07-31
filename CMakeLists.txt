@@ -61,6 +61,7 @@ add_library(wrc_core STATIC
 	src/core/session/sessionstatemachine.cpp
 	src/core/session/sessionstatemachine.h
 	src/core/transport/remotepeertransport.h
+	src/core/transport/signalingtransport.h
 	src/core/transport/networkstatstracker.cpp
 	src/core/transport/networkstatstracker.h
 )
@@ -107,11 +108,9 @@ add_library(wrc_session_application STATIC
 	src/common/sessiontracelogger.h
 	src/input/inputinjector.cpp
 	src/input/inputinjector.h
+	src/session/sessioncoordinator.cpp
+	src/session/sessioncoordinator.h
 	src/session/sessioncontroller.h
-	src/transport/webrtc/webrtcsessionservice.cpp
-	src/transport/webrtc/webrtcsessionservice.h
-	src/transport/webrtc/webrtcsignaling.cpp
-	src/transport/webrtc/webrtcsignaling.h
 )
 
 target_include_directories(wrc_session_application PUBLIC
@@ -121,6 +120,21 @@ target_include_directories(wrc_session_application PUBLIC
 target_link_libraries(wrc_session_application PUBLIC
 	wrc_core
 	wrc_protocol
+	Qt6::Core
+)
+
+add_library(wrc_signaling_adapter STATIC
+	src/adapters/signaling/tcpsignalingtransport.cpp
+	src/adapters/signaling/tcpsignalingtransport.h
+)
+
+target_include_directories(wrc_signaling_adapter PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_signaling_adapter PUBLIC
+	wrc_core
+	wrc_session_application
 	Qt6::Core
 	Qt6::Network
 )
@@ -309,6 +323,7 @@ target_link_libraries(winRemoteControl PRIVATE
 	wrc_core
 	wrc_protocol
 	wrc_session_application
+	wrc_signaling_adapter
 	wrc_webrtc_adapter
 	wrc_windows_adapters
 	wrc_windows_capture_adapter
@@ -352,6 +367,7 @@ if(BUILD_TESTING)
 	)
 	target_link_libraries(wrc_session_service_tests PRIVATE
 		wrc_session_application
+		wrc_signaling_adapter
 		Qt6::Core
 		Qt6::Network
 	)

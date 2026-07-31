@@ -7,7 +7,7 @@ class KCaptureService;
 class KRemoteDesktopWindow;
 class KSessionViewModel;
 class KWebViewWidget;
-class KWebRtcSessionService;
+class KSessionCoordinator;
 
 class KApplicationComposition : public QObject
 {
@@ -30,7 +30,7 @@ private:
 	void wireServices();
 
 	KCaptureService *m_pCaptureService = nullptr;
-	KWebRtcSessionService *m_pSessionService = nullptr;
+	KSessionCoordinator *m_pSessionService = nullptr;
 	KSessionViewModel *m_pSessionViewModel = nullptr;
 	bool m_bShutdown = false;
 };

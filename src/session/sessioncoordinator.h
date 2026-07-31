@@ -1,5 +1,5 @@
-#ifndef _WINREMOTECONTROL_WEBRTCSESSIONSERVICE_H_
-#define _WINREMOTECONTROL_WEBRTCSESSIONSERVICE_H_
+#ifndef _WINREMOTECONTROL_SESSIONCOORDINATOR_H_
+#define _WINREMOTECONTROL_SESSIONCOORDINATOR_H_
 
 #include "core/media/decodedvideoframe.h"
 #include "core/media/networkstats.h"
@@ -18,23 +18,24 @@
 
 class IKDeviceInfoProvider;
 class IKInputInjector;
-class KWebRtcSignaling;
 class KInputInjector;
+class KSignalingTransport;
 class QTimer;
 
-class KWebRtcSessionService : public KSessionController
+class KSessionCoordinator : public KSessionController
 {
 	Q_OBJECT
 
 public:
-	explicit KWebRtcSessionService(std::unique_ptr<IKDeviceInfoProvider> spDeviceInfoProvider,
+	explicit KSessionCoordinator(std::unique_ptr<IKDeviceInfoProvider> spDeviceInfoProvider,
 		std::unique_ptr<IKInputInjector> spInputInjector,
 		std::unique_ptr<KRemotePeerTransport> spRemotePeerTransport,
+		std::unique_ptr<KSignalingTransport> spSignalingTransport,
 		QObject *pParent = nullptr);
-	~KWebRtcSessionService() override;
+	~KSessionCoordinator() override;
 
-	KWebRtcSessionService(const KWebRtcSessionService &) = delete;
-	KWebRtcSessionService &operator=(const KWebRtcSessionService &) = delete;
+	KSessionCoordinator(const KSessionCoordinator &) = delete;
+	KSessionCoordinator &operator=(const KSessionCoordinator &) = delete;
 
 public slots:
 	void setRole(const QString &strRole) override;
@@ -85,9 +86,10 @@ private:
 	qint64 m_nLastInjectedInputMs = -1;
 	std::unique_ptr<IKDeviceInfoProvider> m_spDeviceInfoProvider;
 	std::unique_ptr<KRemotePeerTransport> m_spRemotePeerTransport;
-	KWebRtcSignaling *m_pSignaling = nullptr;
+	std::unique_ptr<KSignalingTransport> m_spSignalingTransport;
+	KSignalingTransport *m_pSignaling = nullptr;
 	KInputInjector *m_pInputInjector = nullptr;
 	QTimer *m_pDisconnectGraceTimer = nullptr;
 };
 
-#endif // _WINREMOTECONTROL_WEBRTCSESSIONSERVICE_H_
+#endif // _WINREMOTECONTROL_SESSIONCOORDINATOR_H_

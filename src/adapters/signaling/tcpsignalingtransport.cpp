@@ -1,4 +1,4 @@
-#include "transport/webrtc/webrtcsignaling.h"
+#include "adapters/signaling/tcpsignalingtransport.h"
 
 #include "common/latencytracelogger.h"
 
@@ -17,28 +17,28 @@ namespace
 	constexpr char kBusy[] = "busy";
 }
 
-KWebRtcSignaling::KWebRtcSignaling(QObject *pParent)
-	: QObject(pParent)
+KTcpSignalingTransport::KTcpSignalingTransport(QObject *pParent)
+	: KSignalingTransport(pParent)
 	, m_pConnectTimeoutTimer(new QTimer(this))
 {
 	m_pConnectTimeoutTimer->setSingleShot(true);
 	connect(m_pConnectTimeoutTimer, &QTimer::timeout,
-		this, &KWebRtcSignaling::handleConnectTimeout);
+		this, &KTcpSignalingTransport::handleConnectTimeout);
 }
 
-KWebRtcSignaling::~KWebRtcSignaling()
+KTcpSignalingTransport::~KTcpSignalingTransport()
 {
 	stop();
 }
 
-bool KWebRtcSignaling::startServer(quint16 nPort, QString *pErrorMessage)
+bool KTcpSignalingTransport::startServer(quint16 nPort, QString *pErrorMessage)
 {
 	stop();
 
 	m_pServer = new QTcpServer(this);
 	m_pServer->setProxy(QNetworkProxy::NoProxy);
 	connect(m_pServer, &QTcpServer::newConnection,
-		this, &KWebRtcSignaling::handleNewConnection);
+		this, &KTcpSignalingTransport::handleNewConnection);
 
 	if (!m_pServer->listen(QHostAddress::AnyIPv4, nPort))
 	{
@@ -52,7 +52,7 @@ bool KWebRtcSignaling::startServer(quint16 nPort, QString *pErrorMessage)
 	return true;
 }
 
-void KWebRtcSignaling::connectToHost(const QString &strHost, quint16 nPort)
+void KTcpSignalingTransport::connectToHost(const QString &strHost, quint16 nPort)
 {
 	stop();
 
@@ -72,7 +72,7 @@ void KWebRtcSignaling::connectToHost(const QString &strHost, quint16 nPort)
 	pSocket->connectToHost(strHost, nPort);
 }
 
-void KWebRtcSignaling::disconnectPeer()
+void KTcpSignalingTransport::disconnectPeer()
 {
 	m_bOutgoingConnectionPending = false;
 	m_bPeerBusy = false;
@@ -85,7 +85,7 @@ void KWebRtcSignaling::disconnectPeer()
 		: QStringLiteral("Idle"));
 }
 
-void KWebRtcSignaling::stop()
+void KTcpSignalingTransport::stop()
 {
 	m_bOutgoingConnectionPending = false;
 	m_bPeerBusy = false;
@@ -102,12 +102,12 @@ void KWebRtcSignaling::stop()
 	emit stateChanged(QStringLiteral("Idle"));
 }
 
-bool KWebRtcSignaling::isConnected() const
+bool KTcpSignalingTransport::isConnected() const
 {
 	return m_pSocket != nullptr && m_pSocket->state() == QAbstractSocket::ConnectedState;
 }
 
-void KWebRtcSignaling::sendJsonMessage(const QString &strMessage)
+void KTcpSignalingTransport::sendMessage(const QString &strMessage)
 {
 	if (!isConnected())
 		return;
@@ -118,7 +118,7 @@ void KWebRtcSignaling::sendJsonMessage(const QString &strMessage)
 	m_pSocket->flush();
 }
 
-void KWebRtcSignaling::handleNewConnection()
+void KTcpSignalingTransport::handleNewConnection()
 {
 	if (m_pServer == nullptr)
 		return;
@@ -144,7 +144,7 @@ void KWebRtcSignaling::handleNewConnection()
 	emit incomingConnectionEstablished();
 }
 
-void KWebRtcSignaling::handleReadyRead()
+void KTcpSignalingTransport::handleReadyRead()
 {
 	if (m_pSocket == nullptr)
 		return;
@@ -177,7 +177,7 @@ void KWebRtcSignaling::handleReadyRead()
 	}
 }
 
-void KWebRtcSignaling::handleConnected()
+void KTcpSignalingTransport::handleConnected()
 {
 	if (m_bOutgoingConnectionPending)
 	{
@@ -196,13 +196,13 @@ void KWebRtcSignaling::handleConnected()
 	emit stateChanged(QStringLiteral("Connected"));
 }
 
-void KWebRtcSignaling::handleDisconnected()
+void KTcpSignalingTransport::handleDisconnected()
 {
 	emit stateChanged(QStringLiteral("Disconnected"));
 	emit connectionLost();
 }
 
-void KWebRtcSignaling::handleSocketError()
+void KTcpSignalingTransport::handleSocketError()
 {
 	if (m_pSocket == nullptr)
 		return;
@@ -217,7 +217,7 @@ void KWebRtcSignaling::handleSocketError()
 	emit signalingError(strError);
 }
 
-void KWebRtcSignaling::handleConnectTimeout()
+void KTcpSignalingTransport::handleConnectTimeout()
 {
 	if (!m_bOutgoingConnectionPending)
 		return;
@@ -226,20 +226,20 @@ void KWebRtcSignaling::handleConnectTimeout()
 		QStringLiteral("Signaling connection timed out after %1 ms").arg(kConnectTimeoutMs));
 }
 
-void KWebRtcSignaling::setSocket(QTcpSocket *pSocket)
+void KTcpSignalingTransport::setSocket(QTcpSocket *pSocket)
 {
 	m_pSocket = pSocket;
 	connect(m_pSocket, &QTcpSocket::readyRead,
-		this, &KWebRtcSignaling::handleReadyRead);
+		this, &KTcpSignalingTransport::handleReadyRead);
 	connect(m_pSocket, &QTcpSocket::connected,
-		this, &KWebRtcSignaling::handleConnected);
+		this, &KTcpSignalingTransport::handleConnected);
 	connect(m_pSocket, &QTcpSocket::disconnected,
-		this, &KWebRtcSignaling::handleDisconnected);
+		this, &KTcpSignalingTransport::handleDisconnected);
 	connect(m_pSocket, &QTcpSocket::errorOccurred,
-		this, &KWebRtcSignaling::handleSocketError);
+		this, &KTcpSignalingTransport::handleSocketError);
 }
 
-void KWebRtcSignaling::closeSocket()
+void KTcpSignalingTransport::closeSocket()
 {
 	if (m_pSocket == nullptr)
 		return;
@@ -250,7 +250,7 @@ void KWebRtcSignaling::closeSocket()
 	m_pSocket = nullptr;
 }
 
-void KWebRtcSignaling::failOutgoingConnection(const QString &strReason, const QString &strMessage)
+void KTcpSignalingTransport::failOutgoingConnection(const QString &strReason, const QString &strMessage)
 {
 	if (!m_bOutgoingConnectionPending)
 		return;

@@ -1,7 +1,8 @@
+#include "adapters/signaling/tcpsignalingtransport.h"
 #include "core/input/inputinjectorinterface.h"
 #include "core/session/deviceinfoprovider.h"
 #include "core/transport/remotepeertransport.h"
-#include "transport/webrtc/webrtcsessionservice.h"
+#include "session/sessioncoordinator.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDebug>
@@ -165,18 +166,19 @@ namespace
 		KFakeInputInjector *pInputInjector = spInputInjector.get();
 		auto spTransport = std::make_unique<KFakeRemotePeerTransport>();
 		KFakeRemotePeerTransport *pTransport = spTransport.get();
-		KWebRtcSessionService service(std::make_unique<KFakeDeviceInfoProvider>(),
+		KSessionCoordinator service(std::make_unique<KFakeDeviceInfoProvider>(),
 			std::move(spInputInjector),
-			std::move(spTransport));
+			std::move(spTransport),
+			std::make_unique<KTcpSignalingTransport>());
 
 		int nStartCaptureCount = 0;
 		int nStopCaptureCount = 0;
 		bool bNegotiating = false;
-		QObject::connect(&service, &KWebRtcSessionService::startCaptureRequested,
+		QObject::connect(&service, &KSessionCoordinator::startCaptureRequested,
 			[&nStartCaptureCount]() { ++nStartCaptureCount; });
-		QObject::connect(&service, &KWebRtcSessionService::stopCaptureRequested,
+		QObject::connect(&service, &KSessionCoordinator::stopCaptureRequested,
 			[&nStopCaptureCount]() { ++nStopCaptureCount; });
-		QObject::connect(&service, &KWebRtcSessionService::webRtcStateChanged,
+		QObject::connect(&service, &KSessionCoordinator::webRtcStateChanged,
 			[&bNegotiating](const QString &strState)
 			{
 				if (strState == QStringLiteral("Negotiating"))
