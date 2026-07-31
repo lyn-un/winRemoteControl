@@ -1,6 +1,8 @@
 #ifndef _WINREMOTECONTROL_INPUTINJECTOR_H_
 #define _WINREMOTECONTROL_INPUTINJECTOR_H_
 
+#include "core/protocol/inputmessage.h"
+
 #include <QtCore/QObject>
 #include <QtCore/QSet>
 #include <QtCore/QString>
@@ -17,7 +19,7 @@ public:
 	KInputInjector &operator=(const KInputInjector &) = delete;
 
 public slots:
-	void handleInputMessage(const QString &strMessage);
+	void handleInputMessage(const KInputMessage &message);
 	void releaseAllKeys();
 	void releaseAllInputs();
 
@@ -27,7 +29,11 @@ signals:
 
 private:
 	bool sendMouseMove(int nX, int nY, QString *pErrorMessage);
-	bool sendMouseButton(int nX, int nY, const QString &strButton, bool bPressed, QString *pErrorMessage);
+	bool sendMouseButton(int nX,
+		int nY,
+		KRemoteMouseButton button,
+		bool bPressed,
+		QString *pErrorMessage);
 	bool sendMouseWheel(int nX, int nY, int nDelta, QString *pErrorMessage);
 	bool sendKey(int nVirtualKey, bool bPressed, bool bExtended, QString *pErrorMessage);
 	void releaseAllMouseButtons();
@@ -35,7 +41,7 @@ private:
 	static QString lastWin32ErrorMessage(const QString &strPrefix);
 
 	QSet<quint32> m_pressedKeys;
-	QSet<QString> m_pressedMouseButtons;
+	QSet<int> m_pressedMouseButtons;
 };
 
 #endif // _WINREMOTECONTROL_INPUTINJECTOR_H_

@@ -2,7 +2,6 @@
 
 #include "common/framewatermark.h"
 #include "common/latencytracelogger.h"
-#include "common/sessiontracelogger.h"
 #include "transport/webrtc/webrtch264decoder.h"
 #include "transport/webrtc/webrtch264encoder.h"
 
@@ -69,6 +68,36 @@ private:
 	QPointer<KWebRtcPeer> m_pPeer;
 };
 
+class KWebRtcDataChannelObserver : public webrtc::DataChannelObserver
+{
+public:
+	KWebRtcDataChannelObserver(KWebRtcPeer *pPeer, KWebRtcPeer::DataChannelKind kind)
+		: m_pPeer(pPeer)
+		, m_kind(kind)
+	{
+	}
+
+	void OnStateChange() override
+	{
+		if (m_pPeer)
+			m_pPeer->handleDataChannelStateChanged(m_kind);
+	}
+
+	void OnMessage(const webrtc::DataBuffer &buffer) override
+	{
+		if (m_pPeer)
+			m_pPeer->handleDataChannelMessage(m_kind, buffer);
+	}
+
+	void OnBufferedAmountChange(uint64_t) override
+	{
+	}
+
+private:
+	QPointer<KWebRtcPeer> m_pPeer;
+	KWebRtcPeer::DataChannelKind m_kind;
+};
+
 namespace
 {
 	constexpr char kMessageType[] = "messageType";
@@ -98,14 +127,7 @@ namespace
 	constexpr double kSecondsToMilliseconds = 1000.0;
 	constexpr quint64 kVideoTraceFrameInterval = 30;
 	constexpr quint64 kRemoteCallbackFrameCoalesceTraceInterval = 30;
-	constexpr char kInputMouseMove[] = "mouseMove";
-	constexpr char kInputMouseButton[] = "mouseButton";
-	constexpr char kInputMouseWheel[] = "mouseWheel";
-	constexpr char kInputKey[] = "key";
-	constexpr char kInputType[] = "type";
-	constexpr char kInputSeq[] = "seq";
-	constexpr char kInputTrace[] = "trace";
-	constexpr char kInputPressed[] = "pressed";
+	constexpr char kDataChannelMessageType[] = "type";
 	constexpr char kLatencyPing[] = "latencyPing";
 	constexpr char kLatencyPong[] = "latencyPong";
 	constexpr char kLatencyId[] = "id";
@@ -151,51 +173,16 @@ namespace
 			: QStringLiteral("controlled");
 	}
 
-	static QString sessionMessageType(const QString &strMessage)
-	{
-		const QJsonDocument document = QJsonDocument::fromJson(strMessage.toUtf8());
-		if (!document.isObject())
-			return QStringLiteral("invalid");
-
-		const QString strType = document.object().value(QStringLiteral("type")).toString();
-		return strType.isEmpty() ? QStringLiteral("unknown") : strType;
-	}
-
 	static QJsonObject jsonObjectFromMessage(const QString &strMessage)
 	{
 		const QJsonDocument document = QJsonDocument::fromJson(strMessage.toUtf8());
 		return document.isObject() ? document.object() : QJsonObject();
 	}
 
-	static bool isKeyInputMessage(const QJsonObject &object)
-	{
-		return object.value(QString::fromLatin1(kInputType)).toString()
-			== QString::fromLatin1(kInputKey);
-	}
-
-	static bool shouldTraceInputMessage(const QJsonObject &object)
-	{
-		return object.value(QString::fromLatin1(kInputTrace)).toBool(false)
-			|| (KLatencyTraceLogger::isEnabled() && isKeyInputMessage(object));
-	}
-
 	static bool isLatencyMessageType(const QString &strType)
 	{
 		return strType == QString::fromLatin1(kLatencyPing)
 			|| strType == QString::fromLatin1(kLatencyPong);
-	}
-
-	static QString inputTraceExtra(const QJsonObject &object)
-	{
-		QString strExtra = QStringLiteral("seq=%1 type=%2")
-			.arg(object.value(QString::fromLatin1(kInputSeq)).toString())
-			.arg(object.value(QString::fromLatin1(kInputType)).toString());
-		if (isKeyInputMessage(object))
-		{
-			strExtra += QStringLiteral(" pressed=%1")
-				.arg(object.value(QString::fromLatin1(kInputPressed)).toBool() ? 1 : 0);
-		}
-		return strExtra;
 	}
 
 	class KWebRtcRawVideoSource : public webrtc::VideoSourceInterface<webrtc::VideoFrame>
@@ -433,13 +420,23 @@ void KWebRtcPeer::shutdown()
 	{
 		m_spInputDataChannel->UnregisterObserver();
 		m_spInputDataChannel = nullptr;
+		m_spInputDataChannelObserver.reset();
 		emit inputChannelChanged(false);
+	}
+	else
+	{
+		m_spInputDataChannelObserver.reset();
 	}
 	if (m_spSessionDataChannel)
 	{
 		m_spSessionDataChannel->UnregisterObserver();
 		m_spSessionDataChannel = nullptr;
+		m_spSessionDataChannelObserver.reset();
 		emit sessionChannelChanged(false);
+	}
+	else
+	{
+		m_spSessionDataChannelObserver.reset();
 	}
 
 	if (m_spRemoteVideoTrack)
@@ -514,20 +511,6 @@ void KWebRtcPeer::sendInputMessage(const QString &strMessage)
 		return;
 
 	const QByteArray utf8Message = strMessage.toUtf8();
-	const QJsonObject object = jsonObjectFromMessage(strMessage);
-	if (shouldTraceInputMessage(object))
-	{
-		const QString strExtra = isKeyInputMessage(object)
-			? inputTraceExtra(object)
-			: QStringLiteral("%1 size=%2 buffered=%3")
-				.arg(inputTraceExtra(object))
-				.arg(utf8Message.size())
-				.arg(static_cast<qulonglong>(m_spInputDataChannel->buffered_amount()));
-		KLatencyTraceLogger::write(roleToString(m_role),
-			QStringLiteral("input_send"),
-			strExtra);
-	}
-
 	webrtc::DataBuffer buffer(std::string(utf8Message.constData(),
 			static_cast<size_t>(utf8Message.size())));
 	m_spInputDataChannel->Send(buffer);
@@ -543,7 +526,7 @@ void KWebRtcPeer::sendLatencyPing()
 	}
 
 	QJsonObject object;
-	object.insert(QString::fromLatin1(kInputType), QString::fromLatin1(kLatencyPing));
+	object.insert(QString::fromLatin1(kDataChannelMessageType), QString::fromLatin1(kLatencyPing));
 	object.insert(QString::fromLatin1(kLatencyId), QString::number(++m_nLatencyPingId));
 	object.insert(QString::fromLatin1(kLatencySendMs), QDateTime::currentMSecsSinceEpoch());
 
@@ -563,7 +546,7 @@ void KWebRtcPeer::handleLatencyPing(const QJsonObject &object)
 	}
 
 	QJsonObject response;
-	response.insert(QString::fromLatin1(kInputType), QString::fromLatin1(kLatencyPong));
+	response.insert(QString::fromLatin1(kDataChannelMessageType), QString::fromLatin1(kLatencyPong));
 	response.insert(QString::fromLatin1(kLatencyId), object.value(QString::fromLatin1(kLatencyId)));
 	response.insert(QString::fromLatin1(kLatencySendMs), object.value(QString::fromLatin1(kLatencySendMs)));
 
@@ -594,20 +577,9 @@ void KWebRtcPeer::handleLatencyPong(const QJsonObject &object)
 void KWebRtcPeer::sendSessionMessage(const QString &strMessage)
 {
 	if (!m_spSessionDataChannel || m_spSessionDataChannel->state() != webrtc::DataChannelInterface::kOpen)
-	{
-		KSessionTraceLogger::write(roleToString(m_role),
-			QStringLiteral("send_drop"),
-			sessionMessageType(strMessage),
-			strMessage.toUtf8().size(),
-			QStringLiteral("reason=session_channel_not_open"));
 		return;
-	}
 
 	const QByteArray utf8Message = strMessage.toUtf8();
-	KSessionTraceLogger::write(roleToString(m_role),
-		QStringLiteral("send"),
-		sessionMessageType(strMessage),
-		utf8Message.size());
 	webrtc::DataBuffer buffer(std::string(utf8Message.constData(),
 			static_cast<size_t>(utf8Message.size())));
 	m_spSessionDataChannel->Send(buffer);
@@ -980,7 +952,7 @@ void KWebRtcPeer::OnTrack(webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>
 	OnAddTrack(spTransceiver->receiver(), spTransceiver->receiver()->streams());
 }
 
-void KWebRtcPeer::OnStateChange()
+void KWebRtcPeer::handleDataChannelStateChanged(DataChannelKind)
 {
 	const bool bInputOpen = m_spInputDataChannel
 		&& m_spInputDataChannel->state() == webrtc::DataChannelInterface::kOpen;
@@ -994,15 +966,21 @@ void KWebRtcPeer::OnStateChange()
 		startStatsPolling(QStringLiteral("input_channel_open"));
 }
 
-void KWebRtcPeer::OnMessage(const webrtc::DataBuffer &buffer)
+void KWebRtcPeer::handleDataChannelMessage(DataChannelKind kind, const webrtc::DataBuffer &buffer)
 {
 	if (buffer.binary)
 		return;
 
 	const char *pData = reinterpret_cast<const char *>(buffer.data.data());
 	const QString strMessage = QString::fromUtf8(pData, static_cast<int>(buffer.data.size()));
+	if (kind == SessionDataChannelKind)
+	{
+		emit sessionMessageReceived(strMessage);
+		return;
+	}
+
 	const QJsonObject object = jsonObjectFromMessage(strMessage);
-	const QString strMessageType = object.value(QString::fromLatin1(kInputType)).toString();
+	const QString strMessageType = object.value(QString::fromLatin1(kDataChannelMessageType)).toString();
 	if (isLatencyMessageType(strMessageType))
 	{
 		if (strMessageType == QString::fromLatin1(kLatencyPing))
@@ -1010,34 +988,8 @@ void KWebRtcPeer::OnMessage(const webrtc::DataBuffer &buffer)
 		else if (strMessageType == QString::fromLatin1(kLatencyPong))
 			handleLatencyPong(object);
 	}
-	else if (isInputMessage(strMessage))
-	{
-		if (shouldTraceInputMessage(object))
-		{
-			const QString strExtra = isKeyInputMessage(object)
-				? inputTraceExtra(object)
-				: QStringLiteral("%1 size=%2")
-					.arg(inputTraceExtra(object))
-					.arg(static_cast<int>(buffer.data.size()));
-			KLatencyTraceLogger::write(roleToString(m_role),
-				QStringLiteral("input_recv"),
-				strExtra);
-		}
-
-		emit inputMessageReceived(strMessage);
-	}
 	else
-	{
-		KSessionTraceLogger::write(roleToString(m_role),
-			QStringLiteral("recv"),
-			sessionMessageType(strMessage),
-			static_cast<int>(buffer.data.size()));
-		emit sessionMessageReceived(strMessage);
-	}
-}
-
-void KWebRtcPeer::OnBufferedAmountChange(uint64_t)
-{
+		emit inputMessageReceived(strMessage);
 }
 
 void KWebRtcPeer::handleLocalDescription(webrtc::SessionDescriptionInterface *pDescription)
@@ -1368,6 +1320,7 @@ void KWebRtcPeer::setInputDataChannel(webrtc::scoped_refptr<webrtc::DataChannelI
 {
 	if (m_spInputDataChannel)
 		m_spInputDataChannel->UnregisterObserver();
+	m_spInputDataChannelObserver.reset();
 
 	m_spInputDataChannel = spChannel;
 	if (!m_spInputDataChannel)
@@ -1376,14 +1329,17 @@ void KWebRtcPeer::setInputDataChannel(webrtc::scoped_refptr<webrtc::DataChannelI
 		return;
 	}
 
-	m_spInputDataChannel->RegisterObserver(this);
-	OnStateChange();
+	m_spInputDataChannelObserver = std::make_unique<KWebRtcDataChannelObserver>(
+		this, InputDataChannelKind);
+	m_spInputDataChannel->RegisterObserver(m_spInputDataChannelObserver.get());
+	handleDataChannelStateChanged(InputDataChannelKind);
 }
 
 void KWebRtcPeer::setSessionDataChannel(webrtc::scoped_refptr<webrtc::DataChannelInterface> spChannel)
 {
 	if (m_spSessionDataChannel)
 		m_spSessionDataChannel->UnregisterObserver();
+	m_spSessionDataChannelObserver.reset();
 
 	m_spSessionDataChannel = spChannel;
 	if (!m_spSessionDataChannel)
@@ -1392,21 +1348,10 @@ void KWebRtcPeer::setSessionDataChannel(webrtc::scoped_refptr<webrtc::DataChanne
 		return;
 	}
 
-	m_spSessionDataChannel->RegisterObserver(this);
-	OnStateChange();
-}
-
-bool KWebRtcPeer::isInputMessage(const QString &strMessage)
-{
-	const QJsonDocument document = QJsonDocument::fromJson(strMessage.toUtf8());
-	if (!document.isObject())
-		return false;
-
-	const QString strType = document.object().value(QStringLiteral("type")).toString();
-	return strType == QStringLiteral("mouseMove")
-		|| strType == QStringLiteral("mouseButton")
-		|| strType == QStringLiteral("mouseWheel")
-		|| strType == QStringLiteral("key");
+	m_spSessionDataChannelObserver = std::make_unique<KWebRtcDataChannelObserver>(
+		this, SessionDataChannelKind);
+	m_spSessionDataChannel->RegisterObserver(m_spSessionDataChannelObserver.get());
+	handleDataChannelStateChanged(SessionDataChannelKind);
 }
 
 void KWebRtcPeer::sendSessionDescription(const webrtc::SessionDescriptionInterface *pDescription)

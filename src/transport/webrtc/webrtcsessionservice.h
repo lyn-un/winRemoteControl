@@ -3,12 +3,13 @@
 
 #include "codec/decodedvideoframe.h"
 #include "common/streamconfig.h"
+#include "core/protocol/inputmessage.h"
+#include "core/protocol/sessionmessage.h"
 #include "transport/webrtc/webrtcnetworkstats.h"
 #include "transport/webrtc/webrtcpeer.h"
 #include "transport/webrtc/webrtcvideoframe.h"
 
 #include <QtCore/QObject>
-#include <QtCore/QJsonObject>
 #include <QtCore/QString>
 
 class KWebRtcSignaling;
@@ -36,8 +37,7 @@ public slots:
 	void startStreaming();
 	void stopStreaming();
 	void pushVideoFrame(const KWebRtcVideoFrame &frame);
-	void sendInputMessage(const QString &strMessage);
-	void sendSessionMessage(const QString &strMessage);
+	void sendInputMessage(const KInputMessage &message);
 	void sendStreamConfig(const KStreamConfig &config);
 	void handleCaptureFailure();
 
@@ -76,6 +76,7 @@ private:
 
 	bool initializePeer(KWebRtcPeer::Role role, QString *pErrorMessage);
 	void wirePeer();
+	void sendSessionMessage(const KSessionMessage &message);
 	void finishSession(const QString &strReason, bool bKeepListening, bool bNotifyRemote, bool bReportError);
 	void resetInputTraceState();
 	void handleRemoteFrame(const KDecodedVideoFrame &frame);
@@ -93,10 +94,6 @@ private:
 	void handlePeerConnectionTerminated(const QString &strReason);
 	void handleDisconnectGraceTimeout();
 	void sendDeviceInfoMessage();
-	QString createDeviceInfoMessage(const QString &strWallpaperMime, const QString &strWallpaperData) const;
-	QString createControlMessage(const QString &strType) const;
-	QString createStreamConfigMessage(const KStreamConfig &config) const;
-	static KStreamConfig streamConfigFromJson(const QJsonObject &object);
 	static QString readWallpaperBase64(QString *pMimeType);
 
 	QString m_strRole = QStringLiteral("controller");

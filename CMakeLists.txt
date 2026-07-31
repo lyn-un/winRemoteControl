@@ -14,10 +14,27 @@ set(CMAKE_PREFIX_PATH "D:/Qt/6.10.2/msvc2022_64" CACHE PATH "Qt 6 MSVC 2022 path
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Gui Network)
 
+include(CTest)
+
 set(WEBVIEW2_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2")
 set(FFMPEG_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ffmpeg")
 set(WEBRTC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/webrtc/src")
 set(WEBRTC_OUT "${WEBRTC_ROOT}/out/wrc_release_x64_msvcstl")
+
+add_library(wrc_protocol STATIC
+	src/core/protocol/inputmessage.cpp
+	src/core/protocol/inputmessage.h
+	src/core/protocol/sessionmessage.cpp
+	src/core/protocol/sessionmessage.h
+)
+
+target_include_directories(wrc_protocol PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_protocol PUBLIC
+	Qt6::Core
+)
 
 qt_add_executable(winRemoteControl WIN32
 	src/app/main.cpp
@@ -91,6 +108,7 @@ target_link_directories(winRemoteControl PRIVATE
 )
 
 target_link_libraries(winRemoteControl PRIVATE
+	wrc_protocol
 	Qt6::Widgets
 	Qt6::Gui
 	Qt6::Network
@@ -116,6 +134,17 @@ target_link_libraries(winRemoteControl PRIVATE
 	strmiids
 	"${WEBVIEW2_ROOT}/build/native/x64/WebView2Loader.dll.lib"
 )
+
+if(BUILD_TESTING)
+	add_executable(wrc_protocol_tests
+		tests/unit/protocolcodectest.cpp
+	)
+	target_link_libraries(wrc_protocol_tests PRIVATE
+		wrc_protocol
+		Qt6::Core
+	)
+	add_test(NAME wrc_protocol_tests COMMAND wrc_protocol_tests)
+endif()
 
 set(WEBVIEW2_LOADER "${WEBVIEW2_ROOT}/build/native/x64/WebView2Loader.dll")
 set(FRONTEND_DIST "${CMAKE_CURRENT_SOURCE_DIR}/frontend/dist")

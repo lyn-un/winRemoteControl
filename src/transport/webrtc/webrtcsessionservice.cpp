@@ -6,8 +6,6 @@
 #include "transport/webrtc/webrtcsignaling.h"
 
 #include <QtCore/QBuffer>
-#include <QtCore/QJsonDocument>
-#include <QtCore/QJsonObject>
 #include <QtCore/QSysInfo>
 #include <QtCore/QTimer>
 #include <QtGui/QImage>
@@ -24,29 +22,27 @@ namespace
 	constexpr int kWallpaperPathBufferLength = MAX_PATH;
 	constexpr int kDisconnectGraceMs = 5000;
 
-	constexpr char kType[] = "type";
-	constexpr char kDeviceInfoRequest[] = "deviceInfoRequest";
-	constexpr char kDeviceInfo[] = "deviceInfo";
-	constexpr char kStartStreaming[] = "startStreaming";
-	constexpr char kStopStreaming[] = "stopStreaming";
-	constexpr char kEndSession[] = "endSession";
-	constexpr char kReason[] = "reason";
-	constexpr char kStreamConfig[] = "streamConfig";
-	constexpr char kComputerName[] = "computerName";
-	constexpr char kWallpaperMime[] = "wallpaperMime";
-	constexpr char kWallpaperData[] = "wallpaperData";
-	constexpr char kScreenWidth[] = "screenWidth";
-	constexpr char kScreenHeight[] = "screenHeight";
-	constexpr char kFps[] = "fps";
-	constexpr char kWidth[] = "width";
-	constexpr char kHeight[] = "height";
-	constexpr char kBitrateKbps[] = "bitrateKbps";
-
 	static QString roleToString(const QString &strRole)
 	{
 		return strRole == QStringLiteral("controller")
 			? QStringLiteral("controller")
 			: QStringLiteral("controlled");
+	}
+
+	static bool shouldTraceInputMessage(const KInputMessage &message)
+	{
+		return message.bTrace
+			|| (message.type == KeyInputMessageType && KLatencyTraceLogger::isEnabled());
+	}
+
+	static QString inputTraceExtra(const KInputMessage &message)
+	{
+		QString strExtra = QStringLiteral("seq=%1 type=%2")
+			.arg(message.nSequence)
+			.arg(KInputMessageCodec::typeName(message.type));
+		if (message.type == KeyInputMessageType)
+			strExtra += QStringLiteral(" pressed=%1").arg(message.bPressed ? 1 : 0);
+		return strExtra;
 	}
 }
 
@@ -158,7 +154,9 @@ void KWebRtcSessionService::enterRemoteDesktop(const KStreamConfig &config)
 			.arg(config.nFps)
 			.arg(config.nBitrateKbps));
 	sendStreamConfig(config);
-	sendSessionMessage(createControlMessage(QString::fromLatin1(kStartStreaming)));
+	KSessionMessage message;
+	message.type = StartStreamingSessionMessageType;
+	sendSessionMessage(message);
 	m_bStreaming = true;
 	m_sessionState = StreamingSessionState;
 	emit webRtcStateChanged(QStringLiteral("Streaming"));
@@ -171,7 +169,9 @@ void KWebRtcSessionService::leaveRemoteDesktop()
 	{
 		return;
 	}
-	sendSessionMessage(createControlMessage(QString::fromLatin1(kStopStreaming)));
+	KSessionMessage message;
+	message.type = StopStreamingSessionMessageType;
+	sendSessionMessage(message);
 	m_bStreaming = false;
 	m_sessionState = ConnectedSessionState;
 	emit stopCaptureRequested();
@@ -212,7 +212,7 @@ void KWebRtcSessionService::pushVideoFrame(const KWebRtcVideoFrame &frame)
 		m_pPeer->pushVideoFrame(frame);
 }
 
-void KWebRtcSessionService::sendInputMessage(const QString &strMessage)
+void KWebRtcSessionService::sendInputMessage(const KInputMessage &message)
 {
 	if (m_strRole != QStringLiteral("controller")
 		|| !m_bStreaming
@@ -221,21 +221,50 @@ void KWebRtcSessionService::sendInputMessage(const QString &strMessage)
 	{
 		return;
 	}
-	if (m_pPeer != nullptr)
-		m_pPeer->sendInputMessage(strMessage);
+	if (m_pPeer == nullptr)
+		return;
+
+	const QString strMessage = KInputMessageCodec::encode(message);
+	if (shouldTraceInputMessage(message))
+	{
+		KLatencyTraceLogger::write(roleToString(m_strRole),
+			QStringLiteral("input_send"),
+			QStringLiteral("%1 size=%2")
+				.arg(inputTraceExtra(message))
+				.arg(strMessage.toUtf8().size()));
+	}
+	m_pPeer->sendInputMessage(strMessage);
 }
 
-void KWebRtcSessionService::sendSessionMessage(const QString &strMessage)
+void KWebRtcSessionService::sendSessionMessage(const KSessionMessage &message)
 {
-	if (m_pPeer != nullptr)
-		m_pPeer->sendSessionMessage(strMessage);
+	const QString strType = KSessionMessageCodec::typeName(message.type);
+	const QString strMessage = KSessionMessageCodec::encode(message);
+	if (m_pPeer == nullptr || !m_bSessionChannelOpen)
+	{
+		KSessionTraceLogger::write(roleToString(m_strRole),
+			QStringLiteral("send_drop"),
+			strType,
+			strMessage.toUtf8().size(),
+			QStringLiteral("reason=session_channel_not_open"));
+		return;
+	}
+
+	KSessionTraceLogger::write(roleToString(m_strRole),
+		QStringLiteral("send"),
+		strType,
+		strMessage.toUtf8().size());
+	m_pPeer->sendSessionMessage(strMessage);
 }
 
 void KWebRtcSessionService::sendStreamConfig(const KStreamConfig &config)
 {
 	if (m_strRole != QStringLiteral("controller"))
 		return;
-	sendSessionMessage(createStreamConfigMessage(config));
+	KSessionMessage message;
+	message.type = StreamConfigSessionMessageType;
+	message.streamConfig = config;
+	sendSessionMessage(message);
 }
 
 void KWebRtcSessionService::handleCaptureFailure()
@@ -271,10 +300,10 @@ void KWebRtcSessionService::finishSession(const QString &strReason,
 
 	if (bNotifyRemote && m_bSessionChannelOpen)
 	{
-		QJsonObject object;
-		object.insert(QString::fromLatin1(kType), QString::fromLatin1(kEndSession));
-		object.insert(QString::fromLatin1(kReason), strReason);
-		sendSessionMessage(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+		KSessionMessage message;
+		message.type = EndSessionMessageType;
+		message.strReason = strReason;
+		sendSessionMessage(message);
 	}
 
 	m_pDisconnectGraceTimer->stop();
@@ -400,6 +429,27 @@ void KWebRtcSessionService::handleRemoteFrame(const KDecodedVideoFrame &frame)
 
 void KWebRtcSessionService::handleInputMessage(const QString &strMessage)
 {
+	KInputMessage message;
+	QString strError;
+	if (!KInputMessageCodec::decode(strMessage, &message, &strError))
+	{
+		KSessionTraceLogger::write(roleToString(m_strRole),
+			QStringLiteral("protocol_reject"),
+			QStringLiteral("input"),
+			strMessage.toUtf8().size(),
+			strError);
+		return;
+	}
+
+	if (shouldTraceInputMessage(message))
+	{
+		KLatencyTraceLogger::write(roleToString(m_strRole),
+			QStringLiteral("input_recv"),
+			QStringLiteral("%1 size=%2")
+				.arg(inputTraceExtra(message))
+				.arg(strMessage.toUtf8().size()));
+	}
+
 	if (m_strRole != QStringLiteral("controlled")
 		|| !m_bInputAllowed
 		|| !m_bStreaming
@@ -408,7 +458,7 @@ void KWebRtcSessionService::handleInputMessage(const QString &strMessage)
 		return;
 	}
 
-	m_pInputInjector->handleInputMessage(strMessage);
+	m_pInputInjector->handleInputMessage(message);
 }
 
 void KWebRtcSessionService::handleInputChannelChanged(bool bOpen)
@@ -456,7 +506,7 @@ void KWebRtcSessionService::handleSessionChannelChanged(bool bOpen)
 		{
 			KSessionTraceLogger::write(roleToString(m_strRole),
 				QStringLiteral("skip"),
-				QString::fromLatin1(kDeviceInfoRequest),
+				KSessionMessageCodec::typeName(DeviceInfoRequestSessionMessageType),
 				-1,
 				QStringLiteral("reason=already_requested"));
 			return;
@@ -465,40 +515,52 @@ void KWebRtcSessionService::handleSessionChannelChanged(bool bOpen)
 		m_bDeviceInfoRequested = true;
 		KSessionTraceLogger::write(roleToString(m_strRole),
 			QStringLiteral("handle_channel_open"),
-			QString::fromLatin1(kDeviceInfoRequest));
-		sendSessionMessage(createControlMessage(QString::fromLatin1(kDeviceInfoRequest)));
+			KSessionMessageCodec::typeName(DeviceInfoRequestSessionMessageType));
+		KSessionMessage message;
+		message.type = DeviceInfoRequestSessionMessageType;
+		sendSessionMessage(message);
 	}
 }
 
 void KWebRtcSessionService::handleSessionMessage(const QString &strMessage)
 {
-	const QJsonDocument document = QJsonDocument::fromJson(strMessage.toUtf8());
-	if (!document.isObject())
+	KSessionMessage message;
+	QString strError;
+	if (!KSessionMessageCodec::decode(strMessage, &message, &strError))
+	{
+		KSessionTraceLogger::write(roleToString(m_strRole),
+			QStringLiteral("protocol_reject"),
+			QStringLiteral("session"),
+			strMessage.toUtf8().size(),
+			strError);
 		return;
+	}
 
-	const QJsonObject object = document.object();
-	const QString strType = object.value(QString::fromLatin1(kType)).toString();
+	const QString strType = KSessionMessageCodec::typeName(message.type);
 	KSessionTraceLogger::write(roleToString(m_strRole),
 		QStringLiteral("handle"),
 		strType,
 		strMessage.toUtf8().size());
-	if (strType == QString::fromLatin1(kDeviceInfoRequest) && m_strRole == QStringLiteral("controlled"))
+	if (message.type == DeviceInfoRequestSessionMessageType
+		&& m_strRole == QStringLiteral("controlled"))
 	{
 		sendDeviceInfoMessage();
 		return;
 	}
 
-	if (strType == QString::fromLatin1(kDeviceInfo) && m_strRole == QStringLiteral("controller"))
+	if (message.type == DeviceInfoSessionMessageType
+		&& m_strRole == QStringLiteral("controller"))
 	{
-		emit remoteDeviceInfoChanged(object.value(QString::fromLatin1(kComputerName)).toString(),
-			object.value(QString::fromLatin1(kWallpaperMime)).toString(),
-			object.value(QString::fromLatin1(kWallpaperData)).toString(),
-			object.value(QString::fromLatin1(kScreenWidth)).toInt(),
-			object.value(QString::fromLatin1(kScreenHeight)).toInt());
+		emit remoteDeviceInfoChanged(message.deviceInfo.strComputerName,
+			message.deviceInfo.strWallpaperMime,
+			message.deviceInfo.strWallpaperData,
+			message.deviceInfo.nScreenWidth,
+			message.deviceInfo.nScreenHeight);
 		return;
 	}
 
-	if (strType == QString::fromLatin1(kStartStreaming) && m_strRole == QStringLiteral("controlled"))
+	if (message.type == StartStreamingSessionMessageType
+		&& m_strRole == QStringLiteral("controlled"))
 	{
 		KSessionTraceLogger::write(roleToString(m_strRole),
 			QStringLiteral("emit"),
@@ -511,7 +573,8 @@ void KWebRtcSessionService::handleSessionMessage(const QString &strMessage)
 		return;
 	}
 
-	if (strType == QString::fromLatin1(kStopStreaming) && m_strRole == QStringLiteral("controlled"))
+	if (message.type == StopStreamingSessionMessageType
+		&& m_strRole == QStringLiteral("controlled"))
 	{
 		m_bInputAllowed = false;
 		m_bStreaming = false;
@@ -523,9 +586,9 @@ void KWebRtcSessionService::handleSessionMessage(const QString &strMessage)
 		return;
 	}
 
-	if (strType == QString::fromLatin1(kEndSession))
+	if (message.type == EndSessionMessageType)
 	{
-		const QString strRemoteReason = object.value(QString::fromLatin1(kReason)).toString();
+		const QString strRemoteReason = message.strReason;
 		finishSession(strRemoteReason.isEmpty()
 				? QStringLiteral("remote_stop")
 				: QStringLiteral("remote_%1").arg(strRemoteReason),
@@ -535,12 +598,12 @@ void KWebRtcSessionService::handleSessionMessage(const QString &strMessage)
 		return;
 	}
 
-	if (strType == QString::fromLatin1(kStreamConfig) && m_strRole == QStringLiteral("controlled"))
+	if (message.type == StreamConfigSessionMessageType
+		&& m_strRole == QStringLiteral("controlled"))
 	{
-		const KStreamConfig config = streamConfigFromJson(object);
 		if (m_pPeer != nullptr)
-			m_pPeer->setStreamConfig(config);
-		emit streamConfigChanged(config);
+			m_pPeer->setStreamConfig(message.streamConfig);
+		emit streamConfigChanged(message.streamConfig);
 	}
 }
 
@@ -658,61 +721,23 @@ void KWebRtcSessionService::sendDeviceInfoMessage()
 {
 	QString strMimeType;
 	const QString strWallpaperData = readWallpaperBase64(&strMimeType);
-	const QString strMessage = createDeviceInfoMessage(strMimeType, strWallpaperData);
+	KSessionMessage message;
+	message.type = DeviceInfoSessionMessageType;
+	message.deviceInfo.strComputerName = QSysInfo::machineHostName();
+	message.deviceInfo.nScreenWidth = ::GetSystemMetrics(SM_CXSCREEN);
+	message.deviceInfo.nScreenHeight = ::GetSystemMetrics(SM_CYSCREEN);
+	message.deviceInfo.strWallpaperMime = strMimeType;
+	message.deviceInfo.strWallpaperData = strWallpaperData;
+	const QString strMessage = KSessionMessageCodec::encode(message);
 	KSessionTraceLogger::write(roleToString(m_strRole),
 		QStringLiteral("prepare"),
-		QString::fromLatin1(kDeviceInfo),
+		KSessionMessageCodec::typeName(DeviceInfoSessionMessageType),
 		strMessage.toUtf8().size(),
 		QStringLiteral("wallpaper=%1 wallpaperBytes=%2 messageBytes=%3")
 			.arg(strWallpaperData.isEmpty() ? 0 : 1)
 			.arg(strWallpaperData.size())
 			.arg(strMessage.toUtf8().size()));
-	sendSessionMessage(strMessage);
-}
-
-QString KWebRtcSessionService::createDeviceInfoMessage(const QString &strWallpaperMime,
-	const QString &strWallpaperData) const
-{
-	QJsonObject object;
-	object.insert(QString::fromLatin1(kType), QString::fromLatin1(kDeviceInfo));
-	object.insert(QString::fromLatin1(kComputerName), QSysInfo::machineHostName());
-	object.insert(QString::fromLatin1(kScreenWidth), ::GetSystemMetrics(SM_CXSCREEN));
-	object.insert(QString::fromLatin1(kScreenHeight), ::GetSystemMetrics(SM_CYSCREEN));
-	if (!strWallpaperData.isEmpty())
-	{
-		object.insert(QString::fromLatin1(kWallpaperMime), strWallpaperMime);
-		object.insert(QString::fromLatin1(kWallpaperData), strWallpaperData);
-	}
-
-	return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
-}
-
-QString KWebRtcSessionService::createControlMessage(const QString &strType) const
-{
-	QJsonObject object;
-	object.insert(QString::fromLatin1(kType), strType);
-	return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
-}
-
-QString KWebRtcSessionService::createStreamConfigMessage(const KStreamConfig &config) const
-{
-	QJsonObject object;
-	object.insert(QString::fromLatin1(kType), QString::fromLatin1(kStreamConfig));
-	object.insert(QString::fromLatin1(kFps), config.nFps);
-	object.insert(QString::fromLatin1(kWidth), config.nWidth);
-	object.insert(QString::fromLatin1(kHeight), config.nHeight);
-	object.insert(QString::fromLatin1(kBitrateKbps), config.nBitrateKbps);
-	return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
-}
-
-KStreamConfig KWebRtcSessionService::streamConfigFromJson(const QJsonObject &object)
-{
-	KStreamConfig config;
-	config.nFps = object.value(QString::fromLatin1(kFps)).toInt(config.nFps);
-	config.nWidth = object.value(QString::fromLatin1(kWidth)).toInt(config.nWidth);
-	config.nHeight = object.value(QString::fromLatin1(kHeight)).toInt(config.nHeight);
-	config.nBitrateKbps = object.value(QString::fromLatin1(kBitrateKbps)).toInt(config.nBitrateKbps);
-	return config;
+	sendSessionMessage(message);
 }
 
 QString KWebRtcSessionService::readWallpaperBase64(QString *pMimeType)

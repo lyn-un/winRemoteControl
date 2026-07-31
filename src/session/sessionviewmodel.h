@@ -3,10 +3,10 @@
 
 #include "codec/decodedvideoframe.h"
 #include "common/streamconfig.h"
+#include "core/protocol/inputmessage.h"
 #include "transport/webrtc/webrtcnetworkstats.h"
 
 #include <QtCore/QElapsedTimer>
-#include <QtCore/QJsonObject>
 #include <QtCore/QMap>
 #include <QtCore/QObject>
 #include <QtCore/QSize>
@@ -81,10 +81,10 @@ private:
 	};
 
 	void initConnections();
-	void sendInputJsonMessage(QJsonObject object, bool bTrace);
+	void sendInputMessage(KInputMessage message, bool bTrace);
 	bool shouldTraceMouseMove();
 	void resetInputRoundTripTrace();
-	void recordInputSent(quint64 nSeq, const QJsonObject &object);
+	void recordInputSent(const KInputMessage &message);
 	void logInputRoundTripStats();
 
 	KCaptureService *m_pCaptureService = nullptr;

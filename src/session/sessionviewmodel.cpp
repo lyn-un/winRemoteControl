@@ -4,9 +4,6 @@
 #include "common/latencytracelogger.h"
 #include "transport/webrtc/webrtcsessionservice.h"
 
-#include <QtCore/QJsonDocument>
-#include <QtCore/QJsonObject>
-
 #include <algorithm>
 
 namespace
@@ -17,14 +14,6 @@ namespace
 	constexpr qsizetype kMaxPendingInputTraceCount = 2048;
 	constexpr qsizetype kInputRoundTripWindowSize = 120;
 	constexpr quint64 kInputRoundTripStatsInterval = 30;
-	constexpr char kType[] = "type";
-	constexpr char kX[] = "x";
-	constexpr char kY[] = "y";
-	constexpr char kSeq[] = "seq";
-	constexpr char kTrace[] = "trace";
-	constexpr char kPressed[] = "pressed";
-	constexpr char kKey[] = "key";
-
 	bool isSameStreamConfig(const KStreamConfig &lhs, const KStreamConfig &rhs)
 	{
 		return lhs.nFps == rhs.nFps
@@ -110,40 +99,40 @@ void KSessionViewModel::stopStreaming()
 
 void KSessionViewModel::sendRemoteMouseMove(int nX, int nY)
 {
-	QJsonObject object;
-	object.insert(QStringLiteral("type"), QStringLiteral("mouseMove"));
-	object.insert(QStringLiteral("x"), nX);
-	object.insert(QStringLiteral("y"), nY);
-	sendInputJsonMessage(object, shouldTraceMouseMove());
+	KInputMessage message;
+	message.type = MouseMoveInputMessageType;
+	message.nX = nX;
+	message.nY = nY;
+	sendInputMessage(message, shouldTraceMouseMove());
 }
 
 void KSessionViewModel::sendRemoteMouseButton(int nX, int nY, int nButton, bool bPressed)
 {
-	QString strButton;
+	KRemoteMouseButton mouseButton = NoRemoteMouseButton;
 	if (nButton == kRemoteMouseButtonLeft)
-		strButton = QStringLiteral("left");
+		mouseButton = LeftRemoteMouseButton;
 	else if (nButton == kRemoteMouseButtonRight)
-		strButton = QStringLiteral("right");
+		mouseButton = RightRemoteMouseButton;
 	else
 		return;
 
-	QJsonObject object;
-	object.insert(QStringLiteral("type"), QStringLiteral("mouseButton"));
-	object.insert(QStringLiteral("button"), strButton);
-	object.insert(QStringLiteral("pressed"), bPressed);
-	object.insert(QStringLiteral("x"), nX);
-	object.insert(QStringLiteral("y"), nY);
-	sendInputJsonMessage(object, true);
+	KInputMessage message;
+	message.type = MouseButtonInputMessageType;
+	message.mouseButton = mouseButton;
+	message.bPressed = bPressed;
+	message.nX = nX;
+	message.nY = nY;
+	sendInputMessage(message, true);
 }
 
 void KSessionViewModel::sendRemoteMouseWheel(int nX, int nY, int nDelta)
 {
-	QJsonObject object;
-	object.insert(QStringLiteral("type"), QStringLiteral("mouseWheel"));
-	object.insert(QStringLiteral("delta"), nDelta);
-	object.insert(QStringLiteral("x"), nX);
-	object.insert(QStringLiteral("y"), nY);
-	sendInputJsonMessage(object, true);
+	KInputMessage message;
+	message.type = MouseWheelInputMessageType;
+	message.nWheelDelta = nDelta;
+	message.nX = nX;
+	message.nY = nY;
+	sendInputMessage(message, true);
 }
 
 void KSessionViewModel::sendRemoteKey(int nVirtualKey, bool bPressed, bool bExtended)
@@ -151,12 +140,12 @@ void KSessionViewModel::sendRemoteKey(int nVirtualKey, bool bPressed, bool bExte
 	if (nVirtualKey <= 0 || nVirtualKey > 0xFF)
 		return;
 
-	QJsonObject object;
-	object.insert(QStringLiteral("type"), QStringLiteral("key"));
-	object.insert(QStringLiteral("vk"), nVirtualKey);
-	object.insert(QStringLiteral("pressed"), bPressed);
-	object.insert(QStringLiteral("extended"), bExtended);
-	sendInputJsonMessage(object, false);
+	KInputMessage message;
+	message.type = KeyInputMessageType;
+	message.nVirtualKey = nVirtualKey;
+	message.bPressed = bPressed;
+	message.bExtended = bExtended;
+	sendInputMessage(message, false);
 }
 
 void KSessionViewModel::sendStreamConfig(const KStreamConfig &config)
@@ -253,30 +242,27 @@ void KSessionViewModel::initConnections()
 		this, &KSessionViewModel::networkStatsReady);
 }
 
-void KSessionViewModel::sendInputJsonMessage(QJsonObject object, bool bTrace)
+void KSessionViewModel::sendInputMessage(KInputMessage message, bool bTrace)
 {
 	if (m_pWebRtcSessionService == nullptr)
 		return;
 
-	const quint64 nSeq = ++m_nInputSequence;
-	object.insert(QString::fromLatin1(kSeq), QString::number(nSeq));
-	if (bTrace)
-		object.insert(QString::fromLatin1(kTrace), true);
+	message.nSequence = ++m_nInputSequence;
+	message.bTrace = bTrace;
 
 	if (bTrace)
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controller"),
 			QStringLiteral("input_prepare"),
 			QStringLiteral("seq=%1 type=%2 x=%3 y=%4")
-				.arg(nSeq)
-				.arg(object.value(QString::fromLatin1(kType)).toString())
-				.arg(object.value(QString::fromLatin1(kX)).toInt())
-				.arg(object.value(QString::fromLatin1(kY)).toInt()));
+				.arg(message.nSequence)
+				.arg(KInputMessageCodec::typeName(message.type))
+				.arg(message.nX)
+				.arg(message.nY));
 	}
 
-	recordInputSent(nSeq, object);
-	m_pWebRtcSessionService->sendInputMessage(
-		QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+	recordInputSent(message);
+	m_pWebRtcSessionService->sendInputMessage(message);
 }
 
 void KSessionViewModel::handleInputFeedbackRendered(quint64 nSeq)
@@ -298,7 +284,7 @@ void KSessionViewModel::handleInputFeedbackRendered(quint64 nSeq)
 	if (nRoundTripMs < 0)
 		return;
 
-	const bool bKeyInput = sentTrace.strType == QString::fromLatin1(kKey);
+	const bool bKeyInput = sentTrace.strType == KInputMessageCodec::typeName(KeyInputMessageType);
 	const bool bIncludeInStats = !bKeyInput || sentTrace.bKeyPressed;
 	const QString strPressed = bKeyInput
 		? QStringLiteral(" pressed=%1").arg(sentTrace.bKeyPressed ? 1 : 0)
@@ -330,7 +316,7 @@ void KSessionViewModel::resetInputRoundTripTrace()
 	m_inputRoundTripTimer.invalidate();
 }
 
-void KSessionViewModel::recordInputSent(quint64 nSeq, const QJsonObject &object)
+void KSessionViewModel::recordInputSent(const KInputMessage &message)
 {
 	if (!KLatencyTraceLogger::isEnabled())
 		return;
@@ -342,9 +328,9 @@ void KSessionViewModel::recordInputSent(quint64 nSeq, const QJsonObject &object)
 
 	KPendingInputTrace trace;
 	trace.nSentMs = m_inputRoundTripTimer.elapsed();
-	trace.strType = object.value(QString::fromLatin1(kType)).toString();
-	trace.bKeyPressed = object.value(QString::fromLatin1(kPressed)).toBool(false);
-	m_inputSentTraces.insert(nSeq, trace);
+	trace.strType = KInputMessageCodec::typeName(message.type);
+	trace.bKeyPressed = message.bPressed;
+	m_inputSentTraces.insert(message.nSequence, trace);
 }
 
 void KSessionViewModel::logInputRoundTripStats()

@@ -2,49 +2,30 @@
 
 #include "common/latencytracelogger.h"
 
-#include <QtCore/QElapsedTimer>
 #include <QtCore/QDateTime>
-#include <QtCore/QJsonDocument>
-#include <QtCore/QJsonObject>
+#include <QtCore/QElapsedTimer>
 
 #include <Windows.h>
 
 namespace
 {
-	constexpr char kType[] = "type";
-	constexpr char kMouseMove[] = "mouseMove";
-	constexpr char kMouseButton[] = "mouseButton";
-	constexpr char kMouseWheel[] = "mouseWheel";
-	constexpr char kKey[] = "key";
-	constexpr char kButton[] = "button";
-	constexpr char kLeft[] = "left";
-	constexpr char kRight[] = "right";
-	constexpr char kPressed[] = "pressed";
-	constexpr char kX[] = "x";
-	constexpr char kY[] = "y";
-	constexpr char kDelta[] = "delta";
-	constexpr char kSeq[] = "seq";
-	constexpr char kTrace[] = "trace";
-	constexpr char kVirtualKey[] = "vk";
-	constexpr char kExtended[] = "extended";
 	constexpr quint32 kExtendedKeyMask = 0x10000;
 
-	static QString inputTraceExtra(const QJsonObject &object)
+	static QString inputTraceExtra(const KInputMessage &message)
 	{
-		if (object.value(QString::fromLatin1(kType)).toString()
-			== QString::fromLatin1(kKey))
+		if (message.type == KeyInputMessageType)
 		{
 			return QStringLiteral("seq=%1 type=%2 pressed=%3")
-				.arg(object.value(QString::fromLatin1(kSeq)).toString())
-				.arg(object.value(QString::fromLatin1(kType)).toString())
-				.arg(object.value(QString::fromLatin1(kPressed)).toBool() ? 1 : 0);
+				.arg(message.nSequence)
+				.arg(KInputMessageCodec::typeName(message.type))
+				.arg(message.bPressed ? 1 : 0);
 		}
 
 		return QStringLiteral("seq=%1 type=%2 x=%3 y=%4")
-			.arg(object.value(QString::fromLatin1(kSeq)).toString())
-			.arg(object.value(QString::fromLatin1(kType)).toString())
-			.arg(object.value(QString::fromLatin1(kX)).toInt())
-			.arg(object.value(QString::fromLatin1(kY)).toInt());
+			.arg(message.nSequence)
+			.arg(KInputMessageCodec::typeName(message.type))
+			.arg(message.nX)
+			.arg(message.nY);
 	}
 }
 
@@ -58,18 +39,10 @@ KInputInjector::~KInputInjector()
 	releaseAllInputs();
 }
 
-void KInputInjector::handleInputMessage(const QString &strMessage)
+void KInputInjector::handleInputMessage(const KInputMessage &message)
 {
-	const QJsonDocument document = QJsonDocument::fromJson(strMessage.toUtf8());
-	if (!document.isObject())
-		return;
-
-	const QJsonObject object = document.object();
-	const QString strType = object.value(QString::fromLatin1(kType)).toString();
-	const int nX = object.value(QString::fromLatin1(kX)).toInt();
-	const int nY = object.value(QString::fromLatin1(kY)).toInt();
-	const bool bTrace = object.value(QString::fromLatin1(kTrace)).toBool(false)
-		|| (strType == QString::fromLatin1(kKey) && KLatencyTraceLogger::isEnabled());
+	const bool bTrace = message.bTrace
+		|| (message.type == KeyInputMessageType && KLatencyTraceLogger::isEnabled());
 
 	QString strError;
 	bool bOk = true;
@@ -78,66 +51,54 @@ void KInputInjector::handleInputMessage(const QString &strMessage)
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controlled"),
 			QStringLiteral("inject_begin"),
-			inputTraceExtra(object));
+			inputTraceExtra(message));
 		timer.start();
 	}
 
-	if (strType == QString::fromLatin1(kMouseMove))
+	if (message.type == MouseMoveInputMessageType)
 	{
-		bOk = sendMouseMove(nX, nY, &strError);
+		bOk = sendMouseMove(message.nX, message.nY, &strError);
 	}
-	else if (strType == QString::fromLatin1(kMouseButton))
+	else if (message.type == MouseButtonInputMessageType)
 	{
-		bOk = sendMouseButton(nX,
-			nY,
-			object.value(QString::fromLatin1(kButton)).toString(),
-			object.value(QString::fromLatin1(kPressed)).toBool(),
+		bOk = sendMouseButton(message.nX,
+			message.nY,
+			message.mouseButton,
+			message.bPressed,
 			&strError);
 	}
-	else if (strType == QString::fromLatin1(kMouseWheel))
+	else if (message.type == MouseWheelInputMessageType)
 	{
-		bOk = sendMouseWheel(nX,
-			nY,
-			object.value(QString::fromLatin1(kDelta)).toInt(),
+		bOk = sendMouseWheel(message.nX,
+			message.nY,
+			message.nWheelDelta,
 			&strError);
 	}
-	else if (strType == QString::fromLatin1(kKey))
+	else if (message.type == KeyInputMessageType)
 	{
-		const QJsonValue virtualKeyValue = object.value(QString::fromLatin1(kVirtualKey));
-		const QJsonValue pressedValue = object.value(QString::fromLatin1(kPressed));
-		const QJsonValue extendedValue = object.value(QString::fromLatin1(kExtended));
-		const int nVirtualKey = virtualKeyValue.toInt();
-		if (!virtualKeyValue.isDouble()
-			|| !pressedValue.isBool()
-			|| (!extendedValue.isUndefined() && !extendedValue.isBool())
-			|| nVirtualKey <= 0
-			|| nVirtualKey > 0xFF)
-		{
-			bOk = false;
-			strError = QStringLiteral("Invalid remote key message");
-		}
-		else
-		{
-			bOk = sendKey(nVirtualKey,
-				pressedValue.toBool(),
-				extendedValue.toBool(false),
-				&strError);
-		}
+		bOk = sendKey(message.nVirtualKey,
+			message.bPressed,
+			message.bExtended,
+			&strError);
+	}
+	else
+	{
+		bOk = false;
+		strError = QStringLiteral("Invalid remote input message type");
 	}
 
 	if (!bOk && !strError.isEmpty())
 		emit inputError(strError);
 
-	const quint64 nSeq = object.value(QString::fromLatin1(kSeq)).toString().toULongLong();
-	if (bOk && nSeq > 0)
-		emit inputInjected(nSeq, QDateTime::currentMSecsSinceEpoch());
+	if (bOk && message.nSequence > 0)
+		emit inputInjected(message.nSequence, QDateTime::currentMSecsSinceEpoch());
 
 	if (bTrace)
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controlled"),
 			QStringLiteral("inject_end"),
 			QStringLiteral("%1 costMs=%2 ok=%3")
-				.arg(inputTraceExtra(object))
+				.arg(inputTraceExtra(message))
 				.arg(timer.isValid() ? timer.elapsed() : -1)
 				.arg(bOk ? 1 : 0));
 	}
@@ -199,7 +160,7 @@ bool KInputInjector::sendMouseMove(int nX, int nY, QString *pErrorMessage)
 
 bool KInputInjector::sendMouseButton(int nX,
 	int nY,
-	const QString &strButton,
+	KRemoteMouseButton button,
 	bool bPressed,
 	QString *pErrorMessage)
 {
@@ -207,12 +168,12 @@ bool KInputInjector::sendMouseButton(int nX,
 		return false;
 
 	DWORD dwFlags = 0;
-	if (strButton == QString::fromLatin1(kLeft))
+	if (button == LeftRemoteMouseButton)
 		dwFlags = bPressed ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
-	else if (strButton == QString::fromLatin1(kRight))
+	else if (button == RightRemoteMouseButton)
 		dwFlags = bPressed ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP;
 	else
-		return true;
+		return false;
 
 	INPUT input = {};
 	input.type = INPUT_MOUSE;
@@ -225,9 +186,9 @@ bool KInputInjector::sendMouseButton(int nX,
 		return false;
 	}
 	if (bPressed)
-		m_pressedMouseButtons.insert(strButton);
+		m_pressedMouseButtons.insert(static_cast<int>(button));
 	else
-		m_pressedMouseButtons.remove(strButton);
+		m_pressedMouseButtons.remove(static_cast<int>(button));
 
 	return true;
 }
@@ -281,14 +242,14 @@ bool KInputInjector::sendKey(int nVirtualKey,
 
 void KInputInjector::releaseAllMouseButtons()
 {
-	const QSet<QString> pressedButtons = m_pressedMouseButtons;
+	const QSet<int> pressedButtons = m_pressedMouseButtons;
 	m_pressedMouseButtons.clear();
-	for (const QString &strButton : pressedButtons)
+	for (const int nButton : pressedButtons)
 	{
 		DWORD dwFlags = 0;
-		if (strButton == QString::fromLatin1(kLeft))
+		if (nButton == static_cast<int>(LeftRemoteMouseButton))
 			dwFlags = MOUSEEVENTF_LEFTUP;
-		else if (strButton == QString::fromLatin1(kRight))
+		else if (nButton == static_cast<int>(RightRemoteMouseButton))
 			dwFlags = MOUSEEVENTF_RIGHTUP;
 		else
 			continue;
