@@ -146,6 +146,8 @@ qt_add_executable(winRemoteControl WIN32
 	src/session/sessionviewmodel.h
 	src/transport/webrtc/webrtcpeer.cpp
 	src/transport/webrtc/webrtcpeer.h
+	src/transport/webrtc/webrtcdatachannel.cpp
+	src/transport/webrtc/webrtcdatachannel.h
 	src/transport/webrtc/webrtch264decoder.cpp
 	src/transport/webrtc/webrtch264decoder.h
 	src/transport/webrtc/webrtch264encoder.cpp

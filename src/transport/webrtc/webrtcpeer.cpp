@@ -3,6 +3,7 @@
 #include "common/framewatermark.h"
 #include "common/latencytracelogger.h"
 #include "common/sessiontracelogger.h"
+#include "transport/webrtc/webrtcdatachannel.h"
 #include "transport/webrtc/webrtch264decoder.h"
 #include "transport/webrtc/webrtch264encoder.h"
 
@@ -67,36 +68,6 @@ public:
 
 private:
 	QPointer<KWebRtcPeer> m_pPeer;
-};
-
-class KWebRtcDataChannelObserver : public webrtc::DataChannelObserver
-{
-public:
-	KWebRtcDataChannelObserver(KWebRtcPeer *pPeer, KWebRtcPeer::DataChannelKind kind)
-		: m_pPeer(pPeer)
-		, m_kind(kind)
-	{
-	}
-
-	void OnStateChange() override
-	{
-		if (m_pPeer)
-			m_pPeer->handleDataChannelStateChanged(m_kind);
-	}
-
-	void OnMessage(const webrtc::DataBuffer &buffer) override
-	{
-		if (m_pPeer)
-			m_pPeer->handleDataChannelMessage(m_kind, buffer);
-	}
-
-	void OnBufferedAmountChange(uint64_t) override
-	{
-	}
-
-private:
-	QPointer<KWebRtcPeer> m_pPeer;
-	KWebRtcPeer::DataChannelKind m_kind;
 };
 
 namespace
@@ -385,7 +356,17 @@ private:
 
 KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 	: KRemotePeerTransport(pParent)
+	, m_pInputDataChannel(new KWebRtcDataChannel(this))
+	, m_pSessionDataChannel(new KWebRtcDataChannel(this))
 {
+	connect(m_pInputDataChannel, &KWebRtcDataChannel::openChanged,
+		this, &KWebRtcPeer::handleInputChannelChanged);
+	connect(m_pInputDataChannel, &KWebRtcDataChannel::textMessageReceived,
+		this, &KWebRtcPeer::handleInputChannelMessage);
+	connect(m_pSessionDataChannel, &KWebRtcDataChannel::openChanged,
+		this, &KWebRtcPeer::handleSessionChannelChanged);
+	connect(m_pSessionDataChannel, &KWebRtcDataChannel::textMessageReceived,
+		this, &KWebRtcPeer::handleSessionChannelMessage);
 }
 
 KWebRtcPeer::~KWebRtcPeer()
@@ -417,28 +398,8 @@ bool KWebRtcPeer::initialize(KSessionRole role, QString *pErrorMessage)
 void KWebRtcPeer::shutdown()
 {
 	stopStatsPolling();
-	if (m_spInputDataChannel)
-	{
-		m_spInputDataChannel->UnregisterObserver();
-		m_spInputDataChannel = nullptr;
-		m_spInputDataChannelObserver.reset();
-		emit inputChannelChanged(false);
-	}
-	else
-	{
-		m_spInputDataChannelObserver.reset();
-	}
-	if (m_spSessionDataChannel)
-	{
-		m_spSessionDataChannel->UnregisterObserver();
-		m_spSessionDataChannel = nullptr;
-		m_spSessionDataChannelObserver.reset();
-		emit sessionChannelChanged(false);
-	}
-	else
-	{
-		m_spSessionDataChannelObserver.reset();
-	}
+	m_pInputDataChannel->clear();
+	m_pSessionDataChannel->clear();
 
 	if (m_spRemoteVideoTrack)
 		m_spRemoteVideoTrack->RemoveSink(this);
@@ -508,21 +469,13 @@ void KWebRtcPeer::pushVideoFrame(const KVideoFrame &frame)
 
 void KWebRtcPeer::sendInputMessage(const KInputMessage &message)
 {
-	if (!m_spInputDataChannel || m_spInputDataChannel->state() != webrtc::DataChannelInterface::kOpen)
-		return;
-
-	const QString strMessage = KInputMessageCodec::encode(message);
-	const QByteArray utf8Message = strMessage.toUtf8();
-	webrtc::DataBuffer buffer(std::string(utf8Message.constData(),
-			static_cast<size_t>(utf8Message.size())));
-	m_spInputDataChannel->Send(buffer);
+	m_pInputDataChannel->sendText(KInputMessageCodec::encode(message));
 }
 
 void KWebRtcPeer::sendLatencyPing()
 {
 	if (m_role != ControllerSessionRole
-		|| !m_spInputDataChannel
-		|| m_spInputDataChannel->state() != webrtc::DataChannelInterface::kOpen)
+		|| !m_pInputDataChannel->isOpen())
 	{
 		return;
 	}
@@ -532,17 +485,14 @@ void KWebRtcPeer::sendLatencyPing()
 	object.insert(QString::fromLatin1(kLatencyId), QString::number(++m_nLatencyPingId));
 	object.insert(QString::fromLatin1(kLatencySendMs), QDateTime::currentMSecsSinceEpoch());
 
-	const QByteArray utf8Message = QJsonDocument(object).toJson(QJsonDocument::Compact);
-	webrtc::DataBuffer buffer(std::string(utf8Message.constData(),
-			static_cast<size_t>(utf8Message.size())));
-	m_spInputDataChannel->Send(buffer);
+	m_pInputDataChannel->sendText(
+		QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
 }
 
 void KWebRtcPeer::handleLatencyPing(const QJsonObject &object)
 {
 	if (m_role != ControlledSessionRole
-		|| !m_spInputDataChannel
-		|| m_spInputDataChannel->state() != webrtc::DataChannelInterface::kOpen)
+		|| !m_pInputDataChannel->isOpen())
 	{
 		return;
 	}
@@ -552,10 +502,8 @@ void KWebRtcPeer::handleLatencyPing(const QJsonObject &object)
 	response.insert(QString::fromLatin1(kLatencyId), object.value(QString::fromLatin1(kLatencyId)));
 	response.insert(QString::fromLatin1(kLatencySendMs), object.value(QString::fromLatin1(kLatencySendMs)));
 
-	const QByteArray utf8Message = QJsonDocument(response).toJson(QJsonDocument::Compact);
-	webrtc::DataBuffer buffer(std::string(utf8Message.constData(),
-			static_cast<size_t>(utf8Message.size())));
-	m_spInputDataChannel->Send(buffer);
+	m_pInputDataChannel->sendText(
+		QString::fromUtf8(QJsonDocument(response).toJson(QJsonDocument::Compact)));
 }
 
 void KWebRtcPeer::handleLatencyPong(const QJsonObject &object)
@@ -578,14 +526,7 @@ void KWebRtcPeer::handleLatencyPong(const QJsonObject &object)
 
 void KWebRtcPeer::sendSessionMessage(const KSessionMessage &message)
 {
-	if (!m_spSessionDataChannel || m_spSessionDataChannel->state() != webrtc::DataChannelInterface::kOpen)
-		return;
-
-	const QString strMessage = KSessionMessageCodec::encode(message);
-	const QByteArray utf8Message = strMessage.toUtf8();
-	webrtc::DataBuffer buffer(std::string(utf8Message.constData(),
-			static_cast<size_t>(utf8Message.size())));
-	m_spSessionDataChannel->Send(buffer);
+	m_pSessionDataChannel->sendText(KSessionMessageCodec::encode(message));
 }
 
 void KWebRtcPeer::setStreamConfig(const KStreamConfig &config)
@@ -888,9 +829,9 @@ void KWebRtcPeer::OnDataChannel(webrtc::scoped_refptr<webrtc::DataChannelInterfa
 	if (!channel)
 		return;
 	if (channel->label() == kInputChannelLabel)
-		setInputDataChannel(channel);
+		m_pInputDataChannel->setChannel(channel);
 	else if (channel->label() == kSessionChannelLabel)
-		setSessionDataChannel(channel);
+		m_pSessionDataChannel->setChannel(channel);
 }
 
 void KWebRtcPeer::OnRenegotiationNeeded()
@@ -955,44 +896,39 @@ void KWebRtcPeer::OnTrack(webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>
 	OnAddTrack(spTransceiver->receiver(), spTransceiver->receiver()->streams());
 }
 
-void KWebRtcPeer::handleDataChannelStateChanged(DataChannelKind)
+void KWebRtcPeer::handleInputChannelChanged(bool bOpen)
 {
-	const bool bInputOpen = m_spInputDataChannel
-		&& m_spInputDataChannel->state() == webrtc::DataChannelInterface::kOpen;
-	const bool bSessionOpen = m_spSessionDataChannel
-		&& m_spSessionDataChannel->state() == webrtc::DataChannelInterface::kOpen;
-	emit inputChannelChanged(bInputOpen);
-	emit sessionChannelChanged(bSessionOpen);
-	emit stateChanged(bSessionOpen ? QStringLiteral("SessionChannelOpen") : QStringLiteral("SessionChannelClosed"));
-
-	if (bInputOpen)
+	emit inputChannelChanged(bOpen);
+	if (bOpen)
 		startStatsPolling(QStringLiteral("input_channel_open"));
 }
 
-void KWebRtcPeer::handleDataChannelMessage(DataChannelKind kind, const webrtc::DataBuffer &buffer)
+void KWebRtcPeer::handleSessionChannelChanged(bool bOpen)
 {
-	if (buffer.binary)
-		return;
+	emit sessionChannelChanged(bOpen);
+	emit stateChanged(bOpen
+		? QStringLiteral("SessionChannelOpen")
+		: QStringLiteral("SessionChannelClosed"));
+}
 
-	const char *pData = reinterpret_cast<const char *>(buffer.data.data());
-	const QString strMessage = QString::fromUtf8(pData, static_cast<int>(buffer.data.size()));
-	if (kind == SessionDataChannelKind)
+void KWebRtcPeer::handleSessionChannelMessage(const QString &strMessage)
+{
+	KSessionMessage message;
+	QString strError;
+	if (!KSessionMessageCodec::decode(strMessage, &message, &strError))
 	{
-		KSessionMessage message;
-		QString strError;
-		if (!KSessionMessageCodec::decode(strMessage, &message, &strError))
-		{
-			KSessionTraceLogger::write(roleToString(m_role),
-				QStringLiteral("protocol_reject"),
-				QStringLiteral("session"),
-				strMessage.toUtf8().size(),
-				strError);
-			return;
-		}
-		emit sessionMessageReceived(message);
+		KSessionTraceLogger::write(roleToString(m_role),
+			QStringLiteral("protocol_reject"),
+			QStringLiteral("session"),
+			strMessage.toUtf8().size(),
+			strError);
 		return;
 	}
+	emit sessionMessageReceived(message);
+}
 
+void KWebRtcPeer::handleInputChannelMessage(const QString &strMessage)
+{
 	const QJsonObject object = jsonObjectFromMessage(strMessage);
 	const QString strMessageType = object.value(QString::fromLatin1(kDataChannelMessageType)).toString();
 	if (isLatencyMessageType(strMessageType))
@@ -1287,7 +1223,7 @@ bool KWebRtcPeer::createInputDataChannel(QString *pErrorMessage)
 		return false;
 	}
 
-	setInputDataChannel(result.value());
+	m_pInputDataChannel->setChannel(result.value());
 	return true;
 }
 
@@ -1304,7 +1240,7 @@ bool KWebRtcPeer::createSessionDataChannel(QString *pErrorMessage)
 		return false;
 	}
 
-	setSessionDataChannel(result.value());
+	m_pSessionDataChannel->setChannel(result.value());
 	return true;
 }
 
@@ -1341,44 +1277,6 @@ bool KWebRtcPeer::addRemoteVideoReceiver(QString *pErrorMessage)
 	}
 
 	return true;
-}
-
-void KWebRtcPeer::setInputDataChannel(webrtc::scoped_refptr<webrtc::DataChannelInterface> spChannel)
-{
-	if (m_spInputDataChannel)
-		m_spInputDataChannel->UnregisterObserver();
-	m_spInputDataChannelObserver.reset();
-
-	m_spInputDataChannel = spChannel;
-	if (!m_spInputDataChannel)
-	{
-		emit inputChannelChanged(false);
-		return;
-	}
-
-	m_spInputDataChannelObserver = std::make_unique<KWebRtcDataChannelObserver>(
-		this, InputDataChannelKind);
-	m_spInputDataChannel->RegisterObserver(m_spInputDataChannelObserver.get());
-	handleDataChannelStateChanged(InputDataChannelKind);
-}
-
-void KWebRtcPeer::setSessionDataChannel(webrtc::scoped_refptr<webrtc::DataChannelInterface> spChannel)
-{
-	if (m_spSessionDataChannel)
-		m_spSessionDataChannel->UnregisterObserver();
-	m_spSessionDataChannelObserver.reset();
-
-	m_spSessionDataChannel = spChannel;
-	if (!m_spSessionDataChannel)
-	{
-		emit sessionChannelChanged(false);
-		return;
-	}
-
-	m_spSessionDataChannelObserver = std::make_unique<KWebRtcDataChannelObserver>(
-		this, SessionDataChannelKind);
-	m_spSessionDataChannel->RegisterObserver(m_spSessionDataChannelObserver.get());
-	handleDataChannelStateChanged(SessionDataChannelKind);
 }
 
 void KWebRtcPeer::sendSessionDescription(const webrtc::SessionDescriptionInterface *pDescription)

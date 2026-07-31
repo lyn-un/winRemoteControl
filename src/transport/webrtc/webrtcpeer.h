@@ -22,7 +22,7 @@
 
 class KWebRtcVideoSource;
 class KCreateSessionDescriptionObserver;
-class KWebRtcDataChannelObserver;
+class KWebRtcDataChannel;
 class QJsonObject;
 namespace webrtc
 {
@@ -52,12 +52,6 @@ public:
 	void setStreamConfig(const KStreamConfig &config) override;
 
 private:
-	enum DataChannelKind
-	{
-		InputDataChannelKind,
-		SessionDataChannelKind
-	};
-
 	void OnSignalingChange(webrtc::PeerConnectionInterface::SignalingState new_state) override;
 	void OnAddTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver,
 		const std::vector<webrtc::scoped_refptr<webrtc::MediaStreamInterface>> &streams) override;
@@ -82,10 +76,10 @@ private:
 	bool createSessionDataChannel(QString *pErrorMessage);
 	bool addLocalVideoTrack(QString *pErrorMessage);
 	bool addRemoteVideoReceiver(QString *pErrorMessage);
-	void setInputDataChannel(webrtc::scoped_refptr<webrtc::DataChannelInterface> spChannel);
-	void setSessionDataChannel(webrtc::scoped_refptr<webrtc::DataChannelInterface> spChannel);
-	void handleDataChannelStateChanged(DataChannelKind kind);
-	void handleDataChannelMessage(DataChannelKind kind, const webrtc::DataBuffer &buffer);
+	void handleInputChannelChanged(bool bOpen);
+	void handleSessionChannelChanged(bool bOpen);
+	void handleInputChannelMessage(const QString &strMessage);
+	void handleSessionChannelMessage(const QString &strMessage);
 	void handleLocalDescription(webrtc::SessionDescriptionInterface *pDescription);
 	void handleLocalDescriptionFailure(webrtc::RTCError error);
 	void handleRemoteDescriptionSuccess(webrtc::SdpType sdpType);
@@ -110,10 +104,8 @@ private:
 	std::unique_ptr<webrtc::Thread> m_spSignalingThread;
 	webrtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> m_spFactory;
 	webrtc::scoped_refptr<webrtc::PeerConnectionInterface> m_spPeerConnection;
-	webrtc::scoped_refptr<webrtc::DataChannelInterface> m_spInputDataChannel;
-	webrtc::scoped_refptr<webrtc::DataChannelInterface> m_spSessionDataChannel;
-	std::unique_ptr<KWebRtcDataChannelObserver> m_spInputDataChannelObserver;
-	std::unique_ptr<KWebRtcDataChannelObserver> m_spSessionDataChannelObserver;
+	KWebRtcDataChannel *m_pInputDataChannel = nullptr;
+	KWebRtcDataChannel *m_pSessionDataChannel = nullptr;
 	webrtc::scoped_refptr<KWebRtcVideoSource> m_spVideoSource;
 	webrtc::scoped_refptr<webrtc::RtpSenderInterface> m_spVideoSender;
 	webrtc::scoped_refptr<webrtc::VideoTrackInterface> m_spRemoteVideoTrack;
@@ -140,7 +132,6 @@ private:
 
 	friend class KCreateSessionDescriptionObserver;
 	friend class KStatsCallback;
-	friend class KWebRtcDataChannelObserver;
 };
 
 #endif // _WINREMOTECONTROL_WEBRTCPEER_H_
