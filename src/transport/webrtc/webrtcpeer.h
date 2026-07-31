@@ -16,13 +16,12 @@
 #include <rtc_base/thread.h>
 
 #include <memory>
-#include <mutex>
-#include <optional>
 #include <vector>
 
 class KWebRtcVideoSource;
 class KCreateSessionDescriptionObserver;
 class KWebRtcDataChannel;
+class KWebRtcRemoteFrameProcessor;
 class QJsonObject;
 namespace webrtc
 {
@@ -66,8 +65,6 @@ private:
 	void OnTrack(webrtc::scoped_refptr<webrtc::RtpTransceiverInterface> spTransceiver) override;
 
 	void OnFrame(const webrtc::VideoFrame &frame) override;
-	void processLatestRemoteFrame();
-	void decodeAndEmitRemoteFrame(const webrtc::VideoFrame &frame);
 	void handleStatsReport(webrtc::scoped_refptr<const webrtc::RTCStatsReport> spReport);
 
 	bool createFactory(QString *pErrorMessage);
@@ -91,7 +88,6 @@ private:
 	void stopStatsPolling();
 	void requestStats();
 	void resetStatsHistory();
-	void clearPendingRemoteFrame();
 	void sendLatencyPing();
 	void handleLatencyPing(const QJsonObject &object);
 	void handleLatencyPong(const QJsonObject &object);
@@ -106,15 +102,10 @@ private:
 	webrtc::scoped_refptr<webrtc::PeerConnectionInterface> m_spPeerConnection;
 	KWebRtcDataChannel *m_pInputDataChannel = nullptr;
 	KWebRtcDataChannel *m_pSessionDataChannel = nullptr;
+	KWebRtcRemoteFrameProcessor *m_pRemoteFrameProcessor = nullptr;
 	webrtc::scoped_refptr<KWebRtcVideoSource> m_spVideoSource;
 	webrtc::scoped_refptr<webrtc::RtpSenderInterface> m_spVideoSender;
 	webrtc::scoped_refptr<webrtc::VideoTrackInterface> m_spRemoteVideoTrack;
-	std::mutex m_remoteFrameMutex;
-	std::optional<webrtc::VideoFrame> m_pendingRemoteFrame;
-	bool m_bHasPendingRemoteFrame = false;
-	bool m_bRemoteFrameProcessQueued = false;
-	quint64 m_nDroppedRemoteCallbackFrames = 0;
-	quint64 m_nRemoteFrameIndex = 0;
 	bool m_bHasPreviousStats = false;
 	qint64 m_nPreviousStatsMs = 0;
 	quint64 m_nPreviousBytesReceived = 0;

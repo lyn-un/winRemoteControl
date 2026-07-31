@@ -1,11 +1,11 @@
 #include "transport/webrtc/webrtcpeer.h"
 
-#include "common/framewatermark.h"
 #include "common/latencytracelogger.h"
 #include "common/sessiontracelogger.h"
 #include "transport/webrtc/webrtcdatachannel.h"
 #include "transport/webrtc/webrtch264decoder.h"
 #include "transport/webrtc/webrtch264encoder.h"
+#include "transport/webrtc/webrtcremoteframeprocessor.h"
 
 #include <QtCore/QDateTime>
 #include <QtCore/QJsonDocument>
@@ -98,7 +98,6 @@ namespace
 	constexpr int kReceiverMaxFrameRateFps = 60;
 	constexpr double kSecondsToMilliseconds = 1000.0;
 	constexpr quint64 kVideoTraceFrameInterval = 30;
-	constexpr quint64 kRemoteCallbackFrameCoalesceTraceInterval = 30;
 	constexpr char kDataChannelMessageType[] = "type";
 	constexpr char kLatencyPing[] = "latencyPing";
 	constexpr char kLatencyPong[] = "latencyPong";
@@ -358,6 +357,7 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 	: KRemotePeerTransport(pParent)
 	, m_pInputDataChannel(new KWebRtcDataChannel(this))
 	, m_pSessionDataChannel(new KWebRtcDataChannel(this))
+	, m_pRemoteFrameProcessor(new KWebRtcRemoteFrameProcessor(this))
 {
 	connect(m_pInputDataChannel, &KWebRtcDataChannel::openChanged,
 		this, &KWebRtcPeer::handleInputChannelChanged);
@@ -367,6 +367,10 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 		this, &KWebRtcPeer::handleSessionChannelChanged);
 	connect(m_pSessionDataChannel, &KWebRtcDataChannel::textMessageReceived,
 		this, &KWebRtcPeer::handleSessionChannelMessage);
+	connect(m_pRemoteFrameProcessor, &KWebRtcRemoteFrameProcessor::frameReady,
+		this, &KWebRtcPeer::remoteFrameReady);
+	connect(m_pRemoteFrameProcessor, &KWebRtcRemoteFrameProcessor::frameStatsReady,
+		this, &KWebRtcPeer::remoteFrameStatsReady);
 }
 
 KWebRtcPeer::~KWebRtcPeer()
@@ -404,7 +408,7 @@ void KWebRtcPeer::shutdown()
 	if (m_spRemoteVideoTrack)
 		m_spRemoteVideoTrack->RemoveSink(this);
 	m_spRemoteVideoTrack = nullptr;
-	clearPendingRemoteFrame();
+	m_pRemoteFrameProcessor->clear();
 	m_spVideoSender = nullptr;
 	m_spPeerConnection = nullptr;
 	m_spVideoSource = nullptr;
@@ -821,7 +825,7 @@ void KWebRtcPeer::OnRemoveTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterfa
 	if (m_spRemoteVideoTrack)
 		m_spRemoteVideoTrack->RemoveSink(this);
 	m_spRemoteVideoTrack = nullptr;
-	clearPendingRemoteFrame();
+	m_pRemoteFrameProcessor->clear();
 }
 
 void KWebRtcPeer::OnDataChannel(webrtc::scoped_refptr<webrtc::DataChannelInterface> channel)
@@ -996,162 +1000,7 @@ void KWebRtcPeer::handleRemoteDescriptionFailure(webrtc::RTCError error)
 
 void KWebRtcPeer::OnFrame(const webrtc::VideoFrame &frame)
 {
-	bool bNeedQueue = false;
-	quint64 nDroppedFrames = 0;
-	{
-		std::lock_guard<std::mutex> guard(m_remoteFrameMutex);
-		if (m_bHasPendingRemoteFrame)
-			++m_nDroppedRemoteCallbackFrames;
-
-		m_pendingRemoteFrame = frame;
-		m_bHasPendingRemoteFrame = true;
-		nDroppedFrames = m_nDroppedRemoteCallbackFrames;
-		if (!m_bRemoteFrameProcessQueued)
-		{
-			m_bRemoteFrameProcessQueued = true;
-			bNeedQueue = true;
-		}
-	}
-
-	if (nDroppedFrames > 0
-		&& KLatencyTraceLogger::isEnabled()
-		&& (nDroppedFrames == 1
-			|| nDroppedFrames % kRemoteCallbackFrameCoalesceTraceInterval == 0))
-	{
-		KLatencyTraceLogger::write(roleToString(m_role),
-			QStringLiteral("remote_callback_frame_coalesced"),
-			QStringLiteral("dropped=%1 latestTimestampMs=%2")
-				.arg(nDroppedFrames)
-				.arg(frame.timestamp_us() / 1000));
-	}
-
-	if (bNeedQueue)
-	{
-		QMetaObject::invokeMethod(this,
-			[this]()
-			{
-				processLatestRemoteFrame();
-			},
-			Qt::QueuedConnection);
-	}
-}
-
-void KWebRtcPeer::processLatestRemoteFrame()
-{
-	std::optional<webrtc::VideoFrame> pendingFrame;
-	{
-		std::lock_guard<std::mutex> guard(m_remoteFrameMutex);
-		if (!m_bHasPendingRemoteFrame)
-		{
-			m_bRemoteFrameProcessQueued = false;
-			return;
-		}
-
-		pendingFrame = std::move(m_pendingRemoteFrame);
-		m_pendingRemoteFrame.reset();
-		m_bHasPendingRemoteFrame = false;
-	}
-
-	if (pendingFrame.has_value())
-		decodeAndEmitRemoteFrame(*pendingFrame);
-
-	bool bNeedQueue = false;
-	{
-		std::lock_guard<std::mutex> guard(m_remoteFrameMutex);
-		if (m_bHasPendingRemoteFrame)
-			bNeedQueue = true;
-		else
-			m_bRemoteFrameProcessQueued = false;
-	}
-
-	if (bNeedQueue)
-	{
-		QMetaObject::invokeMethod(this,
-			[this]()
-			{
-				processLatestRemoteFrame();
-			},
-			Qt::QueuedConnection);
-	}
-}
-
-void KWebRtcPeer::decodeAndEmitRemoteFrame(const webrtc::VideoFrame &frame)
-{
-	const quint64 nNextFrameIndex = m_nRemoteFrameIndex + 1;
-	if (nNextFrameIndex % kVideoTraceFrameInterval == 0)
-	{
-		KLatencyTraceLogger::write(roleToString(m_role),
-			QStringLiteral("remote_frame_recv"),
-			QStringLiteral("frame=%1 timestampMs=%2")
-				.arg(nNextFrameIndex)
-				.arg(frame.timestamp_us() / 1000));
-	}
-
-	webrtc::scoped_refptr<webrtc::I420BufferInterface> spI420 = frame.video_frame_buffer()->ToI420();
-	if (!spI420)
-		return;
-
-	const int nWidth = spI420->width();
-	const int nHeight = spI420->height();
-	KDecodedVideoFrame decodedFrame;
-	decodedFrame.nWidth = nWidth;
-	decodedFrame.nHeight = nHeight;
-	decodedFrame.nFrameIndex = ++m_nRemoteFrameIndex;
-	decodedFrame.nTimestampMs = frame.timestamp_us() / 1000;
-	decodedFrame.vecBgraBuffer.resize(static_cast<size_t>(nWidth) * nHeight * 4);
-
-	// libyuv ARGB is stored as B,G,R,A on little-endian Windows, matching DXGI BGRA8.
-	const int nConvertResult = libyuv::I420ToARGB(spI420->DataY(),
-		spI420->StrideY(),
-		spI420->DataU(),
-		spI420->StrideU(),
-		spI420->DataV(),
-		spI420->StrideV(),
-		decodedFrame.vecBgraBuffer.data(),
-		nWidth * 4,
-		nWidth,
-		nHeight);
-	if (nConvertResult != 0)
-		return;
-
-	if (KLatencyTraceLogger::isEnabled())
-	{
-		KFrameWatermark watermark;
-		if (KFrameWatermarkCodec::readBgra(decodedFrame.vecBgraBuffer,
-				decodedFrame.nWidth,
-				decodedFrame.nHeight,
-				&watermark))
-		{
-			decodedFrame.nSourceFrameIndex = watermark.nSourceFrameIndex;
-			decodedFrame.nLastInputSeq = watermark.nLastInputSeq;
-			decodedFrame.nInputAgeMs = watermark.nInputAgeMs;
-			if (decodedFrame.nFrameIndex > 0 && decodedFrame.nFrameIndex % kVideoTraceFrameInterval == 0)
-			{
-				KLatencyTraceLogger::write(QStringLiteral("controller"),
-					QStringLiteral("remote_frame_trace"),
-					QStringLiteral("frame=%1 sourceFrame=%2 lastInputSeq=%3 inputAgeMs=%4")
-						.arg(decodedFrame.nFrameIndex)
-						.arg(decodedFrame.nSourceFrameIndex)
-						.arg(decodedFrame.nLastInputSeq)
-						.arg(decodedFrame.nInputAgeMs));
-			}
-		}
-	}
-
-	emit remoteFrameReady(decodedFrame);
-	emit remoteFrameStatsReady(decodedFrame.nWidth,
-		decodedFrame.nHeight,
-		decodedFrame.nFrameIndex,
-		decodedFrame.nTimestampMs);
-}
-
-void KWebRtcPeer::clearPendingRemoteFrame()
-{
-	std::lock_guard<std::mutex> guard(m_remoteFrameMutex);
-	m_pendingRemoteFrame.reset();
-	m_bHasPendingRemoteFrame = false;
-	m_bRemoteFrameProcessQueued = false;
-	m_nDroppedRemoteCallbackFrames = 0;
+	m_pRemoteFrameProcessor->enqueue(frame);
 }
 
 bool KWebRtcPeer::createFactory(QString *pErrorMessage)
