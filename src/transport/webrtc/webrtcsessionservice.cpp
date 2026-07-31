@@ -22,11 +22,9 @@ namespace
 	constexpr int kWallpaperPathBufferLength = MAX_PATH;
 	constexpr int kDisconnectGraceMs = 5000;
 
-	static QString roleToString(const QString &strRole)
+	static QString roleToString(KSessionRole role)
 	{
-		return strRole == QStringLiteral("controller")
-			? QStringLiteral("controller")
-			: QStringLiteral("controlled");
+		return KSessionStateMachine::roleName(role);
 	}
 
 	static bool shouldTraceInputMessage(const KInputMessage &message)
@@ -78,20 +76,25 @@ KWebRtcSessionService::~KWebRtcSessionService()
 
 void KWebRtcSessionService::setRole(const QString &strRole)
 {
-	if (strRole != QStringLiteral("controlled") && strRole != QStringLiteral("controller"))
+	KSessionRole role;
+	if (!KSessionStateMachine::roleFromString(strRole, &role))
 		return;
-	if (strRole != m_strRole && m_sessionState != IdleSessionState)
-		finishSession(QStringLiteral("role_changed"), false, true, false);
-	m_strRole = strRole;
+	if (role != m_sessionStateMachine.role()
+		&& m_sessionStateMachine.state() != IdleSessionState)
+	{
+		finishSession(RoleChangedSessionEndReason, QString(), false, true, false);
+	}
+	if (m_sessionStateMachine.state() == IdleSessionState)
+		m_sessionStateMachine.setRole(role);
 
-	emit webRtcStateChanged(QStringLiteral("Role:%1").arg(m_strRole));
+	emit webRtcStateChanged(QStringLiteral("Role:%1")
+		.arg(KSessionStateMachine::roleName(m_sessionStateMachine.role())));
 }
 
 void KWebRtcSessionService::startSignalingServer(quint16 nPort)
 {
-	if (m_sessionState != IdleSessionState)
-		finishSession(QStringLiteral("restart_listener"), false, true, false);
-	m_bControllerConnectionPending = false;
+	if (m_sessionStateMachine.state() != IdleSessionState)
+		finishSession(RestartListenerSessionEndReason, QString(), false, true, false);
 	QString strError;
 	if (!initializePeer(KWebRtcPeer::ControlledRole, &strError))
 	{
@@ -105,16 +108,14 @@ void KWebRtcSessionService::startSignalingServer(quint16 nPort)
 		return;
 	}
 
-	m_strRole = QStringLiteral("controlled");
-	m_sessionState = ListeningSessionState;
-	emit webRtcStateChanged(QStringLiteral("Listening"));
+	m_sessionStateMachine.beginListening();
+	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
 }
 
 void KWebRtcSessionService::connectSignaling(const QString &strHost, quint16 nPort)
 {
-	if (m_sessionState != IdleSessionState)
-		finishSession(QStringLiteral("new_connection"), false, true, false);
-	m_bControllerConnectionPending = false;
+	if (m_sessionStateMachine.state() != IdleSessionState)
+		finishSession(NewConnectionSessionEndReason, QString(), false, true, false);
 	m_pSignaling->stop();
 	QString strError;
 	if (!initializePeer(KWebRtcPeer::ControllerRole, &strError))
@@ -123,23 +124,19 @@ void KWebRtcSessionService::connectSignaling(const QString &strHost, quint16 nPo
 		return;
 	}
 
-	m_bControllerConnectionPending = true;
-	m_strRole = QStringLiteral("controller");
-	m_sessionState = ConnectingSessionState;
-	emit webRtcStateChanged(QStringLiteral("Connecting"));
+	m_sessionStateMachine.beginConnecting();
+	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
 	m_pSignaling->connectToHost(strHost, nPort);
 }
 
 void KWebRtcSessionService::disconnectSession()
 {
-	finishSession(QStringLiteral("local_disconnect"), false, true, false);
+	finishSession(LocalDisconnectSessionEndReason, QString(), false, true, false);
 }
 
 void KWebRtcSessionService::enterRemoteDesktop(const KStreamConfig &config)
 {
-	if (m_strRole != QStringLiteral("controller")
-		|| !m_bSessionChannelOpen
-		|| m_sessionState != ConnectedSessionState)
+	if (!m_sessionStateMachine.canEnterRemoteDesktop() || !m_bSessionChannelOpen)
 	{
 		return;
 	}
@@ -157,49 +154,42 @@ void KWebRtcSessionService::enterRemoteDesktop(const KStreamConfig &config)
 	KSessionMessage message;
 	message.type = StartStreamingSessionMessageType;
 	sendSessionMessage(message);
-	m_bStreaming = true;
-	m_sessionState = StreamingSessionState;
-	emit webRtcStateChanged(QStringLiteral("Streaming"));
+	m_sessionStateMachine.beginStreaming();
+	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
 }
 
 void KWebRtcSessionService::leaveRemoteDesktop()
 {
-	if (m_strRole != QStringLiteral("controller")
-		|| m_sessionState != StreamingSessionState)
-	{
+	if (!m_sessionStateMachine.canLeaveRemoteDesktop())
 		return;
-	}
 	KSessionMessage message;
 	message.type = StopStreamingSessionMessageType;
 	sendSessionMessage(message);
-	m_bStreaming = false;
-	m_sessionState = ConnectedSessionState;
+	m_sessionStateMachine.stopStreaming();
 	emit stopCaptureRequested();
-	emit webRtcStateChanged(QStringLiteral("Connected"));
+	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
 }
 
 void KWebRtcSessionService::startStreaming()
 {
-	if (m_strRole != QStringLiteral("controlled"))
+	if (m_sessionStateMachine.role() != ControlledSessionRole)
 	{
 		emit sessionError(QStringLiteral("只有被控端可以开始推流"));
 		return;
 	}
-	if (!m_bSessionChannelOpen || m_sessionState != ConnectedSessionState)
+	if (!m_bSessionChannelOpen || !m_sessionStateMachine.canStartControlledStreaming())
 		return;
 
 	emit startCaptureRequested();
-	m_bInputAllowed = true;
-	m_bStreaming = true;
-	m_sessionState = StreamingSessionState;
-	emit webRtcStateChanged(QStringLiteral("Streaming"));
+	m_sessionStateMachine.beginStreaming();
+	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
 }
 
 void KWebRtcSessionService::stopStreaming()
 {
-	if (m_strRole == QStringLiteral("controlled"))
+	if (m_sessionStateMachine.role() == ControlledSessionRole)
 	{
-		finishSession(QStringLiteral("controlled_user_stop"), true, true, false);
+		finishSession(ControlledUserStopSessionEndReason, QString(), true, true, false);
 		return;
 	}
 
@@ -208,16 +198,13 @@ void KWebRtcSessionService::stopStreaming()
 
 void KWebRtcSessionService::pushVideoFrame(const KWebRtcVideoFrame &frame)
 {
-	if (m_pPeer != nullptr && m_bStreaming && m_sessionState == StreamingSessionState)
+	if (m_pPeer != nullptr && m_sessionStateMachine.canSendVideo())
 		m_pPeer->pushVideoFrame(frame);
 }
 
 void KWebRtcSessionService::sendInputMessage(const KInputMessage &message)
 {
-	if (m_strRole != QStringLiteral("controller")
-		|| !m_bStreaming
-		|| !m_bInputChannelOpen
-		|| m_sessionState != StreamingSessionState)
+	if (!m_sessionStateMachine.canSendInput() || !m_bInputChannelOpen)
 	{
 		return;
 	}
@@ -227,7 +214,7 @@ void KWebRtcSessionService::sendInputMessage(const KInputMessage &message)
 	const QString strMessage = KInputMessageCodec::encode(message);
 	if (shouldTraceInputMessage(message))
 	{
-		KLatencyTraceLogger::write(roleToString(m_strRole),
+		KLatencyTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 			QStringLiteral("input_send"),
 			QStringLiteral("%1 size=%2")
 				.arg(inputTraceExtra(message))
@@ -242,7 +229,7 @@ void KWebRtcSessionService::sendSessionMessage(const KSessionMessage &message)
 	const QString strMessage = KSessionMessageCodec::encode(message);
 	if (m_pPeer == nullptr || !m_bSessionChannelOpen)
 	{
-		KSessionTraceLogger::write(roleToString(m_strRole),
+		KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 			QStringLiteral("send_drop"),
 			strType,
 			strMessage.toUtf8().size(),
@@ -250,7 +237,7 @@ void KWebRtcSessionService::sendSessionMessage(const KSessionMessage &message)
 		return;
 	}
 
-	KSessionTraceLogger::write(roleToString(m_strRole),
+	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 		QStringLiteral("send"),
 		strType,
 		strMessage.toUtf8().size());
@@ -259,7 +246,7 @@ void KWebRtcSessionService::sendSessionMessage(const KSessionMessage &message)
 
 void KWebRtcSessionService::sendStreamConfig(const KStreamConfig &config)
 {
-	if (m_strRole != QStringLiteral("controller"))
+	if (m_sessionStateMachine.role() != ControllerSessionRole)
 		return;
 	KSessionMessage message;
 	message.type = StreamConfigSessionMessageType;
@@ -269,32 +256,34 @@ void KWebRtcSessionService::sendStreamConfig(const KStreamConfig &config)
 
 void KWebRtcSessionService::handleCaptureFailure()
 {
-	if (m_strRole != QStringLiteral("controlled")
-		|| m_sessionState != StreamingSessionState
-		|| m_bEndingSession)
+	if (m_sessionStateMachine.role() != ControlledSessionRole
+		|| m_sessionStateMachine.state() != StreamingSessionState)
 	{
 		return;
 	}
 
-	finishSession(QStringLiteral("capture_failed"), true, true, true);
+	finishSession(CaptureFailedSessionEndReason, QString(), true, true, true);
 }
 
-void KWebRtcSessionService::finishSession(const QString &strReason,
+void KWebRtcSessionService::finishSession(KSessionEndReason reason,
+	const QString &strDetail,
 	bool bKeepListening,
 	bool bNotifyRemote,
 	bool bReportError)
 {
-	if (m_bEndingSession)
+	if (!m_sessionStateMachine.beginStopping())
 		return;
 
-	m_bEndingSession = true;
-	m_sessionState = StoppingSessionState;
-	emit webRtcStateChanged(QStringLiteral("Stopping"));
-	KSessionTraceLogger::write(roleToString(m_strRole),
+	const QString strReason = KSessionStateMachine::endReasonName(reason, strDetail);
+	const KSessionRole role = m_sessionStateMachine.role();
+	const quint64 nGeneration = m_sessionStateMachine.generation();
+	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
+	KSessionTraceLogger::write(roleToString(role),
 		QStringLiteral("session_end"),
 		strReason,
 		-1,
-		QStringLiteral("keepListening=%1 notifyRemote=%2")
+		QStringLiteral("generation=%1 keepListening=%2 notifyRemote=%3")
+			.arg(nGeneration)
 			.arg(bKeepListening ? 1 : 0)
 			.arg(bNotifyRemote ? 1 : 0));
 
@@ -307,12 +296,10 @@ void KWebRtcSessionService::finishSession(const QString &strReason,
 	}
 
 	m_pDisconnectGraceTimer->stop();
-	m_bControllerConnectionPending = false;
+	m_nDisconnectGraceGeneration = 0;
 	m_bDeviceInfoRequested = false;
-	m_bInputAllowed = false;
 	m_bInputChannelOpen = false;
 	m_bSessionChannelOpen = false;
-	m_bStreaming = false;
 	m_pInputInjector->releaseAllInputs();
 	resetInputTraceState();
 	emit stopCaptureRequested();
@@ -323,20 +310,20 @@ void KWebRtcSessionService::finishSession(const QString &strReason,
 		m_pPeer->shutdown();
 
 	bool bListening = false;
-	if (bKeepListening && m_strRole == QStringLiteral("controlled"))
+	if (bKeepListening && role == ControlledSessionRole)
 	{
 		m_pSignaling->disconnectPeer();
 		QString strError;
 		if (initializePeer(KWebRtcPeer::ControlledRole, &strError))
 		{
 			bListening = true;
-			m_sessionState = ListeningSessionState;
-			emit webRtcStateChanged(QStringLiteral("Listening"));
+			m_sessionStateMachine.finish(true);
+			emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
 		}
 		else
 		{
 			m_pSignaling->stop();
-			m_sessionState = IdleSessionState;
+			m_sessionStateMachine.finish(false);
 			emit webRtcStateChanged(QStringLiteral("Failed"));
 			emit sessionError(strError);
 		}
@@ -344,11 +331,10 @@ void KWebRtcSessionService::finishSession(const QString &strReason,
 	else
 	{
 		m_pSignaling->stop();
-		m_sessionState = IdleSessionState;
+		m_sessionStateMachine.finish(false);
 		emit webRtcStateChanged(QStringLiteral("Disconnected"));
 	}
 
-	m_bEndingSession = false;
 	if (bReportError)
 	{
 		emit sessionError(QStringLiteral("Remote session ended: %1").arg(strReason));
@@ -433,7 +419,7 @@ void KWebRtcSessionService::handleInputMessage(const QString &strMessage)
 	QString strError;
 	if (!KInputMessageCodec::decode(strMessage, &message, &strError))
 	{
-		KSessionTraceLogger::write(roleToString(m_strRole),
+		KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 			QStringLiteral("protocol_reject"),
 			QStringLiteral("input"),
 			strMessage.toUtf8().size(),
@@ -443,20 +429,15 @@ void KWebRtcSessionService::handleInputMessage(const QString &strMessage)
 
 	if (shouldTraceInputMessage(message))
 	{
-		KLatencyTraceLogger::write(roleToString(m_strRole),
+		KLatencyTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 			QStringLiteral("input_recv"),
 			QStringLiteral("%1 size=%2")
 				.arg(inputTraceExtra(message))
 				.arg(strMessage.toUtf8().size()));
 	}
 
-	if (m_strRole != QStringLiteral("controlled")
-		|| !m_bInputAllowed
-		|| !m_bStreaming
-		|| m_sessionState != StreamingSessionState)
-	{
+	if (!m_sessionStateMachine.canReceiveInput())
 		return;
-	}
 
 	m_pInputInjector->handleInputMessage(message);
 }
@@ -468,10 +449,11 @@ void KWebRtcSessionService::handleInputChannelChanged(bool bOpen)
 	if (!bOpen)
 		m_pInputInjector->releaseAllInputs();
 	emit inputChannelChanged(bOpen);
-	if (bWasOpen && !bOpen && !m_bEndingSession)
+	if (bWasOpen && !bOpen && !m_sessionStateMachine.isStopping())
 	{
-		finishSession(QStringLiteral("input_channel_closed"),
-			m_strRole == QStringLiteral("controlled"),
+		finishSession(InputChannelClosedSessionEndReason,
+			QString(),
+			m_sessionStateMachine.shouldKeepListening(),
 			false,
 			true);
 	}
@@ -481,7 +463,7 @@ void KWebRtcSessionService::handleSessionChannelChanged(bool bOpen)
 {
 	const bool bWasOpen = m_bSessionChannelOpen;
 	m_bSessionChannelOpen = bOpen;
-	KSessionTraceLogger::write(roleToString(m_strRole),
+	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 		QStringLiteral("channel"),
 		QStringLiteral("session"),
 		-1,
@@ -489,22 +471,24 @@ void KWebRtcSessionService::handleSessionChannelChanged(bool bOpen)
 	if (!bOpen)
 	{
 		m_bDeviceInfoRequested = false;
-		if (bWasOpen && !m_bEndingSession)
+		if (bWasOpen && !m_sessionStateMachine.isStopping())
 		{
-			finishSession(QStringLiteral("session_channel_closed"),
-				m_strRole == QStringLiteral("controlled"),
+			finishSession(SessionChannelClosedSessionEndReason,
+				QString(),
+				m_sessionStateMachine.shouldKeepListening(),
 				false,
 				true);
 		}
 		return;
 	}
-	m_sessionState = ConnectedSessionState;
-	emit webRtcStateChanged(QStringLiteral("Connected"));
-	if (m_strRole == QStringLiteral("controller"))
+	if (!m_sessionStateMachine.markConnected())
+		return;
+	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
+	if (m_sessionStateMachine.role() == ControllerSessionRole)
 	{
 		if (m_bDeviceInfoRequested)
 		{
-			KSessionTraceLogger::write(roleToString(m_strRole),
+			KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 				QStringLiteral("skip"),
 				KSessionMessageCodec::typeName(DeviceInfoRequestSessionMessageType),
 				-1,
@@ -513,7 +497,7 @@ void KWebRtcSessionService::handleSessionChannelChanged(bool bOpen)
 		}
 
 		m_bDeviceInfoRequested = true;
-		KSessionTraceLogger::write(roleToString(m_strRole),
+		KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 			QStringLiteral("handle_channel_open"),
 			KSessionMessageCodec::typeName(DeviceInfoRequestSessionMessageType));
 		KSessionMessage message;
@@ -528,7 +512,7 @@ void KWebRtcSessionService::handleSessionMessage(const QString &strMessage)
 	QString strError;
 	if (!KSessionMessageCodec::decode(strMessage, &message, &strError))
 	{
-		KSessionTraceLogger::write(roleToString(m_strRole),
+		KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 			QStringLiteral("protocol_reject"),
 			QStringLiteral("session"),
 			strMessage.toUtf8().size(),
@@ -537,19 +521,19 @@ void KWebRtcSessionService::handleSessionMessage(const QString &strMessage)
 	}
 
 	const QString strType = KSessionMessageCodec::typeName(message.type);
-	KSessionTraceLogger::write(roleToString(m_strRole),
+	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 		QStringLiteral("handle"),
 		strType,
 		strMessage.toUtf8().size());
 	if (message.type == DeviceInfoRequestSessionMessageType
-		&& m_strRole == QStringLiteral("controlled"))
+		&& m_sessionStateMachine.role() == ControlledSessionRole)
 	{
 		sendDeviceInfoMessage();
 		return;
 	}
 
 	if (message.type == DeviceInfoSessionMessageType
-		&& m_strRole == QStringLiteral("controller"))
+		&& m_sessionStateMachine.role() == ControllerSessionRole)
 	{
 		emit remoteDeviceInfoChanged(message.deviceInfo.strComputerName,
 			message.deviceInfo.strWallpaperMime,
@@ -560,46 +544,42 @@ void KWebRtcSessionService::handleSessionMessage(const QString &strMessage)
 	}
 
 	if (message.type == StartStreamingSessionMessageType
-		&& m_strRole == QStringLiteral("controlled"))
+		&& m_sessionStateMachine.canStartControlledStreaming())
 	{
-		KSessionTraceLogger::write(roleToString(m_strRole),
+		KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 			QStringLiteral("emit"),
 			QStringLiteral("startCaptureRequested"));
 		emit startCaptureRequested();
-		m_bInputAllowed = true;
-		m_bStreaming = true;
-		m_sessionState = StreamingSessionState;
-		emit webRtcStateChanged(QStringLiteral("Streaming"));
+		m_sessionStateMachine.beginStreaming();
+		emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
 		return;
 	}
 
 	if (message.type == StopStreamingSessionMessageType
-		&& m_strRole == QStringLiteral("controlled"))
+		&& m_sessionStateMachine.role() == ControlledSessionRole
+		&& m_sessionStateMachine.state() == StreamingSessionState)
 	{
-		m_bInputAllowed = false;
-		m_bStreaming = false;
+		m_sessionStateMachine.stopStreaming();
 		m_pInputInjector->releaseAllInputs();
 		resetInputTraceState();
 		emit stopCaptureRequested();
-		m_sessionState = ConnectedSessionState;
-		emit webRtcStateChanged(QStringLiteral("Connected"));
+		emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
 		return;
 	}
 
 	if (message.type == EndSessionMessageType)
 	{
 		const QString strRemoteReason = message.strReason;
-		finishSession(strRemoteReason.isEmpty()
-				? QStringLiteral("remote_stop")
-				: QStringLiteral("remote_%1").arg(strRemoteReason),
-			m_strRole == QStringLiteral("controlled"),
+		finishSession(RemoteStopSessionEndReason,
+			strRemoteReason,
+			m_sessionStateMachine.shouldKeepListening(),
 			false,
-			m_strRole == QStringLiteral("controller"));
+			m_sessionStateMachine.role() == ControllerSessionRole);
 		return;
 	}
 
 	if (message.type == StreamConfigSessionMessageType
-		&& m_strRole == QStringLiteral("controlled"))
+		&& m_sessionStateMachine.role() == ControlledSessionRole)
 	{
 		if (m_pPeer != nullptr)
 			m_pPeer->setStreamConfig(message.streamConfig);
@@ -617,45 +597,41 @@ void KWebRtcSessionService::handleInputInjected(quint64 nSeq, qint64 nInjectedMs
 
 void KWebRtcSessionService::handleOutgoingConnectionEstablished()
 {
-	if (!m_bControllerConnectionPending || m_pPeer == nullptr)
+	if (!m_sessionStateMachine.isConnecting() || m_pPeer == nullptr)
 		return;
 
-	m_bControllerConnectionPending = false;
-	m_strRole = QStringLiteral("controller");
-	m_sessionState = NegotiatingSessionState;
-	emit webRtcStateChanged(QStringLiteral("Negotiating"));
+	m_sessionStateMachine.beginNegotiating();
+	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
 	m_pPeer->createOffer();
 }
 
 void KWebRtcSessionService::handleOutgoingConnectionFailed(const QString &strMessage)
 {
-	if (!m_bControllerConnectionPending)
+	if (!m_sessionStateMachine.isConnecting())
 		return;
 
-	m_bControllerConnectionPending = false;
-	finishSession(QStringLiteral("connect_failed"), false, false, false);
+	finishSession(ConnectFailedSessionEndReason, QString(), false, false, false);
 	emit sessionError(strMessage);
 }
 
 void KWebRtcSessionService::handleIncomingConnectionEstablished()
 {
-	if (m_strRole != QStringLiteral("controlled") || m_bEndingSession)
+	if (m_sessionStateMachine.role() != ControlledSessionRole
+		|| m_sessionStateMachine.isStopping())
 		return;
 
-	m_sessionState = NegotiatingSessionState;
-	emit webRtcStateChanged(QStringLiteral("Negotiating"));
+	if (!m_sessionStateMachine.beginNegotiating())
+		return;
+	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
 }
 
 void KWebRtcSessionService::handleSignalingConnectionLost()
 {
-	if (m_bEndingSession)
-		return;
-
-	if (m_sessionState == ConnectingSessionState
-		|| m_sessionState == NegotiatingSessionState)
+	if (m_sessionStateMachine.isNegotiating())
 	{
-		finishSession(QStringLiteral("signaling_lost_during_negotiation"),
-			m_strRole == QStringLiteral("controlled"),
+		finishSession(SignalingLostSessionEndReason,
+			QString(),
+			m_sessionStateMachine.shouldKeepListening(),
 			false,
 			true);
 	}
@@ -663,56 +639,46 @@ void KWebRtcSessionService::handleSignalingConnectionLost()
 
 void KWebRtcSessionService::handlePeerConnectionInterrupted()
 {
-	if (m_bEndingSession
-		|| m_sessionState == IdleSessionState
-		|| m_sessionState == ListeningSessionState
-		|| m_sessionState == StoppingSessionState)
-	{
+	if (!m_sessionStateMachine.interrupt())
 		return;
-	}
 
-	m_bInputAllowed = false;
 	m_pInputInjector->releaseAllInputs();
-	m_sessionState = InterruptedSessionState;
-	emit webRtcStateChanged(QStringLiteral("Interrupted"));
+	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
+	m_nDisconnectGraceGeneration = m_sessionStateMachine.generation();
 	m_pDisconnectGraceTimer->start(kDisconnectGraceMs);
 }
 
 void KWebRtcSessionService::handlePeerConnectionRestored()
 {
-	if (m_bEndingSession || m_sessionState != InterruptedSessionState)
+	if (!m_sessionStateMachine.restore())
 		return;
 
 	m_pDisconnectGraceTimer->stop();
-	m_bInputAllowed = m_strRole == QStringLiteral("controlled") && m_bStreaming;
-	m_sessionState = m_bStreaming ? StreamingSessionState : ConnectedSessionState;
-	emit webRtcStateChanged(m_bStreaming
-		? QStringLiteral("Streaming")
-		: QStringLiteral("Connected"));
+	m_nDisconnectGraceGeneration = 0;
+	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
 }
 
 void KWebRtcSessionService::handlePeerConnectionTerminated(const QString &strReason)
 {
-	if (m_bEndingSession
-		|| m_sessionState == IdleSessionState
-		|| m_sessionState == ListeningSessionState)
-	{
+	if (!m_sessionStateMachine.canHandlePeerTermination())
 		return;
-	}
 
-	finishSession(strReason,
-		m_strRole == QStringLiteral("controlled"),
+	finishSession(PeerTerminatedSessionEndReason,
+		strReason,
+		m_sessionStateMachine.shouldKeepListening(),
 		false,
 		true);
 }
 
 void KWebRtcSessionService::handleDisconnectGraceTimeout()
 {
-	if (m_bEndingSession || m_sessionState != InterruptedSessionState)
+	if (!m_sessionStateMachine.isInterrupted()
+		|| m_nDisconnectGraceGeneration != m_sessionStateMachine.generation())
 		return;
 
-	finishSession(QStringLiteral("ice_disconnected_timeout"),
-		m_strRole == QStringLiteral("controlled"),
+	finishSession(DisconnectTimeoutSessionEndReason,
+		QString(),
+		m_sessionStateMachine.shouldKeepListening(),
 		false,
 		true);
 }
@@ -729,7 +695,7 @@ void KWebRtcSessionService::sendDeviceInfoMessage()
 	message.deviceInfo.strWallpaperMime = strMimeType;
 	message.deviceInfo.strWallpaperData = strWallpaperData;
 	const QString strMessage = KSessionMessageCodec::encode(message);
-	KSessionTraceLogger::write(roleToString(m_strRole),
+	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 		QStringLiteral("prepare"),
 		KSessionMessageCodec::typeName(DeviceInfoSessionMessageType),
 		strMessage.toUtf8().size(),

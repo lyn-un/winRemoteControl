@@ -5,6 +5,7 @@
 #include "common/streamconfig.h"
 #include "core/protocol/inputmessage.h"
 #include "core/protocol/sessionmessage.h"
+#include "core/session/sessionstatemachine.h"
 #include "transport/webrtc/webrtcnetworkstats.h"
 #include "transport/webrtc/webrtcpeer.h"
 #include "transport/webrtc/webrtcvideoframe.h"
@@ -62,22 +63,14 @@ signals:
 	void inputFeedbackFrameRequested();
 
 private:
-	enum SessionState
-	{
-		IdleSessionState,
-		ListeningSessionState,
-		ConnectingSessionState,
-		NegotiatingSessionState,
-		ConnectedSessionState,
-		StreamingSessionState,
-		InterruptedSessionState,
-		StoppingSessionState
-	};
-
 	bool initializePeer(KWebRtcPeer::Role role, QString *pErrorMessage);
 	void wirePeer();
 	void sendSessionMessage(const KSessionMessage &message);
-	void finishSession(const QString &strReason, bool bKeepListening, bool bNotifyRemote, bool bReportError);
+	void finishSession(KSessionEndReason reason,
+		const QString &strDetail,
+		bool bKeepListening,
+		bool bNotifyRemote,
+		bool bReportError);
 	void resetInputTraceState();
 	void handleRemoteFrame(const KDecodedVideoFrame &frame);
 	void handleInputMessage(const QString &strMessage);
@@ -96,17 +89,13 @@ private:
 	void sendDeviceInfoMessage();
 	static QString readWallpaperBase64(QString *pMimeType);
 
-	QString m_strRole = QStringLiteral("controller");
+	KSessionStateMachine m_sessionStateMachine;
 	bool m_bDeviceInfoRequested = false;
-	bool m_bControllerConnectionPending = false;
-	bool m_bEndingSession = false;
-	bool m_bInputAllowed = false;
 	bool m_bInputChannelOpen = false;
 	bool m_bSessionChannelOpen = false;
-	bool m_bStreaming = false;
 	quint64 m_nLastInjectedInputSeq = 0;
+	quint64 m_nDisconnectGraceGeneration = 0;
 	qint64 m_nLastInjectedInputMs = -1;
-	SessionState m_sessionState = IdleSessionState;
 	KWebRtcSignaling *m_pSignaling = nullptr;
 	KWebRtcPeer *m_pPeer = nullptr;
 	KInputInjector *m_pInputInjector = nullptr;

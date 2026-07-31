@@ -36,6 +36,19 @@ target_link_libraries(wrc_protocol PUBLIC
 	Qt6::Core
 )
 
+add_library(wrc_core STATIC
+	src/core/session/sessionstatemachine.cpp
+	src/core/session/sessionstatemachine.h
+)
+
+target_include_directories(wrc_core PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_core PUBLIC
+	Qt6::Core
+)
+
 qt_add_executable(winRemoteControl WIN32
 	src/app/main.cpp
 	src/app/mainwindow.cpp
@@ -108,6 +121,7 @@ target_link_directories(winRemoteControl PRIVATE
 )
 
 target_link_libraries(winRemoteControl PRIVATE
+	wrc_core
 	wrc_protocol
 	Qt6::Widgets
 	Qt6::Gui
@@ -144,6 +158,15 @@ if(BUILD_TESTING)
 		Qt6::Core
 	)
 	add_test(NAME wrc_protocol_tests COMMAND wrc_protocol_tests)
+
+	add_executable(wrc_session_state_tests
+		tests/unit/sessionstatemachinetest.cpp
+	)
+	target_link_libraries(wrc_session_state_tests PRIVATE
+		wrc_core
+		Qt6::Core
+	)
+	add_test(NAME wrc_session_state_tests COMMAND wrc_session_state_tests)
 endif()
 
 set(WEBVIEW2_LOADER "${WEBVIEW2_ROOT}/build/native/x64/WebView2Loader.dll")
