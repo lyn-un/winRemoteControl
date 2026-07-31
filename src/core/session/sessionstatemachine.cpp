@@ -115,7 +115,7 @@ bool KSessionStateMachine::restore()
 
 bool KSessionStateMachine::beginStopping()
 {
-	if (m_state == StoppingSessionState)
+	if (m_state == IdleSessionState || m_state == StoppingSessionState)
 		return false;
 
 	m_state = StoppingSessionState;
@@ -180,11 +180,16 @@ bool KSessionStateMachine::isStopping() const
 	return m_state == StoppingSessionState;
 }
 
-bool KSessionStateMachine::canHandlePeerTermination() const
+bool KSessionStateMachine::hasActiveSession() const
 {
 	return m_state != IdleSessionState
 		&& m_state != ListeningSessionState
 		&& m_state != StoppingSessionState;
+}
+
+bool KSessionStateMachine::canHandlePeerTermination() const
+{
+	return hasActiveSession();
 }
 
 bool KSessionStateMachine::shouldKeepListening() const

@@ -25,13 +25,22 @@ KWebRtcRemoteFrameProcessor::KWebRtcRemoteFrameProcessor(QObject *pParent)
 void KWebRtcRemoteFrameProcessor::enqueue(const webrtc::VideoFrame &frame)
 {
 	bool bNeedQueue = false;
+	bool bFrameCoalesced = false;
+	quint64 nReceivedFrames = 0;
+	quint64 nProcessedFrames = 0;
 	quint64 nDroppedFrames = 0;
 	{
 		std::lock_guard<std::mutex> guard(m_mutex);
+		++m_nReceivedCallbackFrames;
 		if (m_bHasPendingFrame)
+		{
 			++m_nDroppedCallbackFrames;
+			bFrameCoalesced = true;
+		}
 		m_pendingFrame = frame;
 		m_bHasPendingFrame = true;
+		nReceivedFrames = m_nReceivedCallbackFrames;
+		nProcessedFrames = m_nProcessedCallbackFrames;
 		nDroppedFrames = m_nDroppedCallbackFrames;
 		if (!m_bProcessQueued)
 		{
@@ -40,14 +49,16 @@ void KWebRtcRemoteFrameProcessor::enqueue(const webrtc::VideoFrame &frame)
 		}
 	}
 
-	if (nDroppedFrames > 0
+	if (bFrameCoalesced
 		&& KLatencyTraceLogger::isEnabled()
 		&& (nDroppedFrames == 1
 			|| nDroppedFrames % kCallbackFrameCoalesceTraceInterval == 0))
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controller"),
 			QStringLiteral("remote_callback_frame_coalesced"),
-			QStringLiteral("dropped=%1 latestTimestampMs=%2")
+			QStringLiteral("receivedTotal=%1 processedTotal=%2 coalescedTotal=%3 latestTimestampMs=%4")
+				.arg(nReceivedFrames)
+				.arg(nProcessedFrames)
 				.arg(nDroppedFrames)
 				.arg(frame.timestamp_us() / 1000));
 	}
@@ -62,11 +73,34 @@ void KWebRtcRemoteFrameProcessor::enqueue(const webrtc::VideoFrame &frame)
 
 void KWebRtcRemoteFrameProcessor::clear()
 {
-	std::lock_guard<std::mutex> guard(m_mutex);
-	m_pendingFrame.reset();
-	m_bHasPendingFrame = false;
-	m_bProcessQueued = false;
-	m_nDroppedCallbackFrames = 0;
+	quint64 nReceivedFrames = 0;
+	quint64 nProcessedFrames = 0;
+	quint64 nDroppedFrames = 0;
+	bool bPendingFrameDiscarded = false;
+	{
+		std::lock_guard<std::mutex> guard(m_mutex);
+		nReceivedFrames = m_nReceivedCallbackFrames;
+		nProcessedFrames = m_nProcessedCallbackFrames;
+		nDroppedFrames = m_nDroppedCallbackFrames;
+		bPendingFrameDiscarded = m_bHasPendingFrame;
+		m_pendingFrame.reset();
+		m_bHasPendingFrame = false;
+		m_bProcessQueued = false;
+		m_nReceivedCallbackFrames = 0;
+		m_nProcessedCallbackFrames = 0;
+		m_nDroppedCallbackFrames = 0;
+	}
+
+	if (nReceivedFrames > 0 && KLatencyTraceLogger::isEnabled())
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controller"),
+			QStringLiteral("remote_callback_frame_coalesce_summary"),
+			QStringLiteral("receivedTotal=%1 processedTotal=%2 coalescedTotal=%3 pendingDiscarded=%4")
+				.arg(nReceivedFrames)
+				.arg(nProcessedFrames)
+				.arg(nDroppedFrames)
+				.arg(bPendingFrameDiscarded ? 1 : 0));
+	}
 }
 
 void KWebRtcRemoteFrameProcessor::processLatest()
@@ -82,6 +116,7 @@ void KWebRtcRemoteFrameProcessor::processLatest()
 		pendingFrame = std::move(m_pendingFrame);
 		m_pendingFrame.reset();
 		m_bHasPendingFrame = false;
+		++m_nProcessedCallbackFrames;
 	}
 
 	if (pendingFrame.has_value())

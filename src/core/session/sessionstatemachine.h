@@ -68,6 +68,7 @@ public:
 	bool isNegotiating() const;
 	bool isInterrupted() const;
 	bool isStopping() const;
+	bool hasActiveSession() const;
 	bool canHandlePeerTermination() const;
 	bool shouldKeepListening() const;
 

@@ -193,6 +193,8 @@ void KSessionCoordinator::stopStreaming()
 {
 	if (m_sessionStateMachine.role() == ControlledSessionRole)
 	{
+		if (!m_sessionStateMachine.hasActiveSession())
+			return;
 		finishSession(ControlledUserStopSessionEndReason, QString(), true, true, false);
 		return;
 	}

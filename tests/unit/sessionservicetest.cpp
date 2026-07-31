@@ -192,6 +192,14 @@ namespace
 			QStringLiteral("controlled session initializes injected transport"));
 		check(pTransport->initializedRole == ControlledSessionRole,
 			QStringLiteral("transport receives controlled role"));
+		const int nListeningShutdownCount = pTransport->nShutdownCount;
+		service.stopStreaming();
+		check(pTransport->nShutdownCount == nListeningShutdownCount,
+			QStringLiteral("controlled stop is ignored without an active session"));
+		check(pTransport->nInitializeCount == 1,
+			QStringLiteral("ignored controlled stop does not rebuild listener"));
+		check(nStopCaptureCount == 0,
+			QStringLiteral("ignored controlled stop does not stop capture"));
 
 		QTcpSocket controllerSocket;
 		controllerSocket.connectToHost(QHostAddress::LocalHost, nPort);
@@ -247,6 +255,19 @@ namespace
 			QStringLiteral("stop-stream releases remote input state"));
 
 		service.disconnectSession();
+		const int nShutdownCount = pTransport->nShutdownCount;
+		const int nSentSessionCount = pTransport->nSentSessionCount;
+		const int nReleaseInputsCount = pInputInjector->nReleaseInputsCount;
+		const int nFinalStopCaptureCount = nStopCaptureCount;
+		service.disconnectSession();
+		check(pTransport->nShutdownCount == nShutdownCount,
+			QStringLiteral("duplicate disconnect does not stop peer twice"));
+		check(pTransport->nSentSessionCount == nSentSessionCount,
+			QStringLiteral("duplicate disconnect does not notify peer twice"));
+		check(pInputInjector->nReleaseInputsCount == nReleaseInputsCount,
+			QStringLiteral("duplicate disconnect does not release inputs twice"));
+		check(nStopCaptureCount == nFinalStopCaptureCount,
+			QStringLiteral("duplicate disconnect does not stop capture twice"));
 		controllerSocket.disconnectFromHost();
 	}
 }

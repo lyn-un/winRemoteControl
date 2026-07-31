@@ -32,6 +32,8 @@ private:
 	std::optional<webrtc::VideoFrame> m_pendingFrame;
 	bool m_bHasPendingFrame = false;
 	bool m_bProcessQueued = false;
+	quint64 m_nReceivedCallbackFrames = 0;
+	quint64 m_nProcessedCallbackFrames = 0;
 	quint64 m_nDroppedCallbackFrames = 0;
 	quint64 m_nFrameIndex = 0;
 };

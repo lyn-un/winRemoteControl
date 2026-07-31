@@ -21,6 +21,7 @@ namespace
 		KSessionStateMachine stateMachine;
 		check(stateMachine.role() == ControllerSessionRole, QStringLiteral("controller is default role"));
 		check(stateMachine.state() == IdleSessionState, QStringLiteral("session starts idle"));
+		check(!stateMachine.beginStopping(), QStringLiteral("idle session cannot stop again"));
 		check(stateMachine.beginConnecting(), QStringLiteral("controller can begin connecting"));
 		check(stateMachine.generation() == 1, QStringLiteral("new connection increments generation"));
 		check(stateMachine.isConnecting(), QStringLiteral("connecting state is recognized"));
@@ -39,6 +40,7 @@ namespace
 			QStringLiteral("stopping session ignores peer termination"));
 		stateMachine.finish(false);
 		check(stateMachine.state() == IdleSessionState, QStringLiteral("controller finishes idle"));
+		check(!stateMachine.beginStopping(), QStringLiteral("finished controller cannot stop twice"));
 		check(stateMachine.beginConnecting(), QStringLiteral("controller can reconnect"));
 		check(stateMachine.generation() == 2, QStringLiteral("reconnect gets a new generation"));
 	}
@@ -98,6 +100,9 @@ namespace
 		check(!stateMachine.interrupt(), QStringLiteral("listener cannot be interrupted"));
 		check(!stateMachine.canHandlePeerTermination(),
 			QStringLiteral("listener ignores peer termination"));
+		check(stateMachine.beginStopping(), QStringLiteral("listener can be stopped explicitly"));
+		stateMachine.finish(false);
+		check(!stateMachine.beginStopping(), QStringLiteral("stopped listener cannot stop twice"));
 	}
 
 	void testEndReasonNames()
