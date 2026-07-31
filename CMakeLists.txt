@@ -60,6 +60,8 @@ add_library(wrc_core STATIC
 	src/core/session/sessionstatemachine.cpp
 	src/core/session/sessionstatemachine.h
 	src/core/transport/remotepeertransport.h
+	src/core/transport/networkstatstracker.cpp
+	src/core/transport/networkstatstracker.h
 )
 
 target_include_directories(wrc_core PUBLIC
@@ -148,6 +150,8 @@ qt_add_executable(winRemoteControl WIN32
 	src/transport/webrtc/webrtcpeer.h
 	src/transport/webrtc/webrtcdatachannel.cpp
 	src/transport/webrtc/webrtcdatachannel.h
+	src/transport/webrtc/webrtclatencyprobe.cpp
+	src/transport/webrtc/webrtclatencyprobe.h
 	src/transport/webrtc/webrtcremoteframeprocessor.cpp
 	src/transport/webrtc/webrtcremoteframeprocessor.h
 	src/transport/webrtc/webrtch264decoder.cpp
@@ -231,6 +235,15 @@ if(BUILD_TESTING)
 		Qt6::Core
 	)
 	add_test(NAME wrc_session_state_tests COMMAND wrc_session_state_tests)
+
+	add_executable(wrc_network_stats_tests
+		tests/unit/networkstatstrackertest.cpp
+	)
+	target_link_libraries(wrc_network_stats_tests PRIVATE
+		wrc_core
+		Qt6::Core
+	)
+	add_test(NAME wrc_network_stats_tests COMMAND wrc_network_stats_tests)
 
 	add_executable(wrc_session_service_tests
 		tests/unit/sessionservicetest.cpp

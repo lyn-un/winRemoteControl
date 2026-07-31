@@ -2,6 +2,7 @@
 #define _WINREMOTECONTROL_WEBRTCPEER_H_
 
 #include "core/transport/remotepeertransport.h"
+#include "core/transport/networkstatstracker.h"
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
@@ -21,8 +22,8 @@
 class KWebRtcVideoSource;
 class KCreateSessionDescriptionObserver;
 class KWebRtcDataChannel;
+class KWebRtcLatencyProbe;
 class KWebRtcRemoteFrameProcessor;
-class QJsonObject;
 namespace webrtc
 {
 class RTCStatsReport;
@@ -89,8 +90,6 @@ private:
 	void requestStats();
 	void resetStatsHistory();
 	void sendLatencyPing();
-	void handleLatencyPing(const QJsonObject &object);
-	void handleLatencyPong(const QJsonObject &object);
 	static QString rtcErrorMessage(const QString &strPrefix, const webrtc::RTCError &error);
 
 	KSessionRole m_role = ControllerSessionRole;
@@ -103,23 +102,11 @@ private:
 	KWebRtcDataChannel *m_pInputDataChannel = nullptr;
 	KWebRtcDataChannel *m_pSessionDataChannel = nullptr;
 	KWebRtcRemoteFrameProcessor *m_pRemoteFrameProcessor = nullptr;
+	std::unique_ptr<KWebRtcLatencyProbe> m_spLatencyProbe;
 	webrtc::scoped_refptr<KWebRtcVideoSource> m_spVideoSource;
 	webrtc::scoped_refptr<webrtc::RtpSenderInterface> m_spVideoSender;
 	webrtc::scoped_refptr<webrtc::VideoTrackInterface> m_spRemoteVideoTrack;
-	bool m_bHasPreviousStats = false;
-	qint64 m_nPreviousStatsMs = 0;
-	quint64 m_nPreviousBytesReceived = 0;
-	qint64 m_nPreviousPacketsReceived = 0;
-	qint64 m_nPreviousPacketsLost = 0;
-	double m_fPreviousJitterBufferDelay = 0.0;
-	double m_fPreviousJitterBufferTargetDelay = 0.0;
-	quint64 m_nPreviousJitterBufferEmittedCount = 0;
-	double m_fPreviousTotalDecodeTime = 0.0;
-	qint64 m_nPreviousFramesDecoded = 0;
-	qint64 m_nPreviousKeyFramesDecoded = 0;
-	qint64 m_nPreviousFramesDropped = 0;
-	quint64 m_nLatencyPingId = 0;
-	int m_nDataChannelRttMs = -1;
+	KNetworkStatsTracker m_networkStatsTracker;
 
 	friend class KCreateSessionDescriptionObserver;
 	friend class KStatsCallback;
