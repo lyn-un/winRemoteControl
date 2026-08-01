@@ -178,6 +178,15 @@ function AssistPage({ state, numericPort, setRole, connectManual, busy }) {
 function SettingsPage({ state }) {
   const settings = state.applicationSettings;
   const [activeSection, setActiveSection] = useState("security");
+  const [confirmation, setConfirmation] = useState("");
+  useEffect(() => {
+    if (!confirmation) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") setConfirmation("");
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [confirmation]);
   if (!settings) {
     return <section className="content-view settings-view view-enter"><div className="empty-state"><strong>正在读取设置</strong></div></section>;
   }
@@ -185,12 +194,17 @@ function SettingsPage({ state }) {
   const update = (patch) => sendCommand("updateApplicationSettings", { ...settings, ...patch });
   const changeRemoteAccess = () => {
     const enabled = !settings.remoteAccessEnabled;
-    if (!enabled && state.sessionOpen && !window.confirm("关闭远程控制将立即结束当前会话，是否继续？")) return;
+    if (!enabled && state.sessionOpen) {
+      setConfirmation("disableRemoteAccess");
+      return;
+    }
     update({ remoteAccessEnabled: enabled });
   };
   const changeApprovalMode = (approvalMode) => {
-    if (approvalMode === "autoAccept" && settings.approvalMode !== "autoAccept"
-      && !window.confirm("自动接受会允许能够访问监听端口的设备直接建立控制。仅建议在可信网络中使用，是否继续？")) return;
+    if (approvalMode === "autoAccept" && settings.approvalMode !== "autoAccept") {
+      setConfirmation("autoAccept");
+      return;
+    }
     update({ approvalMode });
   };
   const changeDefaultPort = (value) => {
@@ -207,6 +221,30 @@ function SettingsPage({ state }) {
     { id: "network", icon: "signal", title: "网络与传输", detail: "监听端口与连接方式" },
   ];
   const active = sections.find((section) => section.id === activeSection) || sections[0];
+  const confirmationCopy = confirmation === "disableRemoteAccess"
+    ? {
+        eyebrow: "ACTIVE SESSION",
+        title: "关闭远程控制？",
+        detail: "当前远程会话将立即结束，同时停止监听和局域网响应。",
+        note: "远端设备会断开，未保存的远端操作可能丢失。",
+        confirmLabel: "结束会话并关闭",
+        tone: "danger",
+      }
+    : {
+        eyebrow: "TRUSTED NETWORK ONLY",
+        title: "启用自动接受？",
+        detail: "能够访问监听端口的设备将不再需要本机确认，即可进入远程控制协商。",
+        note: "仅建议在由你管理、且成员可信的网络中启用。",
+        confirmLabel: "确认启用",
+        tone: "warning",
+      };
+  const confirmSettingsChange = () => {
+    if (confirmation === "disableRemoteAccess")
+      update({ remoteAccessEnabled: false });
+    else if (confirmation === "autoAccept")
+      update({ approvalMode: "autoAccept" });
+    setConfirmation("");
+  };
 
   const renderSection = () => {
     if (activeSection === "security") {
@@ -268,6 +306,19 @@ function SettingsPage({ state }) {
           {renderSection()}
         </div>
       </div>
+      {confirmation && (
+        <div className="settings-confirm-backdrop" onMouseDown={() => setConfirmation("")}>
+          <article className={`settings-confirm-dialog ${confirmationCopy.tone}`} role="dialog" aria-modal="true" aria-labelledby="settings-confirm-title" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <span className="settings-confirm-mark"><Icon name="shield" /></span>
+              <div><span className="eyebrow">{confirmationCopy.eyebrow}</span><h2 id="settings-confirm-title">{confirmationCopy.title}</h2></div>
+            </header>
+            <p>{confirmationCopy.detail}</p>
+            <div className="settings-confirm-note"><span>!</span><small>{confirmationCopy.note}</small></div>
+            <footer><button className="outline-button" onClick={() => setConfirmation("")}>取消</button><button className="primary-button" onClick={confirmSettingsChange}>{confirmationCopy.confirmLabel}</button></footer>
+          </article>
+        </div>
+      )}
     </section>
   );
 }
