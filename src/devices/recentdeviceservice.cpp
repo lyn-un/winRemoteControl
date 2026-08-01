@@ -89,10 +89,12 @@ void KRecentDeviceService::removeDevice(const QString &strDeviceId)
 
 void KRecentDeviceService::setSessionChannelOpen(bool bOpen)
 {
+	const bool bWasOpen = m_bSessionChannelOpen;
 	m_bSessionChannelOpen = bOpen;
 	if (!bOpen)
 	{
-		clearPendingConnection();
+		if (bWasOpen)
+			clearPendingConnection();
 		return;
 	}
 

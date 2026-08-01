@@ -47,6 +47,7 @@ namespace
 		bool bInfoFirst)
 	{
 		pService->connectEndpoint(strHost, nPort);
+		pService->setSessionChannelOpen(false);
 		if (bInfoFirst)
 		{
 			pService->setRemoteDeviceName(strName);
