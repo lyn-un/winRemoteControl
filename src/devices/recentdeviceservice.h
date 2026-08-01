@@ -28,6 +28,7 @@ public slots:
 	void connectEndpoint(const QString &strHost, quint16 nPort);
 	void connectDevice(const QString &strDeviceId);
 	void removeDevice(const QString &strDeviceId);
+	void prepareIncomingConnection(const QString &strDeviceName, const QString &strSourceAddress);
 	void setSessionChannelOpen(bool bOpen);
 	void setRemoteDeviceName(const QString &strDeviceName);
 
@@ -42,7 +43,7 @@ private:
 	void savePendingDevice();
 	void persistDevices();
 	void clearPendingConnection();
-	int findDeviceByEndpoint(const QString &strHost, quint16 nPort) const;
+	int findPendingDevice() const;
 	int findDeviceById(const QString &strDeviceId) const;
 	void sortAndTrimDevices();
 	void writeTrace(const QString &strStage, const QString &strExtra) const;
@@ -52,6 +53,7 @@ private:
 	QString m_strPendingHost;
 	QString m_strPendingDeviceName;
 	quint16 m_nPendingPort = 0;
+	bool m_bPendingIncoming = false;
 	bool m_bSessionChannelOpen = false;
 	bool m_bPendingSaved = false;
 };

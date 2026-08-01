@@ -32,9 +32,10 @@ QVector<KRecentDevice> KQSettingsRecentDeviceStore::loadDevices(QString *pError)
 		device.strHost = settings.value(QStringLiteral("host")).toString().trimmed();
 		device.nSignalingPort = static_cast<quint16>(settings.value(QStringLiteral("port")).toUInt());
 		device.nLastConnectedAtMs = settings.value(QStringLiteral("lastConnectedAtMs")).toLongLong();
+		device.bIncoming = settings.value(QStringLiteral("incoming"), false).toBool();
 		if (!device.strDeviceId.isEmpty()
 			&& !device.strHost.isEmpty()
-			&& device.nSignalingPort != 0)
+			&& (device.bIncoming || device.nSignalingPort != 0))
 		{
 			devices.append(device);
 		}
@@ -69,6 +70,7 @@ bool KQSettingsRecentDeviceStore::saveDevices(
 		settings.setValue(QStringLiteral("host"), device.strHost);
 		settings.setValue(QStringLiteral("port"), device.nSignalingPort);
 		settings.setValue(QStringLiteral("lastConnectedAtMs"), device.nLastConnectedAtMs);
+		settings.setValue(QStringLiteral("incoming"), device.bIncoming);
 	}
 	settings.endArray();
 	settings.sync();

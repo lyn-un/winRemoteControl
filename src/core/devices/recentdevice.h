@@ -12,6 +12,7 @@ struct KRecentDevice
 	QString strHost;
 	quint16 nSignalingPort = 0;
 	qint64 nLastConnectedAtMs = 0;
+	bool bIncoming = false;
 };
 
 Q_DECLARE_METATYPE(KRecentDevice)

@@ -47,6 +47,7 @@ void KRecentDeviceService::connectEndpoint(const QString &strHost, quint16 nPort
 	m_strPendingHost = strNormalizedHost;
 	m_nPendingPort = nPort;
 	m_strPendingDeviceName.clear();
+	m_bPendingIncoming = false;
 	m_bSessionChannelOpen = false;
 	m_bPendingSaved = false;
 	const QString strRequestedHost = m_strPendingHost;
@@ -64,6 +65,11 @@ void KRecentDeviceService::connectDevice(const QString &strDeviceId)
 	}
 
 	const KRecentDevice device = m_devices.at(nIndex);
+	if (device.bIncoming || device.nSignalingPort == 0)
+	{
+		emit recentDeviceError(QStringLiteral("接入记录不能用于发起连接"));
+		return;
+	}
 	writeTrace(QStringLiteral("recent_device_connect"),
 		QStringLiteral("deviceId=%1 host=%2 port=%3")
 			.arg(device.strDeviceId, device.strHost)
@@ -85,6 +91,23 @@ void KRecentDeviceService::removeDevice(const QString &strDeviceId)
 	writeTrace(QStringLiteral("recent_device_removed"),
 		QStringLiteral("deviceId=%1").arg(strDeviceId));
 	emit devicesChanged(m_devices);
+}
+
+void KRecentDeviceService::prepareIncomingConnection(
+	const QString &strDeviceName,
+	const QString &strSourceAddress)
+{
+	const QString strNormalizedName = strDeviceName.trimmed().left(128);
+	const QString strNormalizedAddress = strSourceAddress.trimmed();
+	if (strNormalizedName.isEmpty() || strNormalizedAddress.isEmpty())
+		return;
+
+	m_strPendingHost = strNormalizedAddress;
+	m_strPendingDeviceName = strNormalizedName;
+	m_nPendingPort = 0;
+	m_bPendingIncoming = true;
+	m_bSessionChannelOpen = false;
+	m_bPendingSaved = false;
 }
 
 void KRecentDeviceService::setSessionChannelOpen(bool bOpen)
@@ -114,11 +137,11 @@ void KRecentDeviceService::savePendingDevice()
 		|| m_bPendingSaved
 		|| m_strPendingHost.isEmpty()
 		|| m_strPendingDeviceName.isEmpty()
-		|| m_nPendingPort == 0)
+		|| (!m_bPendingIncoming && m_nPendingPort == 0))
 		return;
 
 	const qint64 nConnectedAtMs = QDateTime::currentMSecsSinceEpoch();
-	int nIndex = findDeviceByEndpoint(m_strPendingHost, m_nPendingPort);
+	int nIndex = findPendingDevice();
 	const bool bAdded = nIndex < 0;
 	if (bAdded)
 	{
@@ -126,6 +149,7 @@ void KRecentDeviceService::savePendingDevice()
 		device.strDeviceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
 		device.strHost = m_strPendingHost;
 		device.nSignalingPort = m_nPendingPort;
+		device.bIncoming = m_bPendingIncoming;
 		m_devices.append(device);
 		nIndex = m_devices.size() - 1;
 	}
@@ -162,19 +186,20 @@ void KRecentDeviceService::clearPendingConnection()
 	m_strPendingHost.clear();
 	m_strPendingDeviceName.clear();
 	m_nPendingPort = 0;
+	m_bPendingIncoming = false;
 	m_bPendingSaved = false;
 }
 
-int KRecentDeviceService::findDeviceByEndpoint(const QString &strHost, quint16 nPort) const
+int KRecentDeviceService::findPendingDevice() const
 {
 	for (int nIndex = 0; nIndex < m_devices.size(); ++nIndex)
 	{
 		const KRecentDevice &device = m_devices.at(nIndex);
-		if (device.nSignalingPort == nPort
-			&& device.strHost.compare(strHost.trimmed(), Qt::CaseInsensitive) == 0)
-		{
+		if (device.bIncoming != m_bPendingIncoming
+			|| device.strHost.compare(m_strPendingHost, Qt::CaseInsensitive) != 0)
+			continue;
+		if (m_bPendingIncoming || device.nSignalingPort == m_nPendingPort)
 			return nIndex;
-		}
 	}
 	return -1;
 }
@@ -202,7 +227,9 @@ void KRecentDeviceService::sortAndTrimDevices()
 
 void KRecentDeviceService::writeTrace(const QString &strStage, const QString &strExtra) const
 {
-	KSessionTraceLogger::write(QStringLiteral("controller"),
+	KSessionTraceLogger::write(m_bPendingIncoming
+		? QStringLiteral("controlled")
+		: QStringLiteral("controller"),
 		strStage,
 		QStringLiteral("recent_device"),
 		-1,

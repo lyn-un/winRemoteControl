@@ -45,6 +45,7 @@ button:disabled { cursor: default; opacity: .58; }
 .sidebar-recents > span { display: block; margin-bottom: 13px; color: var(--muted); font-size: 12px; letter-spacing: .1em; }
 .sidebar-recents button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 1px; overflow: hidden; color: #5f7379; background: transparent; border: 0; text-align: left; font-size: 13px; }
 .sidebar-recents button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-recents button:disabled { cursor:default;opacity:.78; }.sidebar-recents button em { margin-left:auto;padding:2px 5px;color:#71878d;background:rgba(224,236,239,.9);border-radius:8px;font:normal 9px "Cascadia Mono",monospace; }
 .sidebar-recents i, .privacy-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: #9aa8ab; }
 .sidebar-recents i.online { background: var(--green); box-shadow: 0 0 0 3px rgba(75,180,143,.13); }
 .sidebar-recents > small { color:#89999e;font-size:12px;line-height:1.55; }

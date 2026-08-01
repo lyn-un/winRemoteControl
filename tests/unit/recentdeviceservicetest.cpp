@@ -148,6 +148,41 @@ namespace
 			QStringLiteral("recent devices are sorted newest first"));
 	}
 
+	void testIncomingConnectionHistory()
+	{
+		auto pStore = std::make_unique<KFakeRecentDeviceStore>();
+		KFakeRecentDeviceStore *pFakeStore = pStore.get();
+		KRecentDeviceService service(std::move(pStore));
+		service.initialize();
+		int nErrorCount = 0;
+		QObject::connect(&service, &KRecentDeviceService::recentDeviceError,
+			[&nErrorCount](const QString &) { ++nErrorCount; });
+
+		service.prepareIncomingConnection(
+			QStringLiteral("CONTROLLER-PC"), QStringLiteral("192.168.1.8"));
+		service.setSessionChannelOpen(true);
+		service.setSessionChannelOpen(false);
+		check(pFakeStore->devices.size() == 1
+			&& pFakeStore->devices.first().bIncoming
+			&& pFakeStore->devices.first().strDeviceName == QStringLiteral("CONTROLLER-PC")
+			&& pFakeStore->devices.first().strHost == QStringLiteral("192.168.1.8")
+			&& pFakeStore->devices.first().nSignalingPort == 0,
+			QStringLiteral("accepted incoming session is stored as non-connectable history"));
+
+		const QString strIncomingId = pFakeStore->devices.first().strDeviceId;
+		service.connectDevice(strIncomingId);
+		check(nErrorCount == 1,
+			QStringLiteral("incoming history cannot be used as an outgoing endpoint"));
+
+		service.prepareIncomingConnection(
+			QStringLiteral("CONTROLLER-PC-RENAMED"), QStringLiteral("192.168.1.8"));
+		service.setSessionChannelOpen(true);
+		service.setSessionChannelOpen(false);
+		check(pFakeStore->devices.size() == 1
+			&& pFakeStore->devices.first().strDeviceName == QStringLiteral("CONTROLLER-PC-RENAMED"),
+			QStringLiteral("incoming history is deduplicated by source address"));
+	}
+
 	void testConnectionEndpointSurvivesSynchronousCleanup()
 	{
 		auto pStore = std::make_unique<KFakeRecentDeviceStore>();
@@ -183,16 +218,25 @@ namespace
 		source.strHost = QStringLiteral("172.16.0.8");
 		source.nSignalingPort = 40100;
 		source.nLastConnectedAtMs = 123456789;
+		KRecentDevice incoming;
+		incoming.strDeviceId = QStringLiteral("incoming-id");
+		incoming.strDeviceName = QStringLiteral("CONTROLLER-PC");
+		incoming.strHost = QStringLiteral("172.16.0.9");
+		incoming.nLastConnectedAtMs = 123456790;
+		incoming.bIncoming = true;
 		QString strError;
-		check(store.saveDevices({ source }, &strError) && strError.isEmpty(),
+		check(store.saveDevices({ source, incoming }, &strError) && strError.isEmpty(),
 			QStringLiteral("QSettings adapter saves devices"));
 		const QVector<KRecentDevice> loaded = store.loadDevices(&strError);
-		check(loaded.size() == 1
+		check(loaded.size() == 2
 			&& loaded.first().strDeviceId == source.strDeviceId
 			&& loaded.first().strDeviceName == source.strDeviceName
 			&& loaded.first().strHost == source.strHost
 			&& loaded.first().nSignalingPort == source.nSignalingPort
-			&& loaded.first().nLastConnectedAtMs == source.nLastConnectedAtMs,
+			&& loaded.first().nLastConnectedAtMs == source.nLastConnectedAtMs
+			&& !loaded.first().bIncoming
+			&& loaded.last().bIncoming
+			&& loaded.last().nSignalingPort == 0,
 			QStringLiteral("QSettings adapter round-trips all recent device fields"));
 	}
 }
@@ -202,6 +246,7 @@ int main(int nArgc, char *pArgv[])
 	QCoreApplication application(nArgc, pArgv);
 	testSuccessfulConnectionAndDeduplication();
 	testMaximumDeviceCount();
+	testIncomingConnectionHistory();
 	testConnectionEndpointSurvivesSynchronousCleanup();
 	testSettingsPersistence();
 	if (g_nFailureCount == 0)

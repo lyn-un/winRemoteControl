@@ -62,6 +62,7 @@ signals:
 	void sessionChannelChanged(bool bOpen);
 	void inputTraceUpdated(quint64 nSeq, qint64 nInjectedMs);
 	void inputFeedbackFrameRequested();
+	void incomingAccessObserved(const QString &strDeviceName, const QString &strSourceAddress);
 	void incomingAccessRequest(const QString &strRequestId,
 		const QString &strDeviceName,
 		const QString &strSourceAddress,

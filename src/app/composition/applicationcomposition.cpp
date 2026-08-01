@@ -277,6 +277,8 @@ void KApplicationComposition::wireServices()
 		m_pSessionViewModel, &KSessionViewModel::connectSignaling);
 	connect(m_pSessionViewModel, &KSessionViewModel::sessionChannelChanged,
 		m_pRecentDeviceService, &KRecentDeviceService::setSessionChannelOpen);
+	connect(m_pSessionService, &KSessionCoordinator::incomingAccessObserved,
+		m_pRecentDeviceService, &KRecentDeviceService::prepareIncomingConnection);
 	connect(m_pSessionViewModel, &KSessionViewModel::remoteDeviceInfoChanged,
 		m_pRecentDeviceService,
 		[m_pRecentDeviceService = m_pRecentDeviceService](const QString &strComputerName,

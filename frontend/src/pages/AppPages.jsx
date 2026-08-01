@@ -367,7 +367,7 @@ export function DashboardPage() {
 
   const mergedDevices = useMemo(() => {
     const onlineByEndpoint = new Map(state.lanDevices.map((device) => [endpointKey(device.address, device.port), device]));
-    const devices = state.recentDevices.map((recent) => {
+    const devices = state.recentDevices.filter((recent) => !recent.incoming).map((recent) => {
       const key = endpointKey(recent.host, recent.port);
       const online = onlineByEndpoint.get(key);
       onlineByEndpoint.delete(key);
@@ -419,7 +419,7 @@ export function DashboardPage() {
           <span>最近连接</span>
           {state.recentDevices.slice(0, 3).map((device) => {
             const online = state.lanDevices.some((item) => endpointKey(item.address, item.port) === endpointKey(device.host, device.port));
-            return <button key={device.deviceId} onClick={() => beginConnection({ ...device, recentId: device.deviceId, online })}><i className={online ? "online" : ""} /><span>{device.name || device.host}</span></button>;
+            return <button key={device.deviceId} disabled={device.incoming} title={device.incoming ? "曾控制本机，仅作为接入记录" : "再次连接"} onClick={() => beginConnection({ ...device, recentId: device.deviceId, online })}><i className={online ? "online" : ""} /><span>{device.name || device.host}</span>{device.incoming && <em>接入</em>}</button>;
           })}
           {state.recentDevices.length === 0 && <small>成功连接后会显示在这里</small>}
         </div>

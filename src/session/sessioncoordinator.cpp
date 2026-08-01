@@ -781,6 +781,7 @@ void KSessionCoordinator::handleAccessMessage(const KAccessMessage &message)
 
 		m_strAccessRequestId = message.strRequestId;
 		m_strAccessDeviceName = message.strDeviceName;
+		emit incomingAccessObserved(m_strAccessDeviceName, m_strAccessSourceAddress);
 		if (!m_applicationSettings.bRemoteAccessEnabled)
 		{
 			rejectIncomingAccess(QStringLiteral("remote_access_disabled"), true);

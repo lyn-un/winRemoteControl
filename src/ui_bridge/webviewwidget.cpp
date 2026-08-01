@@ -155,6 +155,7 @@ void KWebViewWidget::sendRecentDevicesChanged(const QVector<KRecentDevice> &devi
 		deviceObject.insert(QStringLiteral("port"), device.nSignalingPort);
 		deviceObject.insert(QStringLiteral("lastConnectedAtMs"),
 			QString::number(device.nLastConnectedAtMs));
+		deviceObject.insert(QStringLiteral("incoming"), device.bIncoming);
 		deviceArray.append(deviceObject);
 	}
 	QJsonObject object;

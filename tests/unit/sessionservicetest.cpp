@@ -339,6 +339,14 @@ namespace
 
 		QString strRequestId;
 		QString strSourceAddress;
+		QString strObservedDeviceName;
+		QString strObservedSourceAddress;
+		QObject::connect(&controlled, &KSessionCoordinator::incomingAccessObserved,
+			[&](const QString &strDeviceName, const QString &strSource)
+			{
+				strObservedDeviceName = strDeviceName;
+				strObservedSourceAddress = strSource;
+			});
 		QObject::connect(&controlled, &KSessionCoordinator::incomingAccessRequest,
 			[&](const QString &strId, const QString &, const QString &strSource, qint64)
 			{
@@ -353,6 +361,9 @@ namespace
 			QStringLiteral("controlled host publishes an approval request"));
 		check(!strSourceAddress.isEmpty(),
 			QStringLiteral("approval request uses the socket source address"));
+		check(strObservedDeviceName == QStringLiteral("fake-controlled-host")
+			&& strObservedSourceAddress == strSourceAddress,
+			QStringLiteral("incoming endpoint is published for accepted-session history"));
 		check(pControllerPeer->nCreateOfferCount == 0,
 			QStringLiteral("controller does not create an offer before approval"));
 		check(pControlledPeer->strLastSignalingMessage.isEmpty(),
