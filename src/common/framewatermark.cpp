@@ -3,6 +3,7 @@
 #include <array>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 
 namespace
@@ -14,6 +15,8 @@ namespace
 	constexpr int kBitCount = kColumns * kRows;
 	constexpr int kWatermarkWidth = kColumns * kBlockSize;
 	constexpr int kWatermarkHeight = kRows * kBlockSize;
+	constexpr int kCleanupWidth = 112;
+	constexpr int kCleanupHeight = 16;
 	constexpr quint16 kWatermarkMagic = 0x5743; // WC
 	constexpr quint8 kWatermarkVersion = 1;
 	constexpr int kMagicBitOffset = 0;
@@ -197,5 +200,32 @@ bool KFrameWatermarkCodec::readBgra(const std::vector<unsigned char> &bgraBuffer
 	pWatermark->nSourceFrameIndex = nSourceFrame;
 	pWatermark->nLastInputSeq = nInputSeq;
 	pWatermark->nInputAgeMs = nInputAge;
+	return true;
+}
+
+bool KFrameWatermarkCodec::removeBgra(std::vector<unsigned char> *pBgraBuffer,
+	int nWidth,
+	int nHeight)
+{
+	if (pBgraBuffer == nullptr
+		|| !isValidFrameSize(nWidth, nHeight, pBgraBuffer->size())
+		|| nHeight < kCleanupHeight * 2)
+	{
+		return false;
+	}
+
+	const int nCopyWidth = std::min(nWidth, kCleanupWidth);
+	const int nOriginX = nWidth - nCopyWidth;
+	const int nDestinationY = nHeight - kCleanupHeight;
+	const int nSourceY = nDestinationY - kCleanupHeight;
+	const size_t nRowBytes = static_cast<size_t>(nCopyWidth) * kBytesPerPixel;
+	for (int y = 0; y < kCleanupHeight; ++y)
+	{
+		const unsigned char *pSource = pBgraBuffer->data()
+			+ (static_cast<size_t>(nSourceY + y) * nWidth + nOriginX) * kBytesPerPixel;
+		unsigned char *pDestination = pBgraBuffer->data()
+			+ (static_cast<size_t>(nDestinationY + y) * nWidth + nOriginX) * kBytesPerPixel;
+		std::memcpy(pDestination, pSource, nRowBytes);
+	}
 	return true;
 }

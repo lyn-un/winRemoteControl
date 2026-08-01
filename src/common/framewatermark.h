@@ -23,6 +23,9 @@ public:
 		int nWidth,
 		int nHeight,
 		KFrameWatermark *pWatermark);
+	static bool removeBgra(std::vector<unsigned char> *pBgraBuffer,
+		int nWidth,
+		int nHeight);
 };
 
 #endif // _WINREMOTECONTROL_FRAMEWATERMARK_H_

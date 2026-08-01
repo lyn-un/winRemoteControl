@@ -188,6 +188,9 @@ void KWebRtcRemoteFrameProcessor::decodeAndEmit(const webrtc::VideoFrame &frame)
 			decodedFrame.nSourceFrameIndex = watermark.nSourceFrameIndex;
 			decodedFrame.nLastInputSeq = watermark.nLastInputSeq;
 			decodedFrame.nInputAgeMs = watermark.nInputAgeMs;
+			KFrameWatermarkCodec::removeBgra(&decodedFrame.vecBgraBuffer,
+				decodedFrame.nWidth,
+				decodedFrame.nHeight);
 			if (decodedFrame.nFrameIndex % kVideoTraceFrameInterval == 0)
 			{
 				KLatencyTraceLogger::write(QStringLiteral("controller"),

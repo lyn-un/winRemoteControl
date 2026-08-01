@@ -89,6 +89,9 @@ export function useNativeState() {
           setFps(0);
           frameTimes.current = [];
           setNetworkStats(emptyNetworkStats());
+          if (getViewMode() === "dashboard") {
+            sendCommand("requestRecentDevices");
+          }
         }
         return;
       }

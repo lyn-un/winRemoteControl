@@ -229,7 +229,7 @@ export function DashboardPage() {
       <aside className="app-sidebar">
         <div className="app-brand"><span>W</span><div><strong>winRemote</strong><small>Control</small></div></div>
         <nav className="app-nav">
-          <button className={activePage === "devices" ? "active" : ""} onClick={() => { setRole("controller"); setActivePage("devices"); }}><Icon name="devices" /><span>我的设备</span></button>
+          <button className={activePage === "devices" ? "active" : ""} onClick={() => { setRole("controller"); setActivePage("devices"); sendCommand("requestRecentDevices"); }}><Icon name="devices" /><span>我的设备</span></button>
           <button className={activePage === "assist" ? "active" : ""} onClick={() => setActivePage("assist")}><Icon name="assist" /><span>远程协助</span></button>
         </nav>
         <div className="sidebar-recents">

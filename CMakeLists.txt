@@ -482,6 +482,18 @@ if(BUILD_TESTING)
 		Qt6::Core
 	)
 	add_test(NAME wrc_recent_device_tests COMMAND wrc_recent_device_tests)
+
+	add_executable(wrc_frame_watermark_tests
+		tests/unit/framewatermarktest.cpp
+		src/common/framewatermark.cpp
+	)
+	target_include_directories(wrc_frame_watermark_tests PRIVATE
+		"${CMAKE_CURRENT_SOURCE_DIR}/src"
+	)
+	target_link_libraries(wrc_frame_watermark_tests PRIVATE
+		Qt6::Core
+	)
+	add_test(NAME wrc_frame_watermark_tests COMMAND wrc_frame_watermark_tests)
 endif()
 
 set(WEBVIEW2_LOADER "${WEBVIEW2_ROOT}/build/native/x64/WebView2Loader.dll")
