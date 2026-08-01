@@ -3,6 +3,7 @@
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
 #include <QtCore/QJsonDocument>
+#include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
 
 #include <wrl/event.h>
@@ -112,6 +113,33 @@ void KWebViewWidget::sendNetworkStatsChanged(const KNetworkStats &stats)
 	object.insert(QStringLiteral("framesDecoded"), stats.nFramesDecoded);
 	object.insert(QStringLiteral("keyFramesDecoded"), stats.nKeyFramesDecoded);
 	object.insert(QStringLiteral("framesDropped"), stats.nFramesDropped);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendLanDevicesChanged(const QVector<KDiscoveredDevice> &devices)
+{
+	QJsonArray deviceArray;
+	for (const KDiscoveredDevice &device : devices)
+	{
+		QJsonObject deviceObject;
+		deviceObject.insert(QStringLiteral("deviceId"), device.strDeviceId);
+		deviceObject.insert(QStringLiteral("name"), device.strDeviceName);
+		deviceObject.insert(QStringLiteral("address"), device.strHost);
+		deviceObject.insert(QStringLiteral("port"), device.nSignalingPort);
+		deviceObject.insert(QStringLiteral("online"), true);
+		deviceArray.append(deviceObject);
+	}
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("lanDevicesChanged"));
+	object.insert(QStringLiteral("devices"), deviceArray);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendLanDiscoveryError(const QString &strError)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("lanDiscoveryError"));
+	object.insert(QStringLiteral("message"), strError);
 	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
 }
 
@@ -253,6 +281,11 @@ void KWebViewWidget::handleWebMessage(const QString &strMessage)
 	else if (strCommand == QStringLiteral("connectSignaling"))
 		emit connectSignalingRequested(document.object().value(QStringLiteral("host")).toString(),
 			static_cast<quint16>(document.object().value(QStringLiteral("port")).toInt(39000)));
+	else if (strCommand == QStringLiteral("refreshLanDevices"))
+		emit refreshLanDevicesRequested();
+	else if (strCommand == QStringLiteral("connectLanDevice"))
+		emit connectLanDeviceRequested(
+			document.object().value(QStringLiteral("deviceId")).toString());
 	else if (strCommand == QStringLiteral("disconnectSession"))
 		emit disconnectSessionRequested();
 	else if (strCommand == QStringLiteral("startStreaming"))

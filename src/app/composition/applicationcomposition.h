@@ -8,6 +8,8 @@ class KRemoteDesktopWindow;
 class KSessionViewModel;
 class KWebViewWidget;
 class KSessionCoordinator;
+class KDeviceDiscoveryController;
+class KDeviceDiscoveryViewModel;
 
 class KApplicationComposition : public QObject
 {
@@ -32,6 +34,8 @@ private:
 	KCaptureService *m_pCaptureService = nullptr;
 	KSessionCoordinator *m_pSessionService = nullptr;
 	KSessionViewModel *m_pSessionViewModel = nullptr;
+	KDeviceDiscoveryController *m_pDiscoveryService = nullptr;
+	KDeviceDiscoveryViewModel *m_pDiscoveryViewModel = nullptr;
 	bool m_bShutdown = false;
 };
 

@@ -3,6 +3,7 @@
 
 #include "core/media/networkstats.h"
 #include "core/media/streamconfig.h"
+#include "core/discovery/discovereddevice.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QPoint>
@@ -44,6 +45,8 @@ public slots:
 	void sendCaptureError(const QString &strMessage);
 	void sendFrameReady(int nWidth, int nHeight, quint64 nFrameIndex, qint64 nTimestampMs);
 	void sendNetworkStatsChanged(const KNetworkStats &stats);
+	void sendLanDevicesChanged(const QVector<KDiscoveredDevice> &devices);
+	void sendLanDiscoveryError(const QString &strError);
 
 signals:
 	void startCaptureRequested();
@@ -51,6 +54,8 @@ signals:
 	void setRoleRequested(const QString &strRole);
 	void startSignalingServerRequested(quint16 nPort);
 	void connectSignalingRequested(const QString &strHost, quint16 nPort);
+	void refreshLanDevicesRequested();
+	void connectLanDeviceRequested(const QString &strDeviceId);
 	void disconnectSessionRequested();
 	void startStreamingRequested();
 	void stopStreamingRequested();

@@ -3,14 +3,20 @@
 #include "adapters/windows/device/windowsdeviceinfoprovider.h"
 #include "adapters/windows/input/windowsinputinjector.h"
 #include "adapters/signaling/tcpsignalingtransport.h"
+#include "adapters/discovery/udplandiscoverytransport.h"
 #include "app/remotedesktopwindow.h"
 #include "capture/captureservice.h"
+#include "core/discovery/devicediscoverycontroller.h"
+#include "discovery/landiscoveryservice.h"
 #include "render/videorenderwidget.h"
 #include "session/sessionviewmodel.h"
 #include "transport/webrtc/webrtcpeer.h"
 #include "session/sessioncoordinator.h"
 #include "ui_bridge/webviewwidget.h"
+#include "ui_bridge/devicediscoveryviewmodel.h"
 
+#include <QtCore/QSysInfo>
+#include <QtCore/QUuid>
 #include <memory>
 
 KApplicationComposition::KApplicationComposition(QObject *pParent)
@@ -25,6 +31,14 @@ KApplicationComposition::KApplicationComposition(QObject *pParent)
 	, m_pSessionViewModel(new KSessionViewModel(
 		m_pCaptureService,
 		m_pSessionService,
+		this))
+	, m_pDiscoveryService(new KLanDiscoveryService(
+		std::make_unique<KUdpLanDiscoveryTransport>(),
+		QUuid::createUuid().toString(QUuid::WithoutBraces),
+		QSysInfo::machineHostName(),
+		this))
+	, m_pDiscoveryViewModel(new KDeviceDiscoveryViewModel(
+		m_pDiscoveryService,
 		this))
 {
 	wireServices();
@@ -49,10 +63,16 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		m_pSessionViewModel, &KSessionViewModel::stopCapture);
 	connect(pWebViewWidget, &KWebViewWidget::setRoleRequested,
 		m_pSessionViewModel, &KSessionViewModel::setRole);
+	connect(pWebViewWidget, &KWebViewWidget::setRoleRequested,
+		m_pDiscoveryViewModel, &KDeviceDiscoveryViewModel::setRole);
 	connect(pWebViewWidget, &KWebViewWidget::startSignalingServerRequested,
 		m_pSessionViewModel, &KSessionViewModel::startSignalingServer);
 	connect(pWebViewWidget, &KWebViewWidget::connectSignalingRequested,
 		m_pSessionViewModel, &KSessionViewModel::connectSignaling);
+	connect(pWebViewWidget, &KWebViewWidget::refreshLanDevicesRequested,
+		m_pDiscoveryViewModel, &KDeviceDiscoveryViewModel::refreshLanDevices);
+	connect(pWebViewWidget, &KWebViewWidget::connectLanDeviceRequested,
+		m_pDiscoveryViewModel, &KDeviceDiscoveryViewModel::connectLanDevice);
 	connect(pWebViewWidget, &KWebViewWidget::disconnectSessionRequested,
 		m_pSessionViewModel, &KSessionViewModel::disconnectSession);
 	connect(pWebViewWidget, &KWebViewWidget::startStreamingRequested,
@@ -76,6 +96,10 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		pWebViewWidget, &KWebViewWidget::sendSessionChannelChanged);
 	connect(m_pSessionViewModel, &KSessionViewModel::remoteDeviceInfoChanged,
 		pWebViewWidget, &KWebViewWidget::sendDeviceInfoChanged);
+	connect(m_pDiscoveryViewModel, &KDeviceDiscoveryViewModel::lanDevicesChanged,
+		pWebViewWidget, &KWebViewWidget::sendLanDevicesChanged);
+	connect(m_pDiscoveryViewModel, &KDeviceDiscoveryViewModel::lanDiscoveryError,
+		pWebViewWidget, &KWebViewWidget::sendLanDiscoveryError);
 }
 
 void KApplicationComposition::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWindow)
@@ -152,6 +176,7 @@ void KApplicationComposition::shutdown()
 		return;
 
 	m_bShutdown = true;
+	m_pDiscoveryService->stop();
 	m_pSessionService->disconnectSession();
 	m_pCaptureService->stopCapture();
 }
@@ -173,4 +198,8 @@ void KApplicationComposition::wireServices()
 		m_pCaptureService, &KCaptureService::setInputTraceState);
 	connect(m_pSessionService, &KSessionCoordinator::inputFeedbackFrameRequested,
 		m_pCaptureService, &KCaptureService::requestImmediateFrame);
+	connect(m_pSessionService, &KSessionCoordinator::listeningAvailabilityChanged,
+		m_pDiscoveryService, &KDeviceDiscoveryController::setListeningAvailability);
+	connect(m_pDiscoveryService, &KDeviceDiscoveryController::connectEndpointRequested,
+		m_pSessionViewModel, &KSessionViewModel::connectSignaling);
 }

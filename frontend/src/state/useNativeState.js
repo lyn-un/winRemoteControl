@@ -24,6 +24,7 @@ export function useNativeState() {
   const [webrtcState, setWebrtcState] = useState("Idle");
   const [sessionOpen, setSessionOpen] = useState(false);
   const [deviceInfo, setDeviceInfo] = useState(null);
+  const [lanDevices, setLanDevices] = useState([]);
   const [frame, setFrame] = useState(null);
   const [networkStats, setNetworkStats] = useState(emptyNetworkStats);
   const [error, setError] = useState("");
@@ -107,6 +108,16 @@ export function useNativeState() {
         return;
       }
 
+      if (message.type === "lanDevicesChanged") {
+        setLanDevices(Array.isArray(message.devices) ? message.devices : []);
+        return;
+      }
+
+      if (message.type === "lanDiscoveryError") {
+        setError(message.message || "局域网设备发现失败");
+        return;
+      }
+
       if (message.type === "frameReady") {
         const now = performance.now();
         frameTimes.current = [...frameTimes.current.filter((item) => now - item < 1000), now];
@@ -135,6 +146,9 @@ export function useNativeState() {
 
   useEffect(() => {
     if (getViewMode() === "dashboard") {
+      if (role !== "controller") {
+        setLanDevices([]);
+      }
       sendCommand("setRole", { role });
     }
   }, [role]);
@@ -151,6 +165,7 @@ export function useNativeState() {
     webrtcState,
     sessionOpen,
     deviceInfo,
+    lanDevices,
     frame,
     networkStats,
     error,

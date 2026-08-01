@@ -39,6 +39,8 @@ target_link_libraries(wrc_foundation INTERFACE
 )
 
 add_library(wrc_protocol STATIC
+	src/core/protocol/landiscoverymessage.cpp
+	src/core/protocol/landiscoverymessage.h
 	src/core/protocol/inputmessage.cpp
 	src/core/protocol/inputmessage.h
 	src/core/protocol/sessionmessage.cpp
@@ -55,6 +57,9 @@ target_link_libraries(wrc_protocol PUBLIC
 )
 
 add_library(wrc_core STATIC
+	src/core/discovery/devicediscoverycontroller.h
+	src/core/discovery/discovereddevice.h
+	src/core/discovery/landiscoverytransport.h
 	src/core/input/inputinjectorinterface.h
 	src/core/media/capturecontroller.h
 	src/core/session/deviceinfoprovider.h
@@ -138,6 +143,37 @@ target_link_libraries(wrc_session_application PUBLIC
 add_library(wrc_signaling_adapter STATIC
 	src/adapters/signaling/tcpsignalingtransport.cpp
 	src/adapters/signaling/tcpsignalingtransport.h
+)
+
+add_library(wrc_discovery_application STATIC
+	src/discovery/landiscoveryservice.cpp
+	src/discovery/landiscoveryservice.h
+)
+
+target_include_directories(wrc_discovery_application PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_discovery_application PUBLIC
+	wrc_core
+	wrc_protocol
+	wrc_diagnostics
+	Qt6::Core
+)
+
+add_library(wrc_udp_discovery_adapter STATIC
+	src/adapters/discovery/udplandiscoverytransport.cpp
+	src/adapters/discovery/udplandiscoverytransport.h
+)
+
+target_include_directories(wrc_udp_discovery_adapter PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_udp_discovery_adapter PUBLIC
+	wrc_core
+	Qt6::Core
+	Qt6::Network
 )
 
 target_include_directories(wrc_signaling_adapter PUBLIC
@@ -285,6 +321,8 @@ add_library(wrc_qt_presentation STATIC
 	src/session/sessionviewmodel.h
 	src/ui_bridge/webviewwidget.cpp
 	src/ui_bridge/webviewwidget.h
+	src/ui_bridge/devicediscoveryviewmodel.cpp
+	src/ui_bridge/devicediscoveryviewmodel.h
 )
 
 target_compile_definitions(wrc_qt_presentation PRIVATE
@@ -339,6 +377,8 @@ target_link_libraries(winRemoteControl PRIVATE
 	wrc_diagnostics
 	wrc_session_application
 	wrc_signaling_adapter
+	wrc_discovery_application
+	wrc_udp_discovery_adapter
 	wrc_webrtc_adapter
 	wrc_windows_adapters
 	wrc_windows_capture_adapter
@@ -387,6 +427,15 @@ if(BUILD_TESTING)
 		Qt6::Network
 	)
 	add_test(NAME wrc_session_service_tests COMMAND wrc_session_service_tests)
+
+	add_executable(wrc_lan_discovery_tests
+		tests/unit/landiscoveryservicetest.cpp
+	)
+	target_link_libraries(wrc_lan_discovery_tests PRIVATE
+		wrc_discovery_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_lan_discovery_tests COMMAND wrc_lan_discovery_tests)
 endif()
 
 set(WEBVIEW2_LOADER "${WEBVIEW2_ROOT}/build/native/x64/WebView2Loader.dll")

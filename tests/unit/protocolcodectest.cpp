@@ -1,4 +1,5 @@
 #include "core/protocol/inputmessage.h"
+#include "core/protocol/landiscoverymessage.h"
 #include "core/protocol/sessionmessage.h"
 
 #include <QtCore/QCoreApplication>
@@ -241,6 +242,62 @@ namespace
 			&& configObject.value(QStringLiteral("bitrateKbps")).toInt() == 3000,
 			QStringLiteral("encoded stream config keeps legacy field names and types"));
 	}
+
+	void testLanDiscoveryRoundTrip()
+	{
+		KLanDiscoveryMessage probe;
+		probe.type = ProbeLanDiscoveryMessageType;
+		probe.strRequestId = QStringLiteral("12345678-1234-1234-1234-1234567890ab");
+		KLanDiscoveryMessage decodedProbe;
+		check(KLanDiscoveryMessageCodec::decode(
+			KLanDiscoveryMessageCodec::encode(probe), &decodedProbe, nullptr),
+			QStringLiteral("LAN discovery probe decodes"));
+		check(decodedProbe.type == ProbeLanDiscoveryMessageType
+			&& decodedProbe.strRequestId == probe.strRequestId,
+			QStringLiteral("LAN discovery probe round-trips"));
+
+		KLanDiscoveryMessage announcement;
+		announcement.type = AnnounceLanDiscoveryMessageType;
+		announcement.strRequestId = probe.strRequestId;
+		announcement.strInstanceId = QStringLiteral("abcdefab-1234-5678-9abc-def012345678");
+		announcement.strDeviceName = QStringLiteral("test-host");
+		announcement.nSignalingPort = 39000;
+		KLanDiscoveryMessage decodedAnnouncement;
+		check(KLanDiscoveryMessageCodec::decode(
+			KLanDiscoveryMessageCodec::encode(announcement), &decodedAnnouncement, nullptr),
+			QStringLiteral("LAN discovery announcement decodes"));
+		check(decodedAnnouncement.strInstanceId == announcement.strInstanceId
+			&& decodedAnnouncement.strDeviceName == announcement.strDeviceName
+			&& decodedAnnouncement.nSignalingPort == 39000,
+			QStringLiteral("LAN discovery announcement round-trips"));
+	}
+
+	void testInvalidLanDiscoveryMessages()
+	{
+		KLanDiscoveryMessage message;
+		check(!KLanDiscoveryMessageCodec::decode(QByteArray(2049, 'x'), &message, nullptr),
+			QStringLiteral("oversized discovery datagram is rejected"));
+		check(!KLanDiscoveryMessageCodec::decode(
+			QByteArrayLiteral("{\"protocol\":\"other\",\"version\":1,\"type\":\"probe\","
+				"\"requestId\":\"12345678-1234-1234-1234-1234567890ab\"}"),
+			&message, nullptr),
+			QStringLiteral("foreign discovery protocol is rejected"));
+		check(!KLanDiscoveryMessageCodec::decode(
+			QByteArrayLiteral("{\"protocol\":\"wrc-lan-discovery\",\"version\":2,"
+				"\"type\":\"probe\",\"requestId\":\"bad\"}"),
+			&message, nullptr),
+			QStringLiteral("unknown discovery version and UUID are rejected"));
+
+		KLanDiscoveryMessage invalidAnnouncement;
+		invalidAnnouncement.type = AnnounceLanDiscoveryMessageType;
+		invalidAnnouncement.strRequestId = QStringLiteral("12345678-1234-1234-1234-1234567890ab");
+		invalidAnnouncement.strInstanceId = QStringLiteral("abcdefab-1234-5678-9abc-def012345678");
+		invalidAnnouncement.strDeviceName = QString(65, QLatin1Char('a'));
+		invalidAnnouncement.nSignalingPort = 0;
+		check(!KLanDiscoveryMessageCodec::decode(
+			KLanDiscoveryMessageCodec::encode(invalidAnnouncement), &message, nullptr),
+			QStringLiteral("invalid port and overlong device name are rejected"));
+	}
 }
 
 int main(int nArgc, char *pArgv[])
@@ -257,6 +314,8 @@ int main(int nArgc, char *pArgv[])
 	testEndSessionAndStreamConfigRoundTrip();
 	testInvalidSessionMessages();
 	testLegacySessionWireCompatibility();
+	testLanDiscoveryRoundTrip();
+	testInvalidLanDiscoveryMessages();
 
 	if (g_nFailureCount == 0)
 		qInfo() << "All protocol codec tests passed";

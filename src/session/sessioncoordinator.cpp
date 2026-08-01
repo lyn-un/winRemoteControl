@@ -108,11 +108,13 @@ void KSessionCoordinator::startSignalingServer(quint16 nPort)
 
 	if (!m_pSignaling->startServer(nPort, &strError))
 	{
+		updateListeningAvailability(false);
 		emit sessionError(strError);
 		return;
 	}
 
 	m_sessionStateMachine.beginListening();
+	updateListeningAvailability(true, nPort);
 	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
 }
 
@@ -276,6 +278,7 @@ void KSessionCoordinator::finishSession(KSessionEndReason reason,
 {
 	if (!m_sessionStateMachine.beginStopping())
 		return;
+	updateListeningAvailability(false);
 
 	const QString strReason = KSessionStateMachine::endReasonName(reason, strDetail);
 	const KSessionRole role = m_sessionStateMachine.role();
@@ -319,6 +322,7 @@ void KSessionCoordinator::finishSession(KSessionEndReason reason,
 		{
 			bListening = true;
 			m_sessionStateMachine.finish(true);
+			updateListeningAvailability(true, m_nListeningPort);
 			emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
 		}
 		else
@@ -595,7 +599,18 @@ void KSessionCoordinator::handleIncomingConnectionEstablished()
 
 	if (!m_sessionStateMachine.beginNegotiating())
 		return;
+	updateListeningAvailability(false);
 	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
+}
+
+void KSessionCoordinator::updateListeningAvailability(bool bAvailable, quint16 nPort)
+{
+	if (bAvailable && nPort != 0)
+		m_nListeningPort = nPort;
+	if (m_bListeningAvailable == bAvailable)
+		return;
+	m_bListeningAvailable = bAvailable;
+	emit listeningAvailabilityChanged(bAvailable, bAvailable ? m_nListeningPort : 0);
 }
 
 void KSessionCoordinator::handleSignalingConnectionLost()

@@ -76,6 +76,7 @@ private:
 	void handlePeerConnectionTerminated(const QString &strReason);
 	void handleDisconnectGraceTimeout();
 	void sendDeviceInfoMessage();
+	void updateListeningAvailability(bool bAvailable, quint16 nPort = 0);
 
 	KSessionStateMachine m_sessionStateMachine;
 	bool m_bDeviceInfoRequested = false;
@@ -84,6 +85,8 @@ private:
 	quint64 m_nLastInjectedInputSeq = 0;
 	quint64 m_nDisconnectGraceGeneration = 0;
 	qint64 m_nLastInjectedInputMs = -1;
+	bool m_bListeningAvailable = false;
+	quint16 m_nListeningPort = 0;
 	std::unique_ptr<IKDeviceInfoProvider> m_spDeviceInfoProvider;
 	std::unique_ptr<KRemotePeerTransport> m_spRemotePeerTransport;
 	std::unique_ptr<KSignalingTransport> m_spSignalingTransport;

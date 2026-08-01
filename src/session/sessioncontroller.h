@@ -40,6 +40,7 @@ public slots:
 	virtual void handleCaptureFailure() = 0;
 
 signals:
+	void listeningAvailabilityChanged(bool bAvailable, quint16 nPort);
 	void signalingChanged(const QString &strState);
 	void webRtcStateChanged(const QString &strState);
 	void sessionError(const QString &strMessage);

@@ -227,6 +227,12 @@ input {
   letter-spacing: 0;
 }
 
+.page-head-actions {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
 .status {
   background: #f7f9fb;
   border: 1px solid #dfe7ed;
@@ -267,6 +273,29 @@ input {
   border: 1px solid #dde6ec;
   border-radius: 8px;
   overflow: hidden;
+}
+
+.lan-device-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+
+.lan-device-card {
+  align-items: center;
+  border: 1px solid #dde6ec;
+  border-radius: 8px;
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 16px 4px 0;
+}
+
+.lan-device-card .device-title h3 {
+  font-size: 17px;
+}
+
+.lan-device-card .device-title p {
+  margin: 4px 0 0;
 }
 
 .device-title {

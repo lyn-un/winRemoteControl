@@ -91,7 +91,14 @@ export function DashboardPage() {
             <h2>{state.role === "controlled" ? "本机等待控制" : "我的设备"}</h2>
             <p>{state.role === "controlled" ? "保持此窗口可见，等待控制端连接。" : "连接成功后，从设备卡片进入远程桌面。"}</p>
           </div>
-          <CaptureStatus captureStatus={state.captureStatus} webrtcState={state.webrtcState} />
+          <div className="page-head-actions">
+            {state.role === "controller" && !remoteOnline && (
+              <button className="secondary" onClick={() => sendCommand("refreshLanDevices")}>
+                刷新设备
+              </button>
+            )}
+            <CaptureStatus captureStatus={state.captureStatus} webrtcState={state.webrtcState} />
+          </div>
         </header>
 
         {state.role === "controlled" ? (
@@ -125,10 +132,30 @@ export function DashboardPage() {
                   <span>{state.fps} FPS</span>
                 </div>
               </article>
+            ) : state.lanDevices.length > 0 ? (
+              <div className="lan-device-grid">
+                {state.lanDevices.map((device) => (
+                  <article className="lan-device-card" key={device.deviceId}>
+                    <div className="device-title">
+                      <span className="online-dot" />
+                      <div>
+                        <h3>{device.name || "Windows 设备"}</h3>
+                        <p>{device.address}:{device.port}</p>
+                      </div>
+                    </div>
+                    <button
+                      className="primary"
+                      onClick={() => sendCommand("connectLanDevice", { deviceId: device.deviceId })}
+                    >
+                      连接
+                    </button>
+                  </article>
+                ))}
+              </div>
             ) : (
               <div className="empty-device">
                 <strong>还没有在线设备</strong>
-                <p>输入被控端 IP 和端口，连接成功后这里会出现设备卡片。</p>
+                <p>正在搜索局域网设备，也可以在左侧输入 IP 和端口手动连接。</p>
               </div>
             )}
           </div>

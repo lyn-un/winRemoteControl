@@ -173,6 +173,7 @@ namespace
 
 		int nStartCaptureCount = 0;
 		int nStopCaptureCount = 0;
+		QVector<QPair<bool, quint16>> listeningAvailability;
 		bool bNegotiating = false;
 		QObject::connect(&service, &KSessionCoordinator::startCaptureRequested,
 			[&nStartCaptureCount]() { ++nStartCaptureCount; });
@@ -184,10 +185,18 @@ namespace
 				if (strState == QStringLiteral("Negotiating"))
 					bNegotiating = true;
 			});
+		QObject::connect(&service, &KSessionCoordinator::listeningAvailabilityChanged,
+			[&](bool bAvailable, quint16 nPort)
+			{
+				listeningAvailability.append(qMakePair(bAvailable, nPort));
+			});
 
 		const quint16 nPort = reserveLocalPort();
 		check(nPort != 0, QStringLiteral("a loopback port is available"));
 		service.startSignalingServer(nPort);
+		check(listeningAvailability.size() == 1
+			&& listeningAvailability.first() == qMakePair(true, nPort),
+			QStringLiteral("successful TCP listener becomes discoverable"));
 		check(pTransport->nInitializeCount == 1,
 			QStringLiteral("controlled session initializes injected transport"));
 		check(pTransport->initializedRole == ControlledSessionRole,
@@ -213,6 +222,9 @@ namespace
 			QThread::msleep(1);
 		}
 		check(bNegotiating, QStringLiteral("incoming signaling begins negotiation"));
+		check(listeningAvailability.size() == 2
+			&& listeningAvailability.last() == qMakePair(false, quint16(0)),
+			QStringLiteral("incoming session pauses discovery availability"));
 		pTransport->openSessionChannel();
 		pTransport->openInputChannel();
 
@@ -254,7 +266,18 @@ namespace
 		check(pInputInjector->nReleaseInputsCount > 0,
 			QStringLiteral("stop-stream releases remote input state"));
 
+		KSessionMessage endSession;
+		endSession.type = EndSessionMessageType;
+		endSession.strReason = QStringLiteral("test_end");
+		pTransport->deliverSessionMessage(endSession);
+		check(listeningAvailability.size() == 3
+			&& listeningAvailability.last() == qMakePair(true, nPort),
+			QStringLiteral("controlled session becomes discoverable again after session end"));
+
 		service.disconnectSession();
+		check(listeningAvailability.size() == 4
+			&& listeningAvailability.last() == qMakePair(false, quint16(0)),
+			QStringLiteral("fully stopping the listener disables discovery availability"));
 		const int nShutdownCount = pTransport->nShutdownCount;
 		const int nSentSessionCount = pTransport->nSentSessionCount;
 		const int nReleaseInputsCount = pInputInjector->nReleaseInputsCount;
