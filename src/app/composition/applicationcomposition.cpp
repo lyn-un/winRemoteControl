@@ -17,11 +17,34 @@
 #include "ui_bridge/webviewwidget.h"
 #include "ui_bridge/devicediscoveryviewmodel.h"
 
+#include <QtCore/QCoreApplication>
 #include <QtCore/QSysInfo>
 #include <QtCore/QDir>
+#include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QUuid>
 #include <memory>
+
+namespace
+{
+	QString RecentDevicesFilePath()
+	{
+		const QString strFileName = QStringLiteral("recent_devices.ini");
+		const QString strFilePath = QDir(QCoreApplication::applicationDirPath()).filePath(strFileName);
+		const QString strLegacyFilePath =
+			QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
+				.filePath(strFileName);
+		if (strLegacyFilePath != strFilePath
+			&& QFileInfo::exists(strLegacyFilePath)
+			&& !QFileInfo::exists(strFilePath)
+			&& QFile::copy(strLegacyFilePath, strFilePath))
+		{
+			QFile::remove(strLegacyFilePath);
+		}
+		return strFilePath;
+	}
+}
 
 KApplicationComposition::KApplicationComposition(QObject *pParent)
 	: QObject(pParent)
@@ -46,8 +69,7 @@ KApplicationComposition::KApplicationComposition(QObject *pParent)
 		this))
 	, m_pRecentDeviceService(new KRecentDeviceService(
 		std::make_unique<KQSettingsRecentDeviceStore>(
-			QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
-				.filePath(QStringLiteral("recent_devices.ini"))),
+			RecentDevicesFilePath()),
 		this))
 {
 	m_pRecentDeviceService->initialize();
