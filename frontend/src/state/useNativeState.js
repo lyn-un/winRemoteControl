@@ -28,6 +28,7 @@ export function useNativeState() {
   const [frame, setFrame] = useState(null);
   const [networkStats, setNetworkStats] = useState(emptyNetworkStats);
   const [error, setError] = useState("");
+  const [lanDiscoveryError, setLanDiscoveryError] = useState("");
   const [fps, setFps] = useState(0);
   const frameTimes = useRef([]);
 
@@ -110,11 +111,14 @@ export function useNativeState() {
 
       if (message.type === "lanDevicesChanged") {
         setLanDevices(Array.isArray(message.devices) ? message.devices : []);
+        if (Array.isArray(message.devices) && message.devices.length > 0) {
+          setLanDiscoveryError("");
+        }
         return;
       }
 
       if (message.type === "lanDiscoveryError") {
-        setError(message.message || "局域网设备发现失败");
+        setLanDiscoveryError(message.message || "局域网设备发现失败");
         return;
       }
 
@@ -148,6 +152,7 @@ export function useNativeState() {
     if (getViewMode() === "dashboard") {
       if (role !== "controller") {
         setLanDevices([]);
+        setLanDiscoveryError("");
       }
       sendCommand("setRole", { role });
     }
@@ -169,6 +174,7 @@ export function useNativeState() {
     frame,
     networkStats,
     error,
+    lanDiscoveryError,
     fps,
   };
 }

@@ -41,6 +41,8 @@ void KLanDiscoveryService::setRole(KSessionRole role)
 
 	stop();
 	m_role = role;
+	writeTrace(QStringLiteral("discovery_role"),
+		QStringLiteral("role=%1").arg(KSessionStateMachine::roleName(role)));
 	if (m_role == ControllerSessionRole)
 		startControllerDiscovery();
 	else if (m_bListeningAvailable)
@@ -49,6 +51,10 @@ void KLanDiscoveryService::setRole(KSessionRole role)
 
 void KLanDiscoveryService::setListeningAvailability(bool bAvailable, quint16 nPort)
 {
+	writeTrace(QStringLiteral("discovery_availability"),
+		QStringLiteral("available=%1 signalingPort=%2")
+			.arg(bAvailable ? 1 : 0)
+			.arg(nPort));
 	m_bListeningAvailable = bAvailable;
 	m_nSignalingPort = bAvailable ? nPort : 0;
 	if (m_role != ControlledSessionRole)

@@ -174,6 +174,7 @@ target_link_libraries(wrc_udp_discovery_adapter PUBLIC
 	wrc_core
 	Qt6::Core
 	Qt6::Network
+	ws2_32
 )
 
 target_include_directories(wrc_signaling_adapter PUBLIC
@@ -433,7 +434,9 @@ if(BUILD_TESTING)
 	)
 	target_link_libraries(wrc_lan_discovery_tests PRIVATE
 		wrc_discovery_application
+		wrc_udp_discovery_adapter
 		Qt6::Core
+		Qt6::Network
 	)
 	add_test(NAME wrc_lan_discovery_tests COMMAND wrc_lan_discovery_tests)
 endif()

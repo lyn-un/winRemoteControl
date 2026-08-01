@@ -1,10 +1,40 @@
 #include "adapters/discovery/udplandiscoverytransport.h"
 
+#if defined(Q_OS_WIN)
+#include <WinSock2.h>
+#include <Mstcpip.h>
+#ifndef SIO_UDP_CONNRESET
+#define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)
+#endif
+#endif
+
 #include <QtCore/QSet>
 #include <QtNetwork/QHostAddress>
 #include <QtNetwork/QNetworkDatagram>
 #include <QtNetwork/QNetworkInterface>
 #include <QtNetwork/QUdpSocket>
+
+namespace
+{
+	void disableUdpConnectionReset(QUdpSocket *pSocket)
+	{
+#if defined(Q_OS_WIN)
+		BOOL bNewBehavior = FALSE;
+		DWORD nBytesReturned = 0;
+		::WSAIoctl(static_cast<SOCKET>(pSocket->socketDescriptor()),
+			SIO_UDP_CONNRESET,
+			&bNewBehavior,
+			sizeof(bNewBehavior),
+			nullptr,
+			0,
+			&nBytesReturned,
+			nullptr,
+			nullptr);
+#else
+		Q_UNUSED(pSocket);
+#endif
+	}
+}
 
 KUdpLanDiscoveryTransport::KUdpLanDiscoveryTransport(QObject *pParent)
 	: KLanDiscoveryTransport(pParent)
@@ -28,6 +58,7 @@ bool KUdpLanDiscoveryTransport::start(quint16 nLocalPort, QString *pErrorMessage
 			*pErrorMessage = m_pSocket->errorString();
 		return false;
 	}
+	disableUdpConnectionReset(m_pSocket);
 	if (pErrorMessage != nullptr)
 		pErrorMessage->clear();
 	return true;

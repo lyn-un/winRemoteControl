@@ -610,6 +610,11 @@ void KSessionCoordinator::updateListeningAvailability(bool bAvailable, quint16 n
 	if (m_bListeningAvailable == bAvailable)
 		return;
 	m_bListeningAvailable = bAvailable;
+	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
+		QStringLiteral("listening_availability"),
+		bAvailable ? QStringLiteral("available") : QStringLiteral("unavailable"),
+		-1,
+		QStringLiteral("port=%1").arg(bAvailable ? m_nListeningPort : 0));
 	emit listeningAvailabilityChanged(bAvailable, bAvailable ? m_nListeningPort : 0);
 }
 

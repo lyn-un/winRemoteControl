@@ -1,8 +1,11 @@
+#include "adapters/discovery/udplandiscoverytransport.h"
 #include "core/protocol/landiscoverymessage.h"
 #include "discovery/landiscoveryservice.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDebug>
+#include <QtCore/QElapsedTimer>
+#include <QtCore/QThread>
 
 #include <memory>
 
@@ -183,6 +186,50 @@ namespace
 		check(!pFakeTransport->bRunning && pFakeTransport->nUnicastCount == nUnicastCount,
 			QStringLiteral("active session pauses discovery replies"));
 	}
+
+	void testUdpLoopbackDiscovery()
+	{
+		KLanDiscoveryService responder(std::make_unique<KUdpLanDiscoveryTransport>(),
+			QStringLiteral("ffffffff-1234-1234-1234-1234567890ab"),
+			QStringLiteral("loopback-controlled"));
+		responder.setRole(ControlledSessionRole);
+		responder.setListeningAvailability(true, 39000);
+
+		KLanDiscoveryService scanner(std::make_unique<KUdpLanDiscoveryTransport>(),
+			QStringLiteral("99999999-1234-1234-1234-1234567890ab"),
+			QStringLiteral("loopback-controller"));
+		QVector<KDiscoveredDevice> devices;
+		int nDiscoveryErrorCount = 0;
+		QObject::connect(&scanner, &KLanDiscoveryService::devicesChanged,
+			[&devices](const QVector<KDiscoveredDevice> &newDevices)
+			{
+				devices = newDevices;
+			});
+		QObject::connect(&scanner, &KLanDiscoveryService::discoveryError,
+			[&nDiscoveryErrorCount](const QString &) { ++nDiscoveryErrorCount; });
+		scanner.setRole(ControllerSessionRole);
+
+		QElapsedTimer timer;
+		timer.start();
+		while (devices.isEmpty() && timer.elapsed() < 1000)
+		{
+			QCoreApplication::processEvents();
+			QThread::msleep(1);
+		}
+		check(devices.size() == 1
+			&& !devices.first().strHost.isEmpty()
+			&& devices.first().nSignalingPort == 39000,
+			QStringLiteral("real UDP adapters discover a loopback responder"));
+		QElapsedTimer settleTimer;
+		settleTimer.start();
+		while (settleTimer.elapsed() < 100)
+		{
+			QCoreApplication::processEvents();
+			QThread::msleep(1);
+		}
+		check(nDiscoveryErrorCount == 0,
+			QStringLiteral("Windows UDP probes do not surface ICMP reset errors"));
+	}
 }
 
 int main(int nArgc, char *pArgv[])
@@ -190,6 +237,7 @@ int main(int nArgc, char *pArgv[])
 	QCoreApplication application(nArgc, pArgv);
 	testControllerDiscoveryAndConnect();
 	testControlledResponderAvailability();
+	testUdpLoopbackDiscovery();
 	if (g_nFailureCount == 0)
 		qInfo() << "All LAN discovery service tests passed";
 	return g_nFailureCount == 0 ? 0 : 1;

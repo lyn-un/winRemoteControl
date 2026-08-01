@@ -82,6 +82,7 @@ export function DashboardPage() {
           />
 
           {state.error && <p className="error">{state.error}</p>}
+          {state.lanDiscoveryError && <p className="error">{state.lanDiscoveryError}</p>}
         </section>
       </aside>
 
