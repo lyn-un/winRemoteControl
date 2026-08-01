@@ -49,7 +49,9 @@ void KRecentDeviceService::connectEndpoint(const QString &strHost, quint16 nPort
 	m_strPendingDeviceName.clear();
 	m_bSessionChannelOpen = false;
 	m_bPendingSaved = false;
-	emit connectEndpointRequested(m_strPendingHost, m_nPendingPort);
+	const QString strRequestedHost = m_strPendingHost;
+	const quint16 nRequestedPort = m_nPendingPort;
+	emit connectEndpointRequested(strRequestedHost, nRequestedPort);
 }
 
 void KRecentDeviceService::connectDevice(const QString &strDeviceId)

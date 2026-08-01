@@ -120,6 +120,7 @@ void KSessionCoordinator::startSignalingServer(quint16 nPort)
 
 void KSessionCoordinator::connectSignaling(const QString &strHost, quint16 nPort)
 {
+	const QString strTargetHost = strHost;
 	if (m_sessionStateMachine.state() != IdleSessionState)
 		finishSession(NewConnectionSessionEndReason, QString(), false, true, false);
 	m_pSignaling->stop();
@@ -132,7 +133,7 @@ void KSessionCoordinator::connectSignaling(const QString &strHost, quint16 nPort
 
 	m_sessionStateMachine.beginConnecting();
 	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
-	m_pSignaling->connectToHost(strHost, nPort);
+	m_pSignaling->connectToHost(strTargetHost, nPort);
 }
 
 void KSessionCoordinator::disconnectSession()

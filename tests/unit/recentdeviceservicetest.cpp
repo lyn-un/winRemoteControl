@@ -147,6 +147,28 @@ namespace
 			QStringLiteral("recent devices are sorted newest first"));
 	}
 
+	void testConnectionEndpointSurvivesSynchronousCleanup()
+	{
+		auto pStore = std::make_unique<KFakeRecentDeviceStore>();
+		KRecentDeviceService service(std::move(pStore));
+		service.initialize();
+
+		QString strForwardedHost;
+		quint16 nForwardedPort = 0;
+		QObject::connect(&service, &KRecentDeviceService::connectEndpointRequested,
+			[&](const QString &strHost, quint16 nPort)
+			{
+				service.setSessionChannelOpen(false);
+				strForwardedHost = strHost;
+				nForwardedPort = nPort;
+			});
+
+		service.connectEndpoint(QStringLiteral("192.168.100.112"), 39000);
+		check(strForwardedHost == QStringLiteral("192.168.100.112")
+			&& nForwardedPort == 39000,
+			QStringLiteral("endpoint survives synchronous pending-state cleanup"));
+	}
+
 	void testSettingsPersistence()
 	{
 		QTemporaryDir temporaryDir;
@@ -179,6 +201,7 @@ int main(int nArgc, char *pArgv[])
 	QCoreApplication application(nArgc, pArgv);
 	testSuccessfulConnectionAndDeduplication();
 	testMaximumDeviceCount();
+	testConnectionEndpointSurvivesSynchronousCleanup();
 	testSettingsPersistence();
 	if (g_nFailureCount == 0)
 		qInfo() << "All recent device service tests passed";
