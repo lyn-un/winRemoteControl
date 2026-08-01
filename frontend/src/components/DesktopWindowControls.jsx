@@ -18,9 +18,9 @@ export default function DesktopWindowControls() {
           控制中心
         </button>
       </div>
-      <button className="window-button" onClick={() => sendCommand("minimizeDesktopWindow")}>−</button>
-      <button className="window-button" onClick={() => sendCommand("toggleMaximizeDesktopWindow")}>□</button>
-      <button className="window-button is-close" onClick={() => sendCommand("closeDesktop")}>×</button>
+      <button className="window-button" aria-label="最小化" onClick={() => sendCommand("minimizeDesktopWindow")}>—</button>
+      <button className="window-button" aria-label="最大化" onClick={() => sendCommand("toggleMaximizeDesktopWindow")}>□</button>
+      <button className="window-button is-close" aria-label="关闭" onClick={() => sendCommand("closeDesktop")}>×</button>
     </div>
   );
 }

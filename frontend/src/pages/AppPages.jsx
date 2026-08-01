@@ -1,167 +1,271 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { sendCommand, sendPreviewRect } from "../bridge/nativeBridge";
-import CaptureStatus from "../components/CaptureStatus";
 import DesktopWindowControls from "../components/DesktopWindowControls";
-import SessionMetrics from "../components/SessionMetrics";
 import { useNativeState } from "../state/useNativeState";
+
+function Icon({ name }) {
+  const paths = {
+    devices: <><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4" /></>,
+    assist: <><circle cx="6" cy="12" r="3" /><circle cx="18" cy="6" r="3" /><circle cx="18" cy="18" r="3" /><path d="m9 11 6-4M9 13l6 4" /></>,
+    refresh: <><path d="M20 6v5h-5M4 18v-5h5" /><path d="M6.1 9a7 7 0 0 1 11.5-2.6L20 9M4 15l2.4 2.6A7 7 0 0 0 17.9 15" /></>,
+    monitor: <><rect x="3" y="4" width="18" height="14" rx="2" /><path d="M9 22h6M12 18v4" /></>,
+    trash: <><path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6" /></>,
+    arrow: <><path d="M5 12h14M14 7l5 5-5 5" /></>,
+    signal: <><path d="M5 15a10 10 0 0 1 14 0M8 18a6 6 0 0 1 8 0" /><circle cx="12" cy="21" r="1" /></>,
+  };
+  return <svg className="ui-icon" viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>;
+}
+
+const endpointKey = (host, port) => `${String(host || "").trim().toLowerCase()}:${Number(port) || 0}`;
+
+function formatRecentTime(value) {
+  const timestamp = Number(value);
+  if (!timestamp) return "最近连接";
+  const elapsed = Date.now() - timestamp;
+  if (elapsed < 60_000) return "刚刚连接";
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)} 分钟前`;
+  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)} 小时前`;
+  return `${Math.floor(elapsed / 86_400_000)} 天前`;
+}
+
+function DeviceCard({ device, busy, onConnect, onRemove }) {
+  return (
+    <article className={`device-tile ${device.online ? "is-online" : "is-recent"}`}>
+      <div className="device-tile-top">
+        <span className="device-glyph"><Icon name="monitor" /></span>
+        <span className={`availability ${device.online ? "online" : "recent"}`}>
+          <i />{device.online ? "局域网在线" : "最近连接"}
+        </span>
+        {onRemove && (
+          <button className="delete-device" title="从最近连接中移除" onClick={onRemove}>
+            <Icon name="trash" />
+          </button>
+        )}
+      </div>
+      <div className="device-copy">
+        <h3>{device.name || "Windows 设备"}</h3>
+        <p>{device.host}:{device.port}</p>
+        <small>{device.online ? "可直接建立局域网连接" : formatRecentTime(device.lastConnectedAtMs)}</small>
+      </div>
+      <button className="device-connect" disabled={busy} onClick={onConnect}>
+        {busy ? "连接中" : "连接"}<Icon name="arrow" />
+      </button>
+    </article>
+  );
+}
+
+function ConnectedSession({ state, wallpaperUrl, onDisconnect }) {
+  const screenWidth = state.deviceInfo?.screenWidth || 0;
+  const screenHeight = state.deviceInfo?.screenHeight || 0;
+  const previewStyle = wallpaperUrl ? { backgroundImage: `url(${wallpaperUrl})` } : {};
+  return (
+    <section className="connected-view view-enter">
+      <header className="session-heading">
+        <div>
+          <span className="session-badge"><i />已连接</span>
+          <h2>{state.deviceInfo?.computerName || "远程设备"}</h2>
+          <p>{state.host}:{state.port} · 局域网直连</p>
+        </div>
+        <div className="session-ready"><small>控制通道</small><strong>READY</strong></div>
+      </header>
+      <div className="session-layout">
+        <article className="desktop-preview-card">
+          <button className="wallpaper-preview" style={previewStyle} onClick={() => sendCommand("enterDesktop")}>
+            {!wallpaperUrl && <span className="wallpaper-placeholder"><Icon name="monitor" />等待设备桌面信息</span>}
+            <span className="wallpaper-shade" />
+            <span className="enter-overlay">进入桌面 <Icon name="arrow" /></span>
+          </button>
+          <footer>
+            <div><i /><span><strong>设备桌面入口</strong><small>点击后打开实时远程控制窗口</small></span></div>
+            <button className="primary-button" onClick={() => sendCommand("enterDesktop")}>进入桌面 <Icon name="arrow" /></button>
+          </footer>
+        </article>
+        <aside className="session-details">
+          <span className="eyebrow">SESSION / READY</span>
+          <h3>会话详情</h3>
+          <dl>
+            <div><dt>连接方式</dt><dd>局域网直连</dd></div>
+            <div><dt>远程分辨率</dt><dd>{screenWidth > 0 ? `${screenWidth} × ${screenHeight}` : "获取中"}</dd></div>
+            <div><dt>控制权限</dt><dd>键盘与鼠标</dd></div>
+            <div><dt>视频状态</dt><dd>进入桌面后启动</dd></div>
+          </dl>
+          <button className="outline-button danger" onClick={onDisconnect}>断开连接</button>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function DevicesPage({ state, devices, busy, connectDevice, removeDevice }) {
+  return (
+    <section className="content-view view-enter">
+      <header className="page-heading">
+        <div><span className="eyebrow">LOCAL DEVICES / 01</span><h1>我的设备</h1><p>发现同一网络中的电脑，也可以重新连接曾经使用过的设备。</p></div>
+        <button className="refresh-button" onClick={() => sendCommand("refreshLanDevices")}><Icon name="refresh" />刷新设备</button>
+      </header>
+      {devices.length > 0 ? (
+        <div className="device-grid">
+          {devices.map((device) => (
+            <DeviceCard
+              key={device.key}
+              device={device}
+              busy={busy}
+              onConnect={() => connectDevice(device)}
+              onRemove={device.recentId ? () => removeDevice(device.recentId) : null}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="empty-state">
+          <div className="discovery-orbit"><span /><span /><span /><b>W</b></div>
+          <strong>还没有发现设备</strong>
+          <p>正在搜索局域网设备。如果校园网阻止广播，可以前往“远程协助”通过 IP 地址连接。</p>
+          <button className="outline-button" onClick={() => sendCommand("refreshLanDevices")}><Icon name="refresh" />重新扫描</button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function AssistPage({ state, numericPort, setRole, connectManual, busy }) {
+  const controlledActive = state.signalingState === "Listening" || state.sessionOpen;
+  return (
+    <section className="content-view assist-view view-enter">
+      <header className="page-heading"><div><span className="eyebrow">REMOTE ASSISTANCE / 02</span><h1>远程协助</h1><p>在同一网络中，让两台设备自然相连。</p></div></header>
+      <div className="assist-layout">
+        <article className="assist-primary-panel">
+          <div className="panel-title"><span>01</span><div><h2>选择本机角色</h2><p>连接前确认这台电脑由谁操作。</p></div></div>
+          <div className="role-picker">
+            <button className={state.role === "controller" ? "active" : ""} onClick={() => setRole("controller")}><Icon name="devices" /><span><strong>控制其他设备</strong><small>查看并操作另一台电脑</small></span></button>
+            <button className={state.role === "controlled" ? "active" : ""} onClick={() => setRole("controlled")}><Icon name="assist" /><span><strong>允许远程控制</strong><small>等待另一台电脑连接本机</small></span></button>
+          </div>
+
+          {state.role === "controller" ? (
+            <div className="address-form">
+              <div className="form-copy"><span className="eyebrow">DIRECT ADDRESS</span><h3>通过地址连接</h3><p>适用于校园网或广播受限网络。</p></div>
+              <label><span>IP 地址</span><input value={state.host} onChange={(event) => state.setHost(event.target.value)} placeholder="192.168.1.20" /></label>
+              <label className="port-field"><span>端口</span><input value={state.port} onChange={(event) => state.setPort(event.target.value)} /></label>
+              <button className="primary-button" disabled={busy} onClick={connectManual}>{busy ? "正在连接" : "连接设备"}<Icon name="arrow" /></button>
+            </div>
+          ) : (
+            <div className="listen-panel">
+              <div className={`listen-orbit ${controlledActive ? "active" : ""}`}><span /><span /><b>{controlledActive ? "ON" : "W"}</b></div>
+              <div className="listen-copy"><span className="eyebrow">THIS DEVICE</span><h3>{state.sessionOpen ? "控制端已连接" : controlledActive ? "正在等待连接" : "准备接受连接"}</h3><p>{state.sessionOpen ? "远程控制会话正在进行，本机仍可随时结束。" : "保持窗口可见，启动后本机会响应局域网发现。"}</p></div>
+              <label><span>监听端口</span><input value={state.port} onChange={(event) => state.setPort(event.target.value)} /></label>
+              {!controlledActive ? (
+                <button className="primary-button" onClick={() => sendCommand("startSignalingServer", { port: numericPort })}>开始监听</button>
+              ) : (
+                <button className="outline-button danger" onClick={() => sendCommand("disconnectSession")}>{state.sessionOpen ? "结束控制" : "停止监听"}</button>
+              )}
+            </div>
+          )}
+        </article>
+        <aside className="assist-status-panel">
+          <span className="eyebrow">CONNECTION STATUS</span><h3>连接状态</h3>
+          <div className="status-row"><span>信令</span><strong>{state.signalingState}</strong></div>
+          <div className="status-row"><span>WebRTC</span><strong>{state.webrtcState}</strong></div>
+          <div className="status-row"><span>控制通道</span><strong>{state.sessionOpen ? "Ready" : "—"}</strong></div>
+          <div className="status-note"><Icon name="signal" /><p>{state.role === "controller" ? "优先使用自动发现；无法发现时使用 IP 地址连接。" : "被控端会保持可见，并提供明确的停止入口。"}</p></div>
+        </aside>
+      </div>
+    </section>
+  );
+}
 
 export function DashboardPage() {
   const state = useNativeState();
+  const [activePage, setActivePage] = useState("devices");
   const numericPort = Number.parseInt(state.port, 10) || 39000;
   const remoteOnline = state.role === "controller" && state.sessionOpen;
-  const computerName = state.deviceInfo?.computerName || "远程电脑";
+  const busy = state.signalingState === "Connecting" || ["Connecting", "Negotiating"].includes(state.webrtcState);
   const wallpaperUrl = state.deviceInfo?.wallpaperData
     ? `data:${state.deviceInfo.wallpaperMime || "image/jpeg"};base64,${state.deviceInfo.wallpaperData}`
     : "";
-  const screenWidth = state.deviceInfo?.screenWidth || state.frame?.width || 16;
-  const screenHeight = state.deviceInfo?.screenHeight || state.frame?.height || 9;
-  const desktopEntryStyle = {
-    aspectRatio: `${screenWidth} / ${screenHeight}`,
-    ...(wallpaperUrl
-      ? { backgroundImage: `linear-gradient(90deg, rgba(10,18,24,.35), rgba(10,18,24,.08)), url(${wallpaperUrl})` }
-      : {}),
+
+  const mergedDevices = useMemo(() => {
+    const onlineByEndpoint = new Map(state.lanDevices.map((device) => [endpointKey(device.address, device.port), device]));
+    const devices = state.recentDevices.map((recent) => {
+      const key = endpointKey(recent.host, recent.port);
+      const online = onlineByEndpoint.get(key);
+      onlineByEndpoint.delete(key);
+      return {
+        key: `recent-${recent.deviceId}`,
+        recentId: recent.deviceId,
+        discoveryId: online?.deviceId || "",
+        name: online?.name || recent.name,
+        host: online?.address || recent.host,
+        port: online?.port || recent.port,
+        lastConnectedAtMs: recent.lastConnectedAtMs,
+        online: Boolean(online),
+      };
+    });
+    onlineByEndpoint.forEach((device) => devices.push({
+      key: `lan-${device.deviceId}`,
+      discoveryId: device.deviceId,
+      name: device.name,
+      host: device.address,
+      port: device.port,
+      online: true,
+    }));
+    return devices.sort((left, right) => Number(right.online) - Number(left.online));
+  }, [state.lanDevices, state.recentDevices]);
+
+  const beginConnection = (device) => {
+    state.setHost(device.host);
+    state.setPort(String(device.port));
+    if (device.discoveryId) sendCommand("connectLanDevice", { deviceId: device.discoveryId });
+    else sendCommand("connectRecentDevice", { deviceId: device.recentId });
   };
 
+  const setRole = (role) => {
+    state.setRole(role);
+    if (role === "controlled") setActivePage("assist");
+  };
+
+  const errors = [state.error, state.recentDeviceError].filter(Boolean);
+
   return (
-    <main className="app-shell dashboard-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <span className="mark">WRC</span>
-          <div>
-            <h1>winRemoteControl</h1>
-            <p>局域网远程桌面验证</p>
-          </div>
+    <main className="dashboard-shell">
+      <aside className="app-sidebar">
+        <div className="app-brand"><span>W</span><div><strong>winRemote</strong><small>Control</small></div></div>
+        <nav className="app-nav">
+          <button className={activePage === "devices" ? "active" : ""} onClick={() => { setRole("controller"); setActivePage("devices"); }}><Icon name="devices" /><span>我的设备</span></button>
+          <button className={activePage === "assist" ? "active" : ""} onClick={() => setActivePage("assist")}><Icon name="assist" /><span>远程协助</span></button>
+        </nav>
+        <div className="sidebar-recents">
+          <span>最近连接</span>
+          {state.recentDevices.slice(0, 3).map((device) => {
+            const online = state.lanDevices.some((item) => endpointKey(item.address, item.port) === endpointKey(device.host, device.port));
+            return <button key={device.deviceId} onClick={() => beginConnection({ ...device, recentId: device.deviceId, online })}><i className={online ? "online" : ""} /><span>{device.name || device.host}</span></button>;
+          })}
+          {state.recentDevices.length === 0 && <small>成功连接后会显示在这里</small>}
         </div>
-
-        <section className="connect-panel">
-          <div className="section-title">
-            <h2>会话</h2>
-            <p>手动连接局域网设备</p>
-          </div>
-
-          <div className="segmented">
-            <button className={state.role === "controlled" ? "active" : ""} onClick={() => state.setRole("controlled")}>
-              被控端
-            </button>
-            <button className={state.role === "controller" ? "active" : ""} onClick={() => state.setRole("controller")}>
-              控制端
-            </button>
-          </div>
-
-          {state.role === "controller" && (
-            <label className="field">
-              <span>被控端 IP</span>
-              <input value={state.host} onChange={(event) => state.setHost(event.target.value)} />
-            </label>
-          )}
-
-          <label className="field">
-            <span>{state.role === "controlled" ? "监听端口" : "被控端端口"}</span>
-            <input value={state.port} onChange={(event) => state.setPort(event.target.value)} />
-          </label>
-
-          <div className="actions">
-            {state.role === "controlled" ? (
-              <button className="primary" onClick={() => sendCommand("startSignalingServer", { port: numericPort })}>
-                开始监听
-              </button>
-            ) : (
-              <button className="primary" onClick={() => sendCommand("connectSignaling", { host: state.host, port: numericPort })}>
-                连接被控端
-              </button>
-            )}
-            <button className="secondary" onClick={() => sendCommand("disconnectSession")}>
-              断开会话
-            </button>
-          </div>
-
-          <SessionMetrics
-            signalingState={state.signalingState}
-            webrtcState={state.webrtcState}
-            sessionOpen={state.sessionOpen}
-          />
-
-          {state.error && <p className="error">{state.error}</p>}
-          {state.lanDiscoveryError && <p className="error">{state.lanDiscoveryError}</p>}
-        </section>
+        <div className="sidebar-foot"><span className="privacy-dot" /><p>仅局域网连接<br /><small>连接记录保存在本机</small></p></div>
       </aside>
 
-      <section className="device-page">
-        <header className="page-head">
-          <div>
-            <h2>{state.role === "controlled" ? "本机等待控制" : "我的设备"}</h2>
-            <p>{state.role === "controlled" ? "保持此窗口可见，等待控制端连接。" : "连接成功后，从设备卡片进入远程桌面。"}</p>
-          </div>
-          <div className="page-head-actions">
-            {state.role === "controller" && !remoteOnline && (
-              <button className="secondary" onClick={() => sendCommand("refreshLanDevices")}>
-                刷新设备
-              </button>
-            )}
-            <CaptureStatus captureStatus={state.captureStatus} webrtcState={state.webrtcState} />
-          </div>
-        </header>
-
-        {state.role === "controlled" ? (
-          <div className="controlled-card">
-            <strong>{state.sessionOpen ? "控制端已连接" : "正在等待连接"}</strong>
-            <p>对方点击“进入桌面”后，本机才会开始推送画面。</p>
-            {state.sessionOpen && (
-              <button className="secondary danger-button" onClick={() => sendCommand("stopStreaming")}>
-                结束控制
-              </button>
-            )}
-          </div>
+      <div className="dashboard-main">
+        <header className="dashboard-topbar"><span>winRemoteControl</span><div className={`discovery-state ${state.lanDiscoveryError ? "limited" : ""}`}><i />{state.lanDiscoveryError ? "广播受限" : "局域网已就绪"}</div></header>
+        {remoteOnline ? (
+          <ConnectedSession state={state} wallpaperUrl={wallpaperUrl} onDisconnect={() => sendCommand("disconnectSession")} />
+        ) : activePage === "devices" ? (
+          <DevicesPage
+            state={state}
+            devices={mergedDevices}
+            busy={busy}
+            connectDevice={beginConnection}
+            removeDevice={(deviceId) => sendCommand("removeRecentDevice", { deviceId })}
+          />
         ) : (
-          <div className="device-list">
-            {remoteOnline ? (
-              <article className="device-card">
-                <div className="device-title">
-                  <span className="online-dot" />
-                  <h3>{computerName}</h3>
-                </div>
-                <button
-                  className="desktop-entry"
-                  style={desktopEntryStyle}
-                  onClick={() => sendCommand("enterDesktop")}
-                >
-                  <span>进入桌面</span>
-                  <strong>→</strong>
-                </button>
-                <div className="device-meta">
-                  <span>{state.frame ? `${state.frame.width} × ${state.frame.height}` : "等待画面"}</span>
-                  <span>{state.fps} FPS</span>
-                </div>
-              </article>
-            ) : state.lanDevices.length > 0 ? (
-              <div className="lan-device-grid">
-                {state.lanDevices.map((device) => (
-                  <article className="lan-device-card" key={device.deviceId}>
-                    <div className="device-title">
-                      <span className="online-dot" />
-                      <div>
-                        <h3>{device.name || "Windows 设备"}</h3>
-                        <p>{device.address}:{device.port}</p>
-                      </div>
-                    </div>
-                    <button
-                      className="primary"
-                      onClick={() => sendCommand("connectLanDevice", { deviceId: device.deviceId })}
-                    >
-                      连接
-                    </button>
-                  </article>
-                ))}
-              </div>
-            ) : (
-              <div className="empty-device">
-                <strong>还没有在线设备</strong>
-                <p>正在搜索局域网设备，也可以在左侧输入 IP 和端口手动连接。</p>
-              </div>
-            )}
-          </div>
+          <AssistPage
+            state={state}
+            numericPort={numericPort}
+            setRole={setRole}
+            busy={busy}
+            connectManual={() => sendCommand("connectSignaling", { host: state.host.trim(), port: numericPort })}
+          />
         )}
-      </section>
+        {errors.length > 0 && <div className="error-stack">{errors.map((error, index) => <p key={`${index}-${error}`}>{error}</p>)}</div>}
+      </div>
     </main>
   );
 }
@@ -170,109 +274,42 @@ export function DesktopPage() {
   const state = useNativeState();
   const previewSlotRef = useRef(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const sessionUnavailable = ["Interrupted", "Stopping", "Disconnected", "Failed"]
-    .includes(state.webrtcState);
-
+  const sessionUnavailable = ["Interrupted", "Stopping", "Disconnected", "Failed"].includes(state.webrtcState);
   const qualityPresets = {
-    ultraFast: { label: "极速", fps: 60, width: 1280, height: 720, bitrateKbps: 4000 },
-    auto: { label: "自动", fps: 30, width: 1280, height: 720, bitrateKbps: 3000 },
-    original: { label: "原画", fps: 30, width: 0, height: 0, bitrateKbps: 12000 },
-    hd: { label: "高清", fps: 30, width: 1920, height: 1080, bitrateKbps: 6000 },
-    smooth: { label: "流畅", fps: 30, width: 1280, height: 720, bitrateKbps: 2000 },
-  };
-
-  const sendStreamConfig = (key) => {
-    const config = qualityPresets[key] || qualityPresets.auto;
-    sendCommand("setStreamConfig", {
-      fps: config.fps,
-      width: config.width,
-      height: config.height,
-      bitrateKbps: config.bitrateKbps,
-    });
+    auto: { fps: 30, width: 1280, height: 720, bitrateKbps: 3000 },
   };
 
   const formatElapsed = (seconds) => {
-    const nHours = Math.floor(seconds / 3600);
-    const nMinutes = Math.floor((seconds % 3600) / 60);
-    const nSeconds = seconds % 60;
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const remaining = seconds % 60;
     const pad = (value) => String(value).padStart(2, "0");
-    return nHours > 0
-      ? `${pad(nHours)}:${pad(nMinutes)}:${pad(nSeconds)}`
-      : `${pad(nMinutes)}:${pad(nSeconds)}`;
+    return hours > 0 ? `${pad(hours)}:${pad(minutes)}:${pad(remaining)}` : `${pad(minutes)}:${pad(remaining)}`;
   };
 
   const networkClass = useMemo(() => {
+    if (state.networkStats.quality === "excellent") return "network-dot is-excellent";
+    if (state.networkStats.quality === "good") return "network-dot is-good";
+    if (state.networkStats.quality === "poor") return "network-dot is-bad";
     const value = state.webrtcState.toLowerCase();
-    const isNetworkActive =
-      state.fps > 0 ||
-      value.includes("streaming") ||
-      value.includes("remotevideotrack") ||
-      value.includes("sessionchannelopen");
-
-    if (state.networkStats.quality === "excellent") {
-      return "network-dot is-excellent";
-    }
-    if (state.networkStats.quality === "good") {
-      return "network-dot is-good";
-    }
-    if (state.networkStats.quality === "poor") {
-      return "network-dot is-bad";
-    }
-
-    if (value.includes("failed") || value.includes("disconnect")) {
-      return "network-dot is-bad";
-    }
-    if (value.includes("checking") || value.includes("connecting")) {
-      return "network-dot is-warn";
-    }
-    if (isNetworkActive) {
-      return "network-dot is-warn";
-    }
-    if (value.includes("connected") || value.includes("completed") || value.includes("streaming")) {
-      return "network-dot is-good";
-    }
-    return "network-dot";
+    if (value.includes("failed") || value.includes("disconnect")) return "network-dot is-bad";
+    if (value.includes("checking") || value.includes("connecting")) return "network-dot is-warn";
+    return state.fps > 0 ? "network-dot is-good" : "network-dot";
   }, [state.fps, state.networkStats.quality, state.webrtcState]);
 
-  const networkLabel = useMemo(() => {
-    const stats = state.networkStats;
-    if (!stats || stats.quality === "unknown" || stats.rttMs < 0) {
-      if (state.fps > 0) {
-        return "统计中";
-      }
-      return "";
-    }
-
-    return `${stats.rttMs}ms`;
-  }, [state.fps, state.networkStats]);
-
-  const networkTitle = useMemo(() => {
-    const stats = state.networkStats;
-    if (!stats || stats.quality === "unknown" || stats.rttMs < 0) {
-      if (state.fps > 0) {
-        return "网络统计采集中";
-      }
-      return "网络状态未知";
-    }
-
-    const lossPercent = (stats.packetLossRate * 100).toFixed(1);
-    const bitrateMbps = (stats.bitrateKbps / 1000).toFixed(1);
-    return `网络 ${stats.quality} / RTT ${stats.rttMs}ms / 抖动 ${stats.jitterMs}ms / 丢包 ${lossPercent}% / ${bitrateMbps}Mbps`;
-  }, [state.networkStats]);
+  const networkLabel = state.networkStats.rttMs >= 0 ? `${state.networkStats.rttMs} ms` : "";
+  const networkTitle = state.networkStats.rttMs >= 0
+    ? `RTT ${state.networkStats.rttMs}ms / 抖动 ${state.networkStats.jitterMs}ms / 丢包 ${(state.networkStats.packetLossRate * 100).toFixed(1)}%`
+    : "网络统计采集中";
 
   useEffect(() => {
-    if (!previewSlotRef.current) {
-      return undefined;
-    }
-
     const element = previewSlotRef.current;
+    if (!element) return undefined;
     const notify = () => sendPreviewRect(element);
     notify();
-
     const resizeObserver = new ResizeObserver(notify);
     resizeObserver.observe(element);
     window.addEventListener("resize", notify);
-
     const timerId = window.setTimeout(notify, 100);
     return () => {
       window.clearTimeout(timerId);
@@ -282,37 +319,24 @@ export function DesktopPage() {
   }, []);
 
   useEffect(() => {
-    const timerId = window.setInterval(() => {
-      setElapsedSeconds((value) => value + 1);
-    }, 1000);
+    const timerId = window.setInterval(() => setElapsedSeconds((value) => value + 1), 1000);
     return () => window.clearInterval(timerId);
   }, []);
 
   useEffect(() => {
-    sendStreamConfig("auto");
+    sendCommand("setStreamConfig", qualityPresets.auto);
   }, []);
 
   return (
     <main className="desktop-shell">
-      <header
-        className="desktop-titlebar"
-        onPointerDown={(event) => {
-          if (event.button === 0 && event.target.closest("[data-window-control]") === null) {
-            sendCommand("beginDesktopWindowDrag");
-          }
-        }}
-      >
+      <header className="desktop-titlebar" onPointerDown={(event) => {
+        if (event.button === 0 && event.target.closest("[data-window-control]") === null) sendCommand("beginDesktopWindowDrag");
+      }}>
         <div className="desktop-title-left">
-          <span className="mark">WRC</span>
+          <span className="desktop-mark">W</span>
           <strong>{state.deviceInfo?.computerName || "远程桌面"}</strong>
-          <span className="network-status">
-            <i className={networkClass} title={networkTitle} />
-            {networkLabel && <span className="network-latency">{networkLabel}</span>}
-            {formatElapsed(elapsedSeconds)}
-          </span>
-          <span className="desktop-stat">
-            {state.frame ? `${state.frame.width} x ${state.frame.height}` : "等待画面"}
-          </span>
+          <span className="network-status"><i className={networkClass} title={networkTitle} />{networkLabel && <b>{networkLabel}</b>}<span>{formatElapsed(elapsedSeconds)}</span></span>
+          <span className="desktop-stat">{state.frame ? `${state.frame.width} × ${state.frame.height}` : "等待画面"}</span>
           <span className="desktop-stat">{state.fps} FPS</span>
         </div>
         <DesktopWindowControls />
@@ -321,15 +345,10 @@ export function DesktopPage() {
         <div ref={previewSlotRef} className="native-preview-slot desktop-slot" />
         {sessionUnavailable && (
           <div className="desktop-disconnected">
+            <div className="disconnect-orbit"><span /><span /><b>!</b></div>
             <strong>{state.webrtcState === "Interrupted" ? "连接暂时中断" : "远程连接已断开"}</strong>
-            <p>
-              {state.webrtcState === "Interrupted"
-                ? "正在等待网络恢复，恢复前不会继续发送输入。"
-                : "本次远程控制已经结束，请返回主界面重新连接。"}
-            </p>
-            {state.webrtcState !== "Interrupted" && (
-              <button className="primary" onClick={() => sendCommand("closeDesktop")}>返回主界面</button>
-            )}
+            <p>{state.webrtcState === "Interrupted" ? "正在等待网络恢复，恢复前不会继续发送输入。" : "本次远程控制已经结束，请返回主界面重新连接。"}</p>
+            {state.webrtcState !== "Interrupted" && <button className="primary-button" onClick={() => sendCommand("closeDesktop")}>返回主界面</button>}
           </div>
         )}
       </section>

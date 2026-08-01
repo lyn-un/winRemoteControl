@@ -4,10 +4,12 @@
 #include "adapters/windows/input/windowsinputinjector.h"
 #include "adapters/signaling/tcpsignalingtransport.h"
 #include "adapters/discovery/udplandiscoverytransport.h"
+#include "adapters/settings/qsettingsrecentdevicestore.h"
 #include "app/remotedesktopwindow.h"
 #include "capture/captureservice.h"
 #include "core/discovery/devicediscoverycontroller.h"
 #include "discovery/landiscoveryservice.h"
+#include "devices/recentdeviceservice.h"
 #include "render/videorenderwidget.h"
 #include "session/sessionviewmodel.h"
 #include "transport/webrtc/webrtcpeer.h"
@@ -16,6 +18,8 @@
 #include "ui_bridge/devicediscoveryviewmodel.h"
 
 #include <QtCore/QSysInfo>
+#include <QtCore/QDir>
+#include <QtCore/QStandardPaths>
 #include <QtCore/QUuid>
 #include <memory>
 
@@ -40,7 +44,13 @@ KApplicationComposition::KApplicationComposition(QObject *pParent)
 	, m_pDiscoveryViewModel(new KDeviceDiscoveryViewModel(
 		m_pDiscoveryService,
 		this))
+	, m_pRecentDeviceService(new KRecentDeviceService(
+		std::make_unique<KQSettingsRecentDeviceStore>(
+			QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
+				.filePath(QStringLiteral("recent_devices.ini"))),
+		this))
 {
+	m_pRecentDeviceService->initialize();
 	wireServices();
 }
 
@@ -68,11 +78,17 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 	connect(pWebViewWidget, &KWebViewWidget::startSignalingServerRequested,
 		m_pSessionViewModel, &KSessionViewModel::startSignalingServer);
 	connect(pWebViewWidget, &KWebViewWidget::connectSignalingRequested,
-		m_pSessionViewModel, &KSessionViewModel::connectSignaling);
+		m_pRecentDeviceService, &KRecentDeviceService::connectEndpoint);
 	connect(pWebViewWidget, &KWebViewWidget::refreshLanDevicesRequested,
 		m_pDiscoveryViewModel, &KDeviceDiscoveryViewModel::refreshLanDevices);
 	connect(pWebViewWidget, &KWebViewWidget::connectLanDeviceRequested,
 		m_pDiscoveryViewModel, &KDeviceDiscoveryViewModel::connectLanDevice);
+	connect(pWebViewWidget, &KWebViewWidget::requestRecentDevicesRequested,
+		m_pRecentDeviceService, &KRecentDeviceService::requestDevices);
+	connect(pWebViewWidget, &KWebViewWidget::connectRecentDeviceRequested,
+		m_pRecentDeviceService, &KRecentDeviceService::connectDevice);
+	connect(pWebViewWidget, &KWebViewWidget::removeRecentDeviceRequested,
+		m_pRecentDeviceService, &KRecentDeviceService::removeDevice);
 	connect(pWebViewWidget, &KWebViewWidget::disconnectSessionRequested,
 		m_pSessionViewModel, &KSessionViewModel::disconnectSession);
 	connect(pWebViewWidget, &KWebViewWidget::startStreamingRequested,
@@ -100,6 +116,10 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		pWebViewWidget, &KWebViewWidget::sendLanDevicesChanged);
 	connect(m_pDiscoveryViewModel, &KDeviceDiscoveryViewModel::lanDiscoveryError,
 		pWebViewWidget, &KWebViewWidget::sendLanDiscoveryError);
+	connect(m_pRecentDeviceService, &KRecentDeviceService::devicesChanged,
+		pWebViewWidget, &KWebViewWidget::sendRecentDevicesChanged);
+	connect(m_pRecentDeviceService, &KRecentDeviceService::recentDeviceError,
+		pWebViewWidget, &KWebViewWidget::sendRecentDeviceError);
 }
 
 void KApplicationComposition::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWindow)
@@ -201,5 +221,16 @@ void KApplicationComposition::wireServices()
 	connect(m_pSessionService, &KSessionCoordinator::listeningAvailabilityChanged,
 		m_pDiscoveryService, &KDeviceDiscoveryController::setListeningAvailability);
 	connect(m_pDiscoveryService, &KDeviceDiscoveryController::connectEndpointRequested,
+		m_pRecentDeviceService, &KRecentDeviceService::connectEndpoint);
+	connect(m_pRecentDeviceService, &KRecentDeviceService::connectEndpointRequested,
 		m_pSessionViewModel, &KSessionViewModel::connectSignaling);
+	connect(m_pSessionViewModel, &KSessionViewModel::sessionChannelChanged,
+		m_pRecentDeviceService, &KRecentDeviceService::setSessionChannelOpen);
+	connect(m_pSessionViewModel, &KSessionViewModel::remoteDeviceInfoChanged,
+		m_pRecentDeviceService,
+		[m_pRecentDeviceService = m_pRecentDeviceService](const QString &strComputerName,
+			const QString &, const QString &, int, int)
+		{
+			m_pRecentDeviceService->setRemoteDeviceName(strComputerName);
+		});
 }

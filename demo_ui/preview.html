@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WRC UI Preview</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="preview-page">
+  <div id="previewToolbar" class="preview-toolbar">
+    <a href="index.html" class="back-link">← 返回 20 款方案</a>
+    <div class="preview-title"><span id="previewIndex">01</span><strong id="previewName">方案</strong></div>
+    <div class="preview-actions">
+      <button id="prevTheme" type="button" aria-label="上一个方案">←</button>
+      <button id="nextTheme" type="button" aria-label="下一个方案">→</button>
+    </div>
+  </div>
+  <main id="app" class="preview-stage"></main>
+  <script src="app.js"></script>
+</body>
+</html>

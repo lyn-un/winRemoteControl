@@ -166,6 +166,12 @@ void KRemoteDesktopWindow::updatePreviewRect(const QRect &rect)
 void KRemoteDesktopWindow::showControlCenterMenu(const QPoint &pos)
 {
 	QMenu menu(this);
+	menu.setStyleSheet(QStringLiteral(
+		"QMenu { background: #f7fbfc; color: #25343a; border: 1px solid #c7d9dd; "
+		"border-radius: 7px; padding: 6px; }"
+		"QMenu::item { min-width: 150px; padding: 8px 24px 8px 12px; border-radius: 5px; }"
+		"QMenu::item:selected { background: #dce8eb; color: #315f6b; }"
+		"QMenu::separator { height: 1px; background: #cfdee2; margin: 5px 8px; }"));
 	QMenu *pQualityMenu = menu.addMenu(QStringLiteral("画质"));
 	pQualityMenu->addAction(QStringLiteral("极速"), this,
 		[this]()

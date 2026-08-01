@@ -143,6 +143,34 @@ void KWebViewWidget::sendLanDiscoveryError(const QString &strError)
 	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
 }
 
+void KWebViewWidget::sendRecentDevicesChanged(const QVector<KRecentDevice> &devices)
+{
+	QJsonArray deviceArray;
+	for (const KRecentDevice &device : devices)
+	{
+		QJsonObject deviceObject;
+		deviceObject.insert(QStringLiteral("deviceId"), device.strDeviceId);
+		deviceObject.insert(QStringLiteral("name"), device.strDeviceName);
+		deviceObject.insert(QStringLiteral("host"), device.strHost);
+		deviceObject.insert(QStringLiteral("port"), device.nSignalingPort);
+		deviceObject.insert(QStringLiteral("lastConnectedAtMs"),
+			QString::number(device.nLastConnectedAtMs));
+		deviceArray.append(deviceObject);
+	}
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("recentDevicesChanged"));
+	object.insert(QStringLiteral("devices"), deviceArray);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendRecentDeviceError(const QString &strError)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("recentDeviceError"));
+	object.insert(QStringLiteral("message"), strError);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
 void KWebViewWidget::resizeEvent(QResizeEvent *pEvent)
 {
 	QWidget::resizeEvent(pEvent);
@@ -285,6 +313,14 @@ void KWebViewWidget::handleWebMessage(const QString &strMessage)
 		emit refreshLanDevicesRequested();
 	else if (strCommand == QStringLiteral("connectLanDevice"))
 		emit connectLanDeviceRequested(
+			document.object().value(QStringLiteral("deviceId")).toString());
+	else if (strCommand == QStringLiteral("requestRecentDevices"))
+		emit requestRecentDevicesRequested();
+	else if (strCommand == QStringLiteral("connectRecentDevice"))
+		emit connectRecentDeviceRequested(
+			document.object().value(QStringLiteral("deviceId")).toString());
+	else if (strCommand == QStringLiteral("removeRecentDevice"))
+		emit removeRecentDeviceRequested(
 			document.object().value(QStringLiteral("deviceId")).toString());
 	else if (strCommand == QStringLiteral("disconnectSession"))
 		emit disconnectSessionRequested();

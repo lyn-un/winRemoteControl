@@ -10,6 +10,7 @@ class KWebViewWidget;
 class KSessionCoordinator;
 class KDeviceDiscoveryController;
 class KDeviceDiscoveryViewModel;
+class KRecentDeviceService;
 
 class KApplicationComposition : public QObject
 {
@@ -36,6 +37,7 @@ private:
 	KSessionViewModel *m_pSessionViewModel = nullptr;
 	KDeviceDiscoveryController *m_pDiscoveryService = nullptr;
 	KDeviceDiscoveryViewModel *m_pDiscoveryViewModel = nullptr;
+	KRecentDeviceService *m_pRecentDeviceService = nullptr;
 	bool m_bShutdown = false;
 };
 

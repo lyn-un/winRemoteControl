@@ -25,10 +25,12 @@ export function useNativeState() {
   const [sessionOpen, setSessionOpen] = useState(false);
   const [deviceInfo, setDeviceInfo] = useState(null);
   const [lanDevices, setLanDevices] = useState([]);
+  const [recentDevices, setRecentDevices] = useState([]);
   const [frame, setFrame] = useState(null);
   const [networkStats, setNetworkStats] = useState(emptyNetworkStats);
   const [error, setError] = useState("");
   const [lanDiscoveryError, setLanDiscoveryError] = useState("");
+  const [recentDeviceError, setRecentDeviceError] = useState("");
   const [fps, setFps] = useState(0);
   const frameTimes = useRef([]);
 
@@ -122,6 +124,17 @@ export function useNativeState() {
         return;
       }
 
+      if (message.type === "recentDevicesChanged") {
+        setRecentDevices(Array.isArray(message.devices) ? message.devices : []);
+        setRecentDeviceError("");
+        return;
+      }
+
+      if (message.type === "recentDeviceError") {
+        setRecentDeviceError(message.message || "读取最近设备失败");
+        return;
+      }
+
       if (message.type === "frameReady") {
         const now = performance.now();
         frameTimes.current = [...frameTimes.current.filter((item) => now - item < 1000), now];
@@ -150,6 +163,12 @@ export function useNativeState() {
 
   useEffect(() => {
     if (getViewMode() === "dashboard") {
+      sendCommand("requestRecentDevices");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (getViewMode() === "dashboard") {
       if (role !== "controller") {
         setLanDevices([]);
         setLanDiscoveryError("");
@@ -171,10 +190,12 @@ export function useNativeState() {
     sessionOpen,
     deviceInfo,
     lanDevices,
+    recentDevices,
     frame,
     networkStats,
     error,
     lanDiscoveryError,
+    recentDeviceError,
     fps,
   };
 }

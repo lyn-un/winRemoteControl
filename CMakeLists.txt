@@ -24,6 +24,7 @@ set(WEBRTC_OUT "${WEBRTC_ROOT}/out/wrc_release_x64_msvcstl")
 add_library(wrc_foundation INTERFACE)
 
 target_sources(wrc_foundation INTERFACE
+	src/core/devices/recentdevice.h
 	src/core/media/decodedvideoframe.h
 	src/core/media/networkstats.h
 	src/core/media/streamconfig.h
@@ -57,6 +58,7 @@ target_link_libraries(wrc_protocol PUBLIC
 )
 
 add_library(wrc_core STATIC
+	src/core/devices/recentdevicestore.h
 	src/core/discovery/devicediscoverycontroller.h
 	src/core/discovery/discovereddevice.h
 	src/core/discovery/landiscoverytransport.h
@@ -158,6 +160,35 @@ target_link_libraries(wrc_discovery_application PUBLIC
 	wrc_core
 	wrc_protocol
 	wrc_diagnostics
+	Qt6::Core
+)
+
+add_library(wrc_recent_device_application STATIC
+	src/devices/recentdeviceservice.cpp
+	src/devices/recentdeviceservice.h
+)
+
+target_include_directories(wrc_recent_device_application PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_recent_device_application PUBLIC
+	wrc_core
+	wrc_diagnostics
+	Qt6::Core
+)
+
+add_library(wrc_settings_adapter STATIC
+	src/adapters/settings/qsettingsrecentdevicestore.cpp
+	src/adapters/settings/qsettingsrecentdevicestore.h
+)
+
+target_include_directories(wrc_settings_adapter PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_settings_adapter PUBLIC
+	wrc_core
 	Qt6::Core
 )
 
@@ -379,6 +410,8 @@ target_link_libraries(winRemoteControl PRIVATE
 	wrc_session_application
 	wrc_signaling_adapter
 	wrc_discovery_application
+	wrc_recent_device_application
+	wrc_settings_adapter
 	wrc_udp_discovery_adapter
 	wrc_webrtc_adapter
 	wrc_windows_adapters
@@ -439,6 +472,16 @@ if(BUILD_TESTING)
 		Qt6::Network
 	)
 	add_test(NAME wrc_lan_discovery_tests COMMAND wrc_lan_discovery_tests)
+
+	add_executable(wrc_recent_device_tests
+		tests/unit/recentdeviceservicetest.cpp
+	)
+	target_link_libraries(wrc_recent_device_tests PRIVATE
+		wrc_recent_device_application
+		wrc_settings_adapter
+		Qt6::Core
+	)
+	add_test(NAME wrc_recent_device_tests COMMAND wrc_recent_device_tests)
 endif()
 
 set(WEBVIEW2_LOADER "${WEBVIEW2_ROOT}/build/native/x64/WebView2Loader.dll")
