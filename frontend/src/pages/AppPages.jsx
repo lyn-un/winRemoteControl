@@ -177,6 +177,7 @@ function AssistPage({ state, numericPort, setRole, connectManual, busy }) {
 
 function SettingsPage({ state }) {
   const settings = state.applicationSettings;
+  const [activeSection, setActiveSection] = useState("security");
   if (!settings) {
     return <section className="content-view settings-view view-enter"><div className="empty-state"><strong>正在读取设置</strong></div></section>;
   }
@@ -201,39 +202,103 @@ function SettingsPage({ state }) {
     update({ defaultListenPort });
   };
 
+  const sections = [
+    { id: "general", icon: "settings", title: "通用", detail: "启动身份与基础行为", ready: true },
+    { id: "security", icon: "shield", title: "连接与安全", detail: "远程接入和审批策略", ready: true },
+    { id: "network", icon: "signal", title: "网络与传输", detail: "监听端口与连接方式", ready: true },
+    { id: "control", icon: "monitor", title: "画面与控制", detail: "画质、键鼠与显示策略", ready: false },
+    { id: "diagnostics", icon: "assist", title: "日志与诊断", detail: "运行日志和性能信息", ready: false },
+    { id: "about", icon: "devices", title: "关于", detail: "版本与项目边界", ready: false },
+  ];
+  const active = sections.find((section) => section.id === activeSection) || sections[0];
+
+  const renderSection = () => {
+    if (activeSection === "general") {
+      return (
+        <article className="settings-card settings-content-card">
+          <div className="settings-section-title"><span>01</span><div><h2>启动身份</h2><p>选择应用下次启动时默认进入的工作模式。</p></div></div>
+          <div className="settings-fields settings-fields-wide">
+            <label><span>默认角色</span><select value={settings.defaultRole} onChange={(event) => update({ defaultRole: event.target.value })}><option value="controller">控制端</option><option value="controlled">被控端</option></select><small>只影响下次启动，不会中断当前连接或切换当前角色。</small></label>
+          </div>
+        </article>
+      );
+    }
+
+    if (activeSection === "security") {
+      return (
+        <div className="settings-content-stack">
+          <article className="settings-card settings-hero settings-hero-contained">
+            <div className="settings-icon"><Icon name="shield" /></div>
+            <div><span className="eyebrow">REMOTE ACCESS</span><h2>允许远程控制</h2><p>关闭后将停止监听和局域网响应，其他设备无法再请求控制本机。</p></div>
+            <button className={`switch-control ${settings.remoteAccessEnabled ? "is-on" : ""}`} role="switch" aria-checked={settings.remoteAccessEnabled} onClick={changeRemoteAccess}><span /></button>
+          </article>
+          <article className={`settings-card settings-content-card ${settings.remoteAccessEnabled ? "" : "is-disabled"}`}>
+            <div className="settings-section-title"><span>02</span><div><h2>连接审批</h2><p>收到新的控制请求时，选择本机采取的动作。</p></div></div>
+            <div className="approval-options">
+              {[
+                ["ask", "每次询问", "由本机用户确认后才开始协商", "推荐"],
+                ["autoAccept", "自动接受", "适合自己管理的可信局域网", "风险"],
+                ["deny", "始终拒绝", "保持配置但不允许建立新会话", "安静"],
+              ].map(([value, title, detail, badge]) => (
+                <button key={value} className={settings.approvalMode === value ? "active" : ""} disabled={!settings.remoteAccessEnabled} onClick={() => changeApprovalMode(value)}>
+                  <span className="radio-mark" /><span><strong>{title}</strong><small>{detail}</small></span><em>{badge}</em>
+                </button>
+              ))}
+            </div>
+            <label className="setting-line"><span><strong>确认倒计时</strong><small>超时后自动拒绝本次连接</small></span><select value={settings.approvalTimeoutSeconds} disabled={!settings.remoteAccessEnabled} onChange={(event) => update({ approvalTimeoutSeconds: Number(event.target.value) })}><option value="10">10 秒</option><option value="30">30 秒</option><option value="60">60 秒</option><option value="120">120 秒</option></select></label>
+          </article>
+        </div>
+      );
+    }
+
+    if (activeSection === "network") {
+      return (
+        <article className="settings-card settings-content-card">
+          <div className="settings-section-title"><span>03</span><div><h2>本机监听</h2><p>配置被控端下一次开始监听时使用的 TCP 信令端口。</p></div></div>
+          <div className="settings-fields settings-fields-wide">
+            <label><span>默认监听端口</span><input key={settings.defaultListenPort} defaultValue={settings.defaultListenPort} inputMode="numeric" onBlur={(event) => changeDefaultPort(event.target.value)} /><small>有效范围为 1～65535；已经开始的监听不会自动重启。</small></label>
+          </div>
+          <div className="settings-roadmap-note"><Icon name="signal" /><div><strong>传输能力将在这里扩展</strong><p>后续的码率、帧率、网络自适应和连接诊断都归入此分类，不再挤入连接审批页面。</p></div></div>
+        </article>
+      );
+    }
+
+    const futureDescriptions = {
+      control: ["画面与控制", "为画质档位、帧率、缩放方式、鼠标和键盘行为预留的独立区域。"],
+      diagnostics: ["日志与诊断", "为日志开关、文件位置、延迟统计和故障导出预留的独立区域。"],
+      about: ["关于 winRemoteControl", "当前为 Windows 局域网远程控制原型；版本信息和开源组件声明将放在这里。"],
+    };
+    const [title, description] = futureDescriptions[activeSection];
+    return (
+      <article className="settings-card settings-placeholder-card">
+        <span className="settings-placeholder-icon"><Icon name={active.icon} /></span>
+        <span className="eyebrow">RESERVED SECTION</span>
+        <h2>{title}</h2>
+        <p>{description}</p>
+        <small>此入口用于固定设置的信息架构，相关功能实现后可直接加入，不需要重做整个页面。</small>
+      </article>
+    );
+  };
+
   return (
     <section className="content-view settings-view view-enter">
-      <header className="page-heading"><div><span className="eyebrow">CONNECTION &amp; SAFETY / 03</span><h1>设置</h1><p>决定这台电脑如何接收连接，以及下次启动时使用的默认身份。</p></div></header>
-      <div className="settings-layout">
-        <article className="settings-card settings-hero">
-          <div className="settings-icon"><Icon name="shield" /></div>
-          <div><span className="eyebrow">REMOTE ACCESS</span><h2>允许远程控制</h2><p>关闭后将停止监听和局域网响应，其他设备无法再请求控制本机。</p></div>
-          <button className={`switch-control ${settings.remoteAccessEnabled ? "is-on" : ""}`} role="switch" aria-checked={settings.remoteAccessEnabled} onClick={changeRemoteAccess}><span /></button>
-        </article>
-
-        <article className={`settings-card ${settings.remoteAccessEnabled ? "" : "is-disabled"}`}>
-          <div className="settings-section-title"><span>01</span><div><h2>连接审批</h2><p>收到新的控制请求时，选择本机采取的动作。</p></div></div>
-          <div className="approval-options">
-            {[
-              ["ask", "每次询问", "由本机用户确认后才开始协商", "推荐"],
-              ["autoAccept", "自动接受", "适合自己管理的可信局域网", "风险"],
-              ["deny", "始终拒绝", "保持配置但不允许建立新会话", "安静"],
-            ].map(([value, title, detail, badge]) => (
-              <button key={value} className={settings.approvalMode === value ? "active" : ""} disabled={!settings.remoteAccessEnabled} onClick={() => changeApprovalMode(value)}>
-                <span className="radio-mark" /><span><strong>{title}</strong><small>{detail}</small></span><em>{badge}</em>
-              </button>
-            ))}
-          </div>
-          <label className="setting-line"><span><strong>确认倒计时</strong><small>超时后自动拒绝本次连接</small></span><select value={settings.approvalTimeoutSeconds} disabled={!settings.remoteAccessEnabled} onChange={(event) => update({ approvalTimeoutSeconds: Number(event.target.value) })}><option value="10">10 秒</option><option value="30">30 秒</option><option value="60">60 秒</option><option value="120">120 秒</option></select></label>
-        </article>
-
-        <article className="settings-card">
-          <div className="settings-section-title"><span>02</span><div><h2>启动默认值</h2><p>角色在下次启动时生效，端口用于下一次开始监听。</p></div></div>
-          <div className="settings-fields">
-            <label><span>默认角色</span><select value={settings.defaultRole} onChange={(event) => update({ defaultRole: event.target.value })}><option value="controller">控制端</option><option value="controlled">被控端</option></select></label>
-            <label><span>默认监听端口</span><input key={settings.defaultListenPort} defaultValue={settings.defaultListenPort} inputMode="numeric" onBlur={(event) => changeDefaultPort(event.target.value)} /></label>
-          </div>
-        </article>
+      <header className="page-heading settings-page-heading"><div><span className="eyebrow">PREFERENCES / 03</span><h1>设置</h1><p>按职责管理应用行为；新增能力会进入对应分类，而不是继续堆叠在同一页。</p></div></header>
+      <div className="settings-workspace">
+        <nav className="settings-index" aria-label="设置分类">
+          <div className="settings-index-heading"><span>设置目录</span><small>SETTINGS INDEX</small></div>
+          {sections.map((section, index) => (
+            <button key={section.id} className={activeSection === section.id ? "active" : ""} onClick={() => setActiveSection(section.id)}>
+              <span className="settings-index-number">{String(index + 1).padStart(2, "0")}</span>
+              <span className="settings-index-icon"><Icon name={section.icon} /></span>
+              <span><strong>{section.title}</strong><small>{section.detail}</small></span>
+              {!section.ready && <em>预留</em>}
+            </button>
+          ))}
+        </nav>
+        <div className="settings-pane">
+          <header className="settings-pane-heading"><div><span className="eyebrow">{active.ready ? "AVAILABLE NOW" : "PLANNED SPACE"}</span><h2>{active.title}</h2><p>{active.detail}</p></div><span className="settings-pane-index">{String(sections.indexOf(active) + 1).padStart(2, "0")}</span></header>
+          {renderSection()}
+        </div>
       </div>
     </section>
   );
