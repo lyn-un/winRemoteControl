@@ -25,7 +25,9 @@ namespace
 		check(stateMachine.beginConnecting(), QStringLiteral("controller can begin connecting"));
 		check(stateMachine.generation() == 1, QStringLiteral("new connection increments generation"));
 		check(stateMachine.isConnecting(), QStringLiteral("connecting state is recognized"));
-		check(stateMachine.beginNegotiating(), QStringLiteral("connection can begin negotiation"));
+		check(stateMachine.beginAwaitingApproval(), QStringLiteral("connection waits for approval"));
+		check(stateMachine.isAwaitingApproval(), QStringLiteral("approval state is recognized"));
+		check(stateMachine.approveConnection(), QStringLiteral("approved connection can negotiate"));
 		check(stateMachine.markConnected(), QStringLiteral("negotiation can become connected"));
 		check(stateMachine.canEnterRemoteDesktop(), QStringLiteral("connected controller can enter desktop"));
 		check(stateMachine.beginStreaming(), QStringLiteral("connected controller can stream"));
@@ -51,8 +53,9 @@ namespace
 		check(stateMachine.beginListening(), QStringLiteral("controlled host can listen"));
 		check(stateMachine.role() == ControlledSessionRole, QStringLiteral("listening selects controlled role"));
 		check(stateMachine.generation() == 1, QStringLiteral("listener generation starts"));
-		check(stateMachine.beginNegotiating(), QStringLiteral("incoming connection begins negotiation"));
+		check(stateMachine.beginAwaitingApproval(), QStringLiteral("incoming connection awaits approval"));
 		check(stateMachine.generation() == 2, QStringLiteral("incoming session increments generation"));
+		check(stateMachine.approveConnection(), QStringLiteral("incoming connection is approved"));
 		check(stateMachine.markConnected(), QStringLiteral("controlled host connects"));
 		check(stateMachine.canStartControlledStreaming(),
 			QStringLiteral("connected controlled host can start streaming"));
@@ -64,15 +67,19 @@ namespace
 		stateMachine.finish(true);
 		check(stateMachine.state() == ListeningSessionState,
 			QStringLiteral("controlled host returns to listening"));
-		check(stateMachine.beginNegotiating(), QStringLiteral("next incoming session can negotiate"));
+		check(stateMachine.beginAwaitingApproval(), QStringLiteral("next incoming session awaits approval"));
 		check(stateMachine.generation() == 3, QStringLiteral("next session gets a new generation"));
+		check(stateMachine.rejectConnection(), QStringLiteral("pending connection can be rejected"));
+		check(stateMachine.state() == ListeningSessionState,
+			QStringLiteral("rejected incoming connection restores listening"));
 	}
 
 	void testInterruptionRestore()
 	{
 		KSessionStateMachine stateMachine;
 		stateMachine.beginConnecting();
-		stateMachine.beginNegotiating();
+		stateMachine.beginAwaitingApproval();
+		stateMachine.approveConnection();
 		stateMachine.markConnected();
 		stateMachine.beginStreaming();
 		check(stateMachine.interrupt(), QStringLiteral("active stream can be interrupted"));

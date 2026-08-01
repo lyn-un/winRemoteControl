@@ -1,5 +1,6 @@
 #include "adapters/signaling/tcpsignalingtransport.h"
 #include "core/input/inputinjectorinterface.h"
+#include "core/protocol/accessmessage.h"
 #include "core/session/deviceinfoprovider.h"
 #include "core/transport/remotepeertransport.h"
 #include "session/sessioncoordinator.h"
@@ -14,6 +15,7 @@
 
 #include <memory>
 #include <iostream>
+#include <functional>
 
 namespace
 {
@@ -32,6 +34,11 @@ namespace
 	class KFakeDeviceInfoProvider final : public IKDeviceInfoProvider
 	{
 	public:
+		QString deviceName() override
+		{
+			return QStringLiteral("fake-controlled-host");
+		}
+
 		KRemoteDeviceInfo deviceInfo() override
 		{
 			KRemoteDeviceInfo info;
@@ -160,6 +167,18 @@ namespace
 		return server.serverPort();
 	}
 
+	bool waitUntil(const std::function<bool()> &condition, int nTimeoutMs = 1000)
+	{
+		QElapsedTimer timer;
+		timer.start();
+		while (!condition() && timer.elapsed() < nTimeoutMs)
+		{
+			QCoreApplication::processEvents();
+			QThread::msleep(1);
+		}
+		return condition();
+	}
+
 	void testControlledSessionWithFakeTransport()
 	{
 		auto spInputInjector = std::make_unique<KFakeInputInjector>();
@@ -170,6 +189,9 @@ namespace
 			std::move(spInputInjector),
 			std::move(spTransport),
 			std::make_unique<KTcpSignalingTransport>());
+		KApplicationSettings settings;
+		settings.approvalMode = AutoAcceptRemoteApprovalMode;
+		service.applyApplicationSettings(settings);
 
 		int nStartCaptureCount = 0;
 		int nStopCaptureCount = 0;
@@ -214,6 +236,12 @@ namespace
 		controllerSocket.connectToHost(QHostAddress::LocalHost, nPort);
 		check(controllerSocket.waitForConnected(1000),
 			QStringLiteral("loopback signaling connection succeeds"));
+		KAccessMessage accessRequest;
+		accessRequest.type = RequestAccessMessageType;
+		accessRequest.strRequestId = QStringLiteral("12345678-1234-1234-1234-1234567890ab");
+		accessRequest.strDeviceName = QStringLiteral("fake-controller-host");
+		controllerSocket.write(KAccessMessageCodec::encode(accessRequest).toUtf8() + '\n');
+		controllerSocket.flush();
 		QElapsedTimer waitTimer;
 		waitTimer.start();
 		while (!bNegotiating && waitTimer.elapsed() < 1000)
@@ -293,12 +321,118 @@ namespace
 			QStringLiteral("duplicate disconnect does not stop capture twice"));
 		controllerSocket.disconnectFromHost();
 	}
+
+	void testApprovalBeforeOffer()
+	{
+		auto spControlledPeer = std::make_unique<KFakeRemotePeerTransport>();
+		KFakeRemotePeerTransport *pControlledPeer = spControlledPeer.get();
+		KSessionCoordinator controlled(std::make_unique<KFakeDeviceInfoProvider>(),
+			std::make_unique<KFakeInputInjector>(),
+			std::move(spControlledPeer),
+			std::make_unique<KTcpSignalingTransport>());
+		auto spControllerPeer = std::make_unique<KFakeRemotePeerTransport>();
+		KFakeRemotePeerTransport *pControllerPeer = spControllerPeer.get();
+		KSessionCoordinator controller(std::make_unique<KFakeDeviceInfoProvider>(),
+			std::make_unique<KFakeInputInjector>(),
+			std::move(spControllerPeer),
+			std::make_unique<KTcpSignalingTransport>());
+
+		QString strRequestId;
+		QString strSourceAddress;
+		QObject::connect(&controlled, &KSessionCoordinator::incomingAccessRequest,
+			[&](const QString &strId, const QString &, const QString &strSource, qint64)
+			{
+				strRequestId = strId;
+				strSourceAddress = strSource;
+			});
+
+		const quint16 nPort = reserveLocalPort();
+		controlled.startSignalingServer(nPort);
+		controller.connectSignaling(QStringLiteral("127.0.0.1"), nPort);
+		check(waitUntil([&strRequestId]() { return !strRequestId.isEmpty(); }),
+			QStringLiteral("controlled host publishes an approval request"));
+		check(!strSourceAddress.isEmpty(),
+			QStringLiteral("approval request uses the socket source address"));
+		check(pControllerPeer->nCreateOfferCount == 0,
+			QStringLiteral("controller does not create an offer before approval"));
+		check(pControlledPeer->strLastSignalingMessage.isEmpty(),
+			QStringLiteral("approval messages are not forwarded into the peer"));
+
+		controlled.respondIncomingAccessRequest(
+			QStringLiteral("abcdefab-1234-5678-9abc-def012345678"), true);
+		QCoreApplication::processEvents();
+		check(pControllerPeer->nCreateOfferCount == 0,
+			QStringLiteral("stale approval request id is ignored"));
+		controlled.respondIncomingAccessRequest(strRequestId, true);
+		check(waitUntil([pControllerPeer]() { return pControllerPeer->nCreateOfferCount == 1; }),
+			QStringLiteral("approval creates exactly one controller offer"));
+		controlled.respondIncomingAccessRequest(strRequestId, true);
+		QCoreApplication::processEvents();
+		check(pControllerPeer->nCreateOfferCount == 1,
+			QStringLiteral("duplicate approval does not create another offer"));
+
+		controller.disconnectSession();
+		controlled.disconnectSession();
+	}
+
+	void testDenyPolicyRejectsBeforeOffer()
+	{
+		auto spControlledPeer = std::make_unique<KFakeRemotePeerTransport>();
+		KSessionCoordinator controlled(std::make_unique<KFakeDeviceInfoProvider>(),
+			std::make_unique<KFakeInputInjector>(),
+			std::move(spControlledPeer),
+			std::make_unique<KTcpSignalingTransport>());
+		auto spControllerPeer = std::make_unique<KFakeRemotePeerTransport>();
+		KFakeRemotePeerTransport *pControllerPeer = spControllerPeer.get();
+		KSessionCoordinator controller(std::make_unique<KFakeDeviceInfoProvider>(),
+			std::make_unique<KFakeInputInjector>(),
+			std::move(spControllerPeer),
+			std::make_unique<KTcpSignalingTransport>());
+		KApplicationSettings settings;
+		settings.approvalMode = DenyRemoteApprovalMode;
+		controlled.applyApplicationSettings(settings);
+		QString strControllerError;
+		QObject::connect(&controller, &KSessionCoordinator::sessionError,
+			[&strControllerError](const QString &strError) { strControllerError = strError; });
+
+		const quint16 nPort = reserveLocalPort();
+		controlled.startSignalingServer(nPort);
+		controller.connectSignaling(QStringLiteral("127.0.0.1"), nPort);
+		check(waitUntil([&strControllerError]() { return !strControllerError.isEmpty(); }),
+			QStringLiteral("deny policy reports rejection to controller"));
+		check(pControllerPeer->nCreateOfferCount == 0,
+			QStringLiteral("deny policy never creates a WebRTC offer"));
+		controller.disconnectSession();
+		controlled.disconnectSession();
+	}
+
+	void testDisabledRemoteAccessCannotListen()
+	{
+		auto spPeer = std::make_unique<KFakeRemotePeerTransport>();
+		KFakeRemotePeerTransport *pPeer = spPeer.get();
+		KSessionCoordinator controlled(std::make_unique<KFakeDeviceInfoProvider>(),
+			std::make_unique<KFakeInputInjector>(),
+			std::move(spPeer),
+			std::make_unique<KTcpSignalingTransport>());
+		KApplicationSettings settings;
+		settings.bRemoteAccessEnabled = false;
+		controlled.applyApplicationSettings(settings);
+		QString strError;
+		QObject::connect(&controlled, &KSessionCoordinator::sessionError,
+			[&strError](const QString &strMessage) { strError = strMessage; });
+		controlled.startSignalingServer(reserveLocalPort());
+		check(!strError.isEmpty() && pPeer->nInitializeCount == 0,
+			QStringLiteral("disabled remote access refuses to start listening"));
+	}
 }
 
 int main(int argc, char *argv[])
 {
 	QCoreApplication application(argc, argv);
 	testControlledSessionWithFakeTransport();
+	testApprovalBeforeOffer();
+	testDenyPolicyRejectsBeforeOffer();
+	testDisabledRemoteAccessCannotListen();
 	if (g_nFailureCount == 0)
 		qInfo() << "All session service tests passed";
 	return g_nFailureCount == 0 ? 0 : 1;

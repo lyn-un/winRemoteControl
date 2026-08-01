@@ -5,6 +5,7 @@
 #include "adapters/signaling/tcpsignalingtransport.h"
 #include "adapters/discovery/udplandiscoverytransport.h"
 #include "adapters/settings/qsettingsrecentdevicestore.h"
+#include "adapters/settings/qsettingsapplicationstore.h"
 #include "app/remotedesktopwindow.h"
 #include "capture/captureservice.h"
 #include "core/discovery/devicediscoverycontroller.h"
@@ -14,6 +15,7 @@
 #include "session/sessionviewmodel.h"
 #include "transport/webrtc/webrtcpeer.h"
 #include "session/sessioncoordinator.h"
+#include "settings/applicationsettingsservice.h"
 #include "ui_bridge/webviewwidget.h"
 #include "ui_bridge/devicediscoveryviewmodel.h"
 
@@ -44,6 +46,12 @@ namespace
 		}
 		return strFilePath;
 	}
+
+	QString ApplicationSettingsFilePath()
+	{
+		return QDir(QCoreApplication::applicationDirPath())
+			.filePath(QStringLiteral("settings.ini"));
+	}
 }
 
 KApplicationComposition::KApplicationComposition(QObject *pParent)
@@ -71,8 +79,14 @@ KApplicationComposition::KApplicationComposition(QObject *pParent)
 		std::make_unique<KQSettingsRecentDeviceStore>(
 			RecentDevicesFilePath()),
 		this))
+	, m_pApplicationSettingsService(new KApplicationSettingsService(
+		std::make_unique<KQSettingsApplicationStore>(ApplicationSettingsFilePath()),
+		this))
 {
 	m_pRecentDeviceService->initialize();
+	m_pApplicationSettingsService->initialize();
+	m_pSessionService->applyApplicationSettings(m_pApplicationSettingsService->settings());
+	m_pSessionService->setRole(m_pApplicationSettingsService->settings().strDefaultRole);
 	wireServices();
 }
 
@@ -111,6 +125,12 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		m_pRecentDeviceService, &KRecentDeviceService::connectDevice);
 	connect(pWebViewWidget, &KWebViewWidget::removeRecentDeviceRequested,
 		m_pRecentDeviceService, &KRecentDeviceService::removeDevice);
+	connect(pWebViewWidget, &KWebViewWidget::requestApplicationSettingsRequested,
+		m_pApplicationSettingsService, &KApplicationSettingsService::requestSettings);
+	connect(pWebViewWidget, &KWebViewWidget::updateApplicationSettingsRequested,
+		m_pApplicationSettingsService, &KApplicationSettingsService::updateSettings);
+	connect(pWebViewWidget, &KWebViewWidget::respondIncomingAccessRequestRequested,
+		m_pSessionService, &KSessionCoordinator::respondIncomingAccessRequest);
 	connect(pWebViewWidget, &KWebViewWidget::disconnectSessionRequested,
 		m_pSessionViewModel, &KSessionViewModel::disconnectSession);
 	connect(pWebViewWidget, &KWebViewWidget::startStreamingRequested,
@@ -142,6 +162,14 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		pWebViewWidget, &KWebViewWidget::sendRecentDevicesChanged);
 	connect(m_pRecentDeviceService, &KRecentDeviceService::recentDeviceError,
 		pWebViewWidget, &KWebViewWidget::sendRecentDeviceError);
+	connect(m_pApplicationSettingsService, &KApplicationSettingsService::settingsChanged,
+		pWebViewWidget, &KWebViewWidget::sendApplicationSettingsChanged);
+	connect(m_pApplicationSettingsService, &KApplicationSettingsService::settingsError,
+		pWebViewWidget, &KWebViewWidget::sendApplicationSettingsError);
+	connect(m_pSessionService, &KSessionCoordinator::incomingAccessRequest,
+		pWebViewWidget, &KWebViewWidget::sendIncomingAccessRequest);
+	connect(m_pSessionService, &KSessionCoordinator::incomingAccessRequestCleared,
+		pWebViewWidget, &KWebViewWidget::sendIncomingAccessRequestCleared);
 }
 
 void KApplicationComposition::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWindow)
@@ -225,6 +253,8 @@ void KApplicationComposition::shutdown()
 
 void KApplicationComposition::wireServices()
 {
+	connect(m_pApplicationSettingsService, &KApplicationSettingsService::settingsChanged,
+		m_pSessionService, &KSessionCoordinator::applyApplicationSettings);
 	connect(m_pCaptureService, &KCaptureService::webRtcFrameReady,
 		m_pSessionService, &KSessionCoordinator::pushVideoFrame);
 	connect(m_pCaptureService, &KCaptureService::captureError,

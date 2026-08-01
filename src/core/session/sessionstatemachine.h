@@ -15,6 +15,7 @@ enum KSessionState
 	IdleSessionState,
 	ListeningSessionState,
 	ConnectingSessionState,
+	AwaitingApprovalSessionState,
 	NegotiatingSessionState,
 	ConnectedSessionState,
 	StreamingSessionState,
@@ -49,7 +50,9 @@ public:
 	bool setRole(KSessionRole role);
 	bool beginListening();
 	bool beginConnecting();
-	bool beginNegotiating();
+	bool beginAwaitingApproval();
+	bool approveConnection();
+	bool rejectConnection();
 	bool markConnected();
 	bool beginStreaming();
 	bool stopStreaming();
@@ -65,6 +68,7 @@ public:
 	bool canReceiveInput() const;
 	bool canSendVideo() const;
 	bool isConnecting() const;
+	bool isAwaitingApproval() const;
 	bool isNegotiating() const;
 	bool isInterrupted() const;
 	bool isStopping() const;

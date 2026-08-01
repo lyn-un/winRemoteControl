@@ -8,6 +8,7 @@ class IKDeviceInfoProvider
 public:
 	virtual ~IKDeviceInfoProvider() = default;
 
+	virtual QString deviceName() = 0;
 	virtual KRemoteDeviceInfo deviceInfo() = 0;
 };
 

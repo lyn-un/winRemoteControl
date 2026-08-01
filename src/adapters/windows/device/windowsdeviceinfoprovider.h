@@ -6,6 +6,7 @@
 class KWindowsDeviceInfoProvider final : public IKDeviceInfoProvider
 {
 public:
+	QString deviceName() override;
 	KRemoteDeviceInfo deviceInfo() override;
 
 private:

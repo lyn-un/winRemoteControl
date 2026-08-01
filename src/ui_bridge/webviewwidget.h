@@ -5,6 +5,7 @@
 #include "core/media/streamconfig.h"
 #include "core/discovery/discovereddevice.h"
 #include "core/devices/recentdevice.h"
+#include "core/settings/applicationsettings.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QPoint>
@@ -50,6 +51,13 @@ public slots:
 	void sendLanDiscoveryError(const QString &strError);
 	void sendRecentDevicesChanged(const QVector<KRecentDevice> &devices);
 	void sendRecentDeviceError(const QString &strError);
+	void sendApplicationSettingsChanged(const KApplicationSettings &settings);
+	void sendApplicationSettingsError(const QString &strError);
+	void sendIncomingAccessRequest(const QString &strRequestId,
+		const QString &strDeviceName,
+		const QString &strSourceAddress,
+		qint64 nExpiresAtMs);
+	void sendIncomingAccessRequestCleared(const QString &strRequestId, const QString &strReason);
 
 signals:
 	void startCaptureRequested();
@@ -62,6 +70,13 @@ signals:
 	void requestRecentDevicesRequested();
 	void connectRecentDeviceRequested(const QString &strDeviceId);
 	void removeRecentDeviceRequested(const QString &strDeviceId);
+	void requestApplicationSettingsRequested();
+	void updateApplicationSettingsRequested(bool bRemoteAccessEnabled,
+		const QString &strApprovalMode,
+		int nApprovalTimeoutSeconds,
+		int nDefaultListenPort,
+		const QString &strDefaultRole);
+	void respondIncomingAccessRequestRequested(const QString &strRequestId, bool bAccepted);
 	void disconnectSessionRequested();
 	void startStreamingRequested();
 	void stopStreamingRequested();

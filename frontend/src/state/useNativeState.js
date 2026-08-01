@@ -31,8 +31,12 @@ export function useNativeState() {
   const [error, setError] = useState("");
   const [lanDiscoveryError, setLanDiscoveryError] = useState("");
   const [recentDeviceError, setRecentDeviceError] = useState("");
+  const [applicationSettings, setApplicationSettings] = useState(null);
+  const [applicationSettingsError, setApplicationSettingsError] = useState("");
+  const [incomingAccessRequest, setIncomingAccessRequest] = useState(null);
   const [fps, setFps] = useState(0);
   const frameTimes = useRef([]);
+  const settingsInitialized = useRef(false);
 
   useEffect(() => {
     if (!isNativeBridgeAvailable()) {
@@ -138,6 +142,46 @@ export function useNativeState() {
         return;
       }
 
+      if (message.type === "applicationSettingsChanged") {
+        const settings = {
+          remoteAccessEnabled: Boolean(message.remoteAccessEnabled),
+          approvalMode: message.approvalMode || "ask",
+          approvalTimeoutSeconds: Number(message.approvalTimeoutSeconds) || 30,
+          defaultListenPort: Number(message.defaultListenPort) || 39000,
+          defaultRole: message.defaultRole === "controlled" ? "controlled" : "controller",
+        };
+        setApplicationSettings(settings);
+        setApplicationSettingsError("");
+        if (!settingsInitialized.current) {
+          settingsInitialized.current = true;
+          setRole(settings.defaultRole);
+          setPort(String(settings.defaultListenPort));
+        }
+        return;
+      }
+
+      if (message.type === "applicationSettingsError") {
+        setApplicationSettingsError(message.message || "应用设置保存失败");
+        return;
+      }
+
+      if (message.type === "incomingAccessRequest") {
+        setIncomingAccessRequest({
+          requestId: message.requestId || "",
+          deviceName: message.deviceName || "Windows 设备",
+          sourceAddress: message.sourceAddress || "未知地址",
+          expiresAtMs: Number(message.expiresAtMs) || Date.now(),
+        });
+        return;
+      }
+
+      if (message.type === "incomingAccessRequestCleared") {
+        setIncomingAccessRequest((request) => (
+          !request || request.requestId === message.requestId ? null : request
+        ));
+        return;
+      }
+
       if (message.type === "frameReady") {
         const now = performance.now();
         frameTimes.current = [...frameTimes.current.filter((item) => now - item < 1000), now];
@@ -167,18 +211,19 @@ export function useNativeState() {
   useEffect(() => {
     if (getViewMode() === "dashboard") {
       sendCommand("requestRecentDevices");
+      sendCommand("requestApplicationSettings");
     }
   }, []);
 
   useEffect(() => {
-    if (getViewMode() === "dashboard") {
+    if (getViewMode() === "dashboard" && applicationSettings) {
       if (role !== "controller") {
         setLanDevices([]);
         setLanDiscoveryError("");
       }
       sendCommand("setRole", { role });
     }
-  }, [role]);
+  }, [role, applicationSettings]);
 
   return {
     role,
@@ -199,6 +244,9 @@ export function useNativeState() {
     error,
     lanDiscoveryError,
     recentDeviceError,
+    applicationSettings,
+    applicationSettingsError,
+    incomingAccessRequest,
     fps,
   };
 }

@@ -33,7 +33,7 @@ signals:
 	void signalingError(const QString &strMessage);
 	void outgoingConnectionEstablished();
 	void outgoingConnectionFailed(const QString &strMessage);
-	void incomingConnectionEstablished();
+	void incomingConnectionEstablished(const QString &strSourceAddress, quint16 nSourcePort);
 	void connectionLost();
 };
 

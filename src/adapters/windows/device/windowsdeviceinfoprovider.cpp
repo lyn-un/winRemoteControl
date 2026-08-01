@@ -19,11 +19,16 @@ namespace
 KRemoteDeviceInfo KWindowsDeviceInfoProvider::deviceInfo()
 {
 	KRemoteDeviceInfo deviceInfo;
-	deviceInfo.strComputerName = QSysInfo::machineHostName();
+	deviceInfo.strComputerName = deviceName();
 	deviceInfo.nScreenWidth = ::GetSystemMetrics(SM_CXSCREEN);
 	deviceInfo.nScreenHeight = ::GetSystemMetrics(SM_CYSCREEN);
 	deviceInfo.strWallpaperData = readWallpaperBase64(&deviceInfo.strWallpaperMime);
 	return deviceInfo;
+}
+
+QString KWindowsDeviceInfoProvider::deviceName()
+{
+	return QSysInfo::machineHostName();
 }
 
 QString KWindowsDeviceInfoProvider::readWallpaperBase64(QString *pMimeType)

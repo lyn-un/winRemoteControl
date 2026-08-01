@@ -6,6 +6,7 @@
 #include "core/media/streamconfig.h"
 #include "core/media/videoframe.h"
 #include "core/protocol/inputmessage.h"
+#include "core/protocol/accessmessage.h"
 #include "core/protocol/sessionmessage.h"
 #include "core/session/sessionstatemachine.h"
 #include "core/transport/remotepeertransport.h"
@@ -50,6 +51,8 @@ public slots:
 	void sendInputMessage(const KInputMessage &message) override;
 	void sendStreamConfig(const KStreamConfig &config) override;
 	void handleCaptureFailure() override;
+	void applyApplicationSettings(const KApplicationSettings &settings) override;
+	void respondIncomingAccessRequest(const QString &strRequestId, bool bAccepted) override;
 
 private:
 	bool initializePeer(KSessionRole role, QString *pErrorMessage);
@@ -69,7 +72,14 @@ private:
 	void handleInputInjected(quint64 nSeq, qint64 nInjectedMs);
 	void handleOutgoingConnectionEstablished();
 	void handleOutgoingConnectionFailed(const QString &strMessage);
-	void handleIncomingConnectionEstablished();
+	void handleIncomingConnectionEstablished(const QString &strSourceAddress, quint16 nSourcePort);
+	void handleSignalingMessage(const QString &strMessage);
+	void handleAccessMessage(const KAccessMessage &message);
+	void handleApprovalTimeout();
+	void acceptIncomingAccess();
+	void rejectIncomingAccess(const QString &strReason, bool bNotifyRemote);
+	void clearApprovalState(const QString &strReason);
+	void sendAccessMessage(const KAccessMessage &message);
 	void handleSignalingConnectionLost();
 	void handlePeerConnectionInterrupted();
 	void handlePeerConnectionRestored();
@@ -87,12 +97,18 @@ private:
 	qint64 m_nLastInjectedInputMs = -1;
 	bool m_bListeningAvailable = false;
 	quint16 m_nListeningPort = 0;
+	KApplicationSettings m_applicationSettings;
+	QString m_strAccessRequestId;
+	QString m_strAccessDeviceName;
+	QString m_strAccessSourceAddress;
+	quint64 m_nApprovalGeneration = 0;
 	std::unique_ptr<IKDeviceInfoProvider> m_spDeviceInfoProvider;
 	std::unique_ptr<KRemotePeerTransport> m_spRemotePeerTransport;
 	std::unique_ptr<KSignalingTransport> m_spSignalingTransport;
 	KSignalingTransport *m_pSignaling = nullptr;
 	KInputInjector *m_pInputInjector = nullptr;
 	QTimer *m_pDisconnectGraceTimer = nullptr;
+	QTimer *m_pApprovalTimer = nullptr;
 };
 
 #endif // _WINREMOTECONTROL_SESSIONCOORDINATOR_H_

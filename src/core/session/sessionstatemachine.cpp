@@ -48,18 +48,37 @@ bool KSessionStateMachine::beginConnecting()
 	return true;
 }
 
-bool KSessionStateMachine::beginNegotiating()
+bool KSessionStateMachine::beginAwaitingApproval()
 {
 	if (m_state == ListeningSessionState)
 	{
 		++m_nGeneration;
-		m_state = NegotiatingSessionState;
+		m_state = AwaitingApprovalSessionState;
 		return true;
 	}
 	if (m_state != ConnectingSessionState)
 		return false;
 
+	m_state = AwaitingApprovalSessionState;
+	return true;
+}
+
+bool KSessionStateMachine::approveConnection()
+{
+	if (m_state != AwaitingApprovalSessionState)
+		return false;
+
 	m_state = NegotiatingSessionState;
+	return true;
+}
+
+bool KSessionStateMachine::rejectConnection()
+{
+	if (m_state != AwaitingApprovalSessionState)
+		return false;
+
+	m_state = m_role == ControlledSessionRole ? ListeningSessionState : IdleSessionState;
+	m_bRestoreStreaming = false;
 	return true;
 }
 
@@ -165,9 +184,16 @@ bool KSessionStateMachine::isConnecting() const
 	return m_role == ControllerSessionRole && m_state == ConnectingSessionState;
 }
 
+bool KSessionStateMachine::isAwaitingApproval() const
+{
+	return m_state == AwaitingApprovalSessionState;
+}
+
 bool KSessionStateMachine::isNegotiating() const
 {
-	return m_state == ConnectingSessionState || m_state == NegotiatingSessionState;
+	return m_state == ConnectingSessionState
+		|| m_state == AwaitingApprovalSessionState
+		|| m_state == NegotiatingSessionState;
 }
 
 bool KSessionStateMachine::isInterrupted() const
@@ -226,6 +252,8 @@ QString KSessionStateMachine::stateName(KSessionState state)
 		return QStringLiteral("Listening");
 	if (state == ConnectingSessionState)
 		return QStringLiteral("Connecting");
+	if (state == AwaitingApprovalSessionState)
+		return QStringLiteral("AwaitingApproval");
 	if (state == NegotiatingSessionState)
 		return QStringLiteral("Negotiating");
 	if (state == ConnectedSessionState)

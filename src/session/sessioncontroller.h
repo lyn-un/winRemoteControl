@@ -6,6 +6,7 @@
 #include "core/media/streamconfig.h"
 #include "core/media/videoframe.h"
 #include "core/protocol/inputmessage.h"
+#include "core/settings/applicationsettings.h"
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
@@ -38,6 +39,8 @@ public slots:
 	virtual void sendInputMessage(const KInputMessage &message) = 0;
 	virtual void sendStreamConfig(const KStreamConfig &config) = 0;
 	virtual void handleCaptureFailure() = 0;
+	virtual void applyApplicationSettings(const KApplicationSettings &settings) = 0;
+	virtual void respondIncomingAccessRequest(const QString &strRequestId, bool bAccepted) = 0;
 
 signals:
 	void listeningAvailabilityChanged(bool bAvailable, quint16 nPort);
@@ -59,6 +62,11 @@ signals:
 	void sessionChannelChanged(bool bOpen);
 	void inputTraceUpdated(quint64 nSeq, qint64 nInjectedMs);
 	void inputFeedbackFrameRequested();
+	void incomingAccessRequest(const QString &strRequestId,
+		const QString &strDeviceName,
+		const QString &strSourceAddress,
+		qint64 nExpiresAtMs);
+	void incomingAccessRequestCleared(const QString &strRequestId, const QString &strReason);
 };
 
 #endif // _WINREMOTECONTROL_SESSIONCONTROLLER_H_

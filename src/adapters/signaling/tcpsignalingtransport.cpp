@@ -141,7 +141,7 @@ void KTcpSignalingTransport::handleNewConnection()
 	setSocket(pSocket);
 	m_bPeerBusy = true;
 	emit stateChanged(QStringLiteral("Connected"));
-	emit incomingConnectionEstablished();
+	emit incomingConnectionEstablished(pSocket->peerAddress().toString(), pSocket->peerPort());
 }
 
 void KTcpSignalingTransport::handleReadyRead()

@@ -29,6 +29,7 @@ target_sources(wrc_foundation INTERFACE
 	src/core/media/networkstats.h
 	src/core/media/streamconfig.h
 	src/core/media/videoframe.h
+	src/core/settings/applicationsettings.h
 )
 
 target_include_directories(wrc_foundation INTERFACE
@@ -40,6 +41,8 @@ target_link_libraries(wrc_foundation INTERFACE
 )
 
 add_library(wrc_protocol STATIC
+	src/core/protocol/accessmessage.cpp
+	src/core/protocol/accessmessage.h
 	src/core/protocol/landiscoverymessage.cpp
 	src/core/protocol/landiscoverymessage.h
 	src/core/protocol/inputmessage.cpp
@@ -67,6 +70,8 @@ add_library(wrc_core STATIC
 	src/core/session/deviceinfoprovider.h
 	src/core/session/sessionstatemachine.cpp
 	src/core/session/sessionstatemachine.h
+	src/core/settings/applicationsettings.cpp
+	src/core/settings/applicationsettingsstore.h
 	src/core/transport/remotepeertransport.h
 	src/core/transport/signalingtransport.h
 	src/core/transport/networkstatstracker.cpp
@@ -168,6 +173,21 @@ add_library(wrc_recent_device_application STATIC
 	src/devices/recentdeviceservice.h
 )
 
+add_library(wrc_settings_application STATIC
+	src/settings/applicationsettingsservice.cpp
+	src/settings/applicationsettingsservice.h
+)
+
+target_include_directories(wrc_settings_application PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_settings_application PUBLIC
+	wrc_core
+	wrc_diagnostics
+	Qt6::Core
+)
+
 target_include_directories(wrc_recent_device_application PUBLIC
 	"${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
@@ -179,6 +199,8 @@ target_link_libraries(wrc_recent_device_application PUBLIC
 )
 
 add_library(wrc_settings_adapter STATIC
+	src/adapters/settings/qsettingsapplicationstore.cpp
+	src/adapters/settings/qsettingsapplicationstore.h
 	src/adapters/settings/qsettingsrecentdevicestore.cpp
 	src/adapters/settings/qsettingsrecentdevicestore.h
 )
@@ -411,6 +433,7 @@ target_link_libraries(winRemoteControl PRIVATE
 	wrc_signaling_adapter
 	wrc_discovery_application
 	wrc_recent_device_application
+	wrc_settings_application
 	wrc_settings_adapter
 	wrc_udp_discovery_adapter
 	wrc_webrtc_adapter
@@ -482,6 +505,16 @@ if(BUILD_TESTING)
 		Qt6::Core
 	)
 	add_test(NAME wrc_recent_device_tests COMMAND wrc_recent_device_tests)
+
+	add_executable(wrc_application_settings_tests
+		tests/unit/applicationsettingstest.cpp
+	)
+	target_link_libraries(wrc_application_settings_tests PRIVATE
+		wrc_settings_application
+		wrc_settings_adapter
+		Qt6::Core
+	)
+	add_test(NAME wrc_application_settings_tests COMMAND wrc_application_settings_tests)
 
 	add_executable(wrc_frame_watermark_tests
 		tests/unit/framewatermarktest.cpp

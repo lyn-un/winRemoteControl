@@ -171,6 +171,51 @@ void KWebViewWidget::sendRecentDeviceError(const QString &strError)
 	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
 }
 
+void KWebViewWidget::sendApplicationSettingsChanged(const KApplicationSettings &settings)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("applicationSettingsChanged"));
+	object.insert(QStringLiteral("remoteAccessEnabled"), settings.bRemoteAccessEnabled);
+	object.insert(QStringLiteral("approvalMode"), RemoteApprovalModeName(settings.approvalMode));
+	object.insert(QStringLiteral("approvalTimeoutSeconds"), settings.nApprovalTimeoutSeconds);
+	object.insert(QStringLiteral("defaultListenPort"), settings.nDefaultListenPort);
+	object.insert(QStringLiteral("defaultRole"), settings.strDefaultRole);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendApplicationSettingsError(const QString &strError)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("applicationSettingsError"));
+	object.insert(QStringLiteral("message"), strError);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendIncomingAccessRequest(const QString &strRequestId,
+	const QString &strDeviceName,
+	const QString &strSourceAddress,
+	qint64 nExpiresAtMs)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("incomingAccessRequest"));
+	object.insert(QStringLiteral("requestId"), strRequestId);
+	object.insert(QStringLiteral("deviceName"), strDeviceName);
+	object.insert(QStringLiteral("sourceAddress"), strSourceAddress);
+	object.insert(QStringLiteral("expiresAtMs"), QString::number(nExpiresAtMs));
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendIncomingAccessRequestCleared(
+	const QString &strRequestId,
+	const QString &strReason)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("incomingAccessRequestCleared"));
+	object.insert(QStringLiteral("requestId"), strRequestId);
+	object.insert(QStringLiteral("reason"), strReason);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
 void KWebViewWidget::resizeEvent(QResizeEvent *pEvent)
 {
 	QWidget::resizeEvent(pEvent);
@@ -322,6 +367,25 @@ void KWebViewWidget::handleWebMessage(const QString &strMessage)
 	else if (strCommand == QStringLiteral("removeRecentDevice"))
 		emit removeRecentDeviceRequested(
 			document.object().value(QStringLiteral("deviceId")).toString());
+	else if (strCommand == QStringLiteral("requestApplicationSettings"))
+		emit requestApplicationSettingsRequested();
+	else if (strCommand == QStringLiteral("updateApplicationSettings"))
+	{
+		const QJsonObject object = document.object();
+		emit updateApplicationSettingsRequested(
+			object.value(QStringLiteral("remoteAccessEnabled")).toBool(true),
+			object.value(QStringLiteral("approvalMode")).toString(),
+			object.value(QStringLiteral("approvalTimeoutSeconds")).toInt(30),
+			object.value(QStringLiteral("defaultListenPort")).toInt(39000),
+			object.value(QStringLiteral("defaultRole")).toString());
+	}
+	else if (strCommand == QStringLiteral("respondIncomingAccessRequest"))
+	{
+		const QJsonObject object = document.object();
+		emit respondIncomingAccessRequestRequested(
+			object.value(QStringLiteral("requestId")).toString(),
+			object.value(QStringLiteral("accepted")).toBool(false));
+	}
 	else if (strCommand == QStringLiteral("disconnectSession"))
 		emit disconnectSessionRequested();
 	else if (strCommand == QStringLiteral("startStreaming"))

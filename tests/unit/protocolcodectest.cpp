@@ -1,3 +1,4 @@
+#include "core/protocol/accessmessage.h"
 #include "core/protocol/inputmessage.h"
 #include "core/protocol/landiscoverymessage.h"
 #include "core/protocol/sessionmessage.h"
@@ -298,6 +299,70 @@ namespace
 			KLanDiscoveryMessageCodec::encode(invalidAnnouncement), &message, nullptr),
 			QStringLiteral("invalid port and overlong device name are rejected"));
 	}
+
+	void testAccessMessages()
+	{
+		const QString strRequestId = QStringLiteral("12345678-1234-1234-1234-1234567890ab");
+		KAccessMessage request;
+		request.type = RequestAccessMessageType;
+		request.strRequestId = strRequestId;
+		request.strDeviceName = QStringLiteral("controller-host");
+		KAccessMessage decoded;
+		check(KAccessMessageCodec::decode(KAccessMessageCodec::encode(request), &decoded, nullptr)
+			&& decoded.type == RequestAccessMessageType
+			&& decoded.strRequestId == strRequestId
+			&& decoded.strDeviceName == request.strDeviceName,
+			QStringLiteral("access request round-trips"));
+
+		KAccessMessage pending;
+		pending.type = PendingAccessMessageType;
+		pending.strRequestId = strRequestId;
+		pending.nTimeoutSeconds = 30;
+		check(KAccessMessageCodec::decode(KAccessMessageCodec::encode(pending), &decoded, nullptr)
+			&& decoded.type == PendingAccessMessageType
+			&& decoded.nTimeoutSeconds == 30,
+			QStringLiteral("access pending round-trips"));
+
+		KAccessMessage accepted;
+		accepted.type = AcceptedAccessMessageType;
+		accepted.strRequestId = strRequestId;
+		check(KAccessMessageCodec::decode(KAccessMessageCodec::encode(accepted), &decoded, nullptr)
+			&& decoded.type == AcceptedAccessMessageType,
+			QStringLiteral("access accepted round-trips"));
+
+		KAccessMessage rejected;
+		rejected.type = RejectedAccessMessageType;
+		rejected.strRequestId = strRequestId;
+		rejected.strReason = QStringLiteral("user_rejected");
+		check(KAccessMessageCodec::decode(KAccessMessageCodec::encode(rejected), &decoded, nullptr)
+			&& decoded.type == RejectedAccessMessageType
+			&& decoded.strReason == rejected.strReason,
+			QStringLiteral("access rejected round-trips"));
+	}
+
+	void testInvalidAccessMessages()
+	{
+		KAccessMessage message;
+		check(!KAccessMessageCodec::decode(
+			QStringLiteral("{\"type\":\"accessRequest\",\"version\":2,\"requestId\":\"bad\"}"),
+			&message, nullptr),
+			QStringLiteral("invalid access version and UUID are rejected"));
+		check(!KAccessMessageCodec::decode(QString(KAccessMessageCodec::kMaximumMessageBytes + 1,
+			QLatin1Char('x')), &message, nullptr),
+			QStringLiteral("oversized access message is rejected"));
+		check(!KAccessMessageCodec::decode(
+			QStringLiteral("{\"type\":\"accessRejected\",\"version\":1,"
+				"\"requestId\":\"12345678-1234-1234-1234-1234567890ab\","
+				"\"reason\":\"unknown\"}"),
+			&message, nullptr),
+			QStringLiteral("unknown access rejection reason is rejected"));
+		const QString strOverlongName = QStringLiteral(
+			"{\"type\":\"accessRequest\",\"version\":1,"
+			"\"requestId\":\"12345678-1234-1234-1234-1234567890ab\","
+			"\"deviceName\":\"%1\"}").arg(QString(129, QLatin1Char('a')));
+		check(!KAccessMessageCodec::decode(strOverlongName, &message, nullptr),
+			QStringLiteral("overlong access device name is rejected"));
+	}
 }
 
 int main(int nArgc, char *pArgv[])
@@ -316,6 +381,8 @@ int main(int nArgc, char *pArgv[])
 	testLegacySessionWireCompatibility();
 	testLanDiscoveryRoundTrip();
 	testInvalidLanDiscoveryMessages();
+	testAccessMessages();
+	testInvalidAccessMessages();
 
 	if (g_nFailureCount == 0)
 		qInfo() << "All protocol codec tests passed";

@@ -11,6 +11,7 @@ class KSessionCoordinator;
 class KDeviceDiscoveryController;
 class KDeviceDiscoveryViewModel;
 class KRecentDeviceService;
+class KApplicationSettingsService;
 
 class KApplicationComposition : public QObject
 {
@@ -38,6 +39,7 @@ private:
 	KDeviceDiscoveryController *m_pDiscoveryService = nullptr;
 	KDeviceDiscoveryViewModel *m_pDiscoveryViewModel = nullptr;
 	KRecentDeviceService *m_pRecentDeviceService = nullptr;
+	KApplicationSettingsService *m_pApplicationSettingsService = nullptr;
 	bool m_bShutdown = false;
 };
 
