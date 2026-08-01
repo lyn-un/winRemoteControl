@@ -74,8 +74,7 @@ signals:
 	void updateApplicationSettingsRequested(bool bRemoteAccessEnabled,
 		const QString &strApprovalMode,
 		int nApprovalTimeoutSeconds,
-		int nDefaultListenPort,
-		const QString &strDefaultRole);
+		int nDefaultListenPort);
 	void respondIncomingAccessRequestRequested(const QString &strRequestId, bool bAccepted);
 	void disconnectSessionRequested();
 	void startStreamingRequested();

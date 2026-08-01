@@ -47,23 +47,20 @@ namespace
 		check(loaded.bRemoteAccessEnabled
 			&& loaded.approvalMode == AskRemoteApprovalMode
 			&& loaded.nApprovalTimeoutSeconds == 30
-			&& loaded.nDefaultListenPort == 39000
-			&& loaded.strDefaultRole == QStringLiteral("controller"),
+			&& loaded.nDefaultListenPort == 39000,
 			QStringLiteral("safe application defaults are loaded"));
 
 		loaded.bRemoteAccessEnabled = false;
 		loaded.approvalMode = AutoAcceptRemoteApprovalMode;
 		loaded.nApprovalTimeoutSeconds = 45;
 		loaded.nDefaultListenPort = 40100;
-		loaded.strDefaultRole = QStringLiteral("controlled");
 		check(store.saveSettings(loaded, &strError), QStringLiteral("application settings save"));
 		KApplicationSettings roundTrip;
 		check(store.loadSettings(&roundTrip, &strError)
 			&& !roundTrip.bRemoteAccessEnabled
 			&& roundTrip.approvalMode == AutoAcceptRemoteApprovalMode
 			&& roundTrip.nApprovalTimeoutSeconds == 45
-			&& roundTrip.nDefaultListenPort == 40100
-			&& roundTrip.strDefaultRole == QStringLiteral("controlled"),
+			&& roundTrip.nDefaultListenPort == 40100,
 			QStringLiteral("application settings round-trip"));
 	}
 
@@ -80,12 +77,10 @@ namespace
 			[&nErrorCount](const QString &) { ++nErrorCount; });
 		QObject::connect(&service, &KApplicationSettingsService::settingsChanged,
 			[&nChangedCount](const KApplicationSettings &) { ++nChangedCount; });
-		service.updateSettings(true, QStringLiteral("invalid"), 30, 39000,
-			QStringLiteral("controller"));
+		service.updateSettings(true, QStringLiteral("invalid"), 30, 39000);
 		check(nErrorCount == 1 && nChangedCount == 0,
 			QStringLiteral("invalid settings are rejected without publication"));
-		service.updateSettings(true, QStringLiteral("deny"), 60, 39001,
-			QStringLiteral("controlled"));
+		service.updateSettings(true, QStringLiteral("deny"), 60, 39001);
 		check(nChangedCount == 1
 			&& service.settings().approvalMode == DenyRemoteApprovalMode,
 			QStringLiteral("valid settings are saved and published"));
@@ -99,7 +94,6 @@ namespace
 		rawSettings.setValue(QStringLiteral("remoteAccess/approvalMode"), QStringLiteral("unknown"));
 		rawSettings.setValue(QStringLiteral("remoteAccess/approvalTimeoutSeconds"), 999);
 		rawSettings.setValue(QStringLiteral("connection/defaultListenPort"), 0);
-		rawSettings.setValue(QStringLiteral("connection/defaultRole"), QStringLiteral("invalid"));
 		rawSettings.sync();
 
 		KQSettingsApplicationStore store(strFilePath);
@@ -107,8 +101,7 @@ namespace
 		check(store.loadSettings(&loaded, nullptr)
 			&& loaded.approvalMode == AskRemoteApprovalMode
 			&& loaded.nApprovalTimeoutSeconds == 30
-			&& loaded.nDefaultListenPort == 39000
-			&& loaded.strDefaultRole == QStringLiteral("controller"),
+			&& loaded.nDefaultListenPort == 39000,
 			QStringLiteral("invalid stored values use bounded safe fallbacks"));
 	}
 
@@ -124,16 +117,14 @@ namespace
 		QObject::connect(&service, &KApplicationSettingsService::settingsChanged,
 			[&nChangedCount](const KApplicationSettings &) { ++nChangedCount; });
 
-		service.updateSettings(false, QStringLiteral("deny"), 60, 40100,
-			QStringLiteral("controlled"));
+		service.updateSettings(false, QStringLiteral("deny"), 60, 40100);
 		const KApplicationSettings settings = service.settings();
 		check(nErrorCount == 1
 			&& nChangedCount == 0
 			&& settings.bRemoteAccessEnabled
 			&& settings.approvalMode == AskRemoteApprovalMode
 			&& settings.nApprovalTimeoutSeconds == 30
-			&& settings.nDefaultListenPort == 39000
-			&& settings.strDefaultRole == QStringLiteral("controller"),
+			&& settings.nDefaultListenPort == 39000,
 			QStringLiteral("write failure keeps previous settings"));
 	}
 }

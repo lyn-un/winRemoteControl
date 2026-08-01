@@ -86,7 +86,6 @@ KApplicationComposition::KApplicationComposition(QObject *pParent)
 	m_pRecentDeviceService->initialize();
 	m_pApplicationSettingsService->initialize();
 	m_pSessionService->applyApplicationSettings(m_pApplicationSettingsService->settings());
-	m_pSessionService->setRole(m_pApplicationSettingsService->settings().strDefaultRole);
 	wireServices();
 }
 

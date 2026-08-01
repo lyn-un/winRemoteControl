@@ -179,7 +179,6 @@ void KWebViewWidget::sendApplicationSettingsChanged(const KApplicationSettings &
 	object.insert(QStringLiteral("approvalMode"), RemoteApprovalModeName(settings.approvalMode));
 	object.insert(QStringLiteral("approvalTimeoutSeconds"), settings.nApprovalTimeoutSeconds);
 	object.insert(QStringLiteral("defaultListenPort"), settings.nDefaultListenPort);
-	object.insert(QStringLiteral("defaultRole"), settings.strDefaultRole);
 	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
 }
 
@@ -376,8 +375,7 @@ void KWebViewWidget::handleWebMessage(const QString &strMessage)
 			object.value(QStringLiteral("remoteAccessEnabled")).toBool(true),
 			object.value(QStringLiteral("approvalMode")).toString(),
 			object.value(QStringLiteral("approvalTimeoutSeconds")).toInt(30),
-			object.value(QStringLiteral("defaultListenPort")).toInt(39000),
-			object.value(QStringLiteral("defaultRole")).toString());
+			object.value(QStringLiteral("defaultListenPort")).toInt(39000));
 	}
 	else if (strCommand == QStringLiteral("respondIncomingAccessRequest"))
 	{

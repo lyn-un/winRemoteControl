@@ -29,8 +29,7 @@ public slots:
 	void updateSettings(bool bRemoteAccessEnabled,
 		const QString &strApprovalMode,
 		int nApprovalTimeoutSeconds,
-		int nDefaultListenPort,
-		const QString &strDefaultRole);
+		int nDefaultListenPort);
 
 signals:
 	void settingsChanged(const KApplicationSettings &settings);

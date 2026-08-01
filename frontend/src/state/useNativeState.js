@@ -148,13 +148,11 @@ export function useNativeState() {
           approvalMode: message.approvalMode || "ask",
           approvalTimeoutSeconds: Number(message.approvalTimeoutSeconds) || 30,
           defaultListenPort: Number(message.defaultListenPort) || 39000,
-          defaultRole: message.defaultRole === "controlled" ? "controlled" : "controller",
         };
         setApplicationSettings(settings);
         setApplicationSettingsError("");
         if (!settingsInitialized.current) {
           settingsInitialized.current = true;
-          setRole(settings.defaultRole);
           setPort(String(settings.defaultListenPort));
         }
         return;

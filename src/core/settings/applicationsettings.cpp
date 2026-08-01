@@ -37,10 +37,5 @@ KApplicationSettings SanitizeApplicationSettings(const KApplicationSettings &set
 		sanitized.nApprovalTimeoutSeconds = 30;
 	if (sanitized.nDefaultListenPort == 0)
 		sanitized.nDefaultListenPort = 39000;
-	if (sanitized.strDefaultRole != QStringLiteral("controller")
-		&& sanitized.strDefaultRole != QStringLiteral("controlled"))
-	{
-		sanitized.strDefaultRole = QStringLiteral("controller");
-	}
 	return sanitized;
 }

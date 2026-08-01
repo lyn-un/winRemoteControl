@@ -17,7 +17,6 @@ struct KApplicationSettings
 	KRemoteApprovalMode approvalMode = AskRemoteApprovalMode;
 	int nApprovalTimeoutSeconds = 30;
 	quint16 nDefaultListenPort = 39000;
-	QString strDefaultRole = QStringLiteral("controller");
 };
 
 QString RemoteApprovalModeName(KRemoteApprovalMode mode);

@@ -43,17 +43,14 @@ void KApplicationSettingsService::requestSettings()
 void KApplicationSettingsService::updateSettings(bool bRemoteAccessEnabled,
 	const QString &strApprovalMode,
 	int nApprovalTimeoutSeconds,
-	int nDefaultListenPort,
-	const QString &strDefaultRole)
+	int nDefaultListenPort)
 {
 	KRemoteApprovalMode approvalMode;
 	if (!RemoteApprovalModeFromName(strApprovalMode, &approvalMode)
 		|| nApprovalTimeoutSeconds < 10
 		|| nApprovalTimeoutSeconds > 120
 		|| nDefaultListenPort <= 0
-		|| nDefaultListenPort > 65535
-		|| (strDefaultRole != QStringLiteral("controller")
-			&& strDefaultRole != QStringLiteral("controlled")))
+		|| nDefaultListenPort > 65535)
 	{
 		emit settingsError(QStringLiteral("应用设置参数无效"));
 		return;
@@ -64,7 +61,6 @@ void KApplicationSettingsService::updateSettings(bool bRemoteAccessEnabled,
 	candidate.approvalMode = approvalMode;
 	candidate.nApprovalTimeoutSeconds = nApprovalTimeoutSeconds;
 	candidate.nDefaultListenPort = static_cast<quint16>(nDefaultListenPort);
-	candidate.strDefaultRole = strDefaultRole;
 
 	QString strError;
 	if (!m_spStore->saveSettings(candidate, &strError))
@@ -78,11 +74,10 @@ void KApplicationSettingsService::updateSettings(bool bRemoteAccessEnabled,
 		QStringLiteral("settings"),
 		QStringLiteral("updated"),
 		-1,
-		QStringLiteral("remoteAccess=%1 approvalMode=%2 timeoutSeconds=%3 listenPort=%4 defaultRole=%5")
+		QStringLiteral("remoteAccess=%1 approvalMode=%2 timeoutSeconds=%3 listenPort=%4")
 			.arg(m_settings.bRemoteAccessEnabled ? 1 : 0)
 			.arg(RemoteApprovalModeName(m_settings.approvalMode))
 			.arg(m_settings.nApprovalTimeoutSeconds)
-			.arg(m_settings.nDefaultListenPort)
-			.arg(m_settings.strDefaultRole));
+			.arg(m_settings.nDefaultListenPort));
 	emit settingsChanged(m_settings);
 }

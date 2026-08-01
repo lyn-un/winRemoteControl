@@ -32,8 +32,6 @@ bool KQSettingsApplicationStore::loadSettings(KApplicationSettings *pSettings, Q
 	settings.nDefaultListenPort = static_cast<quint16>(storage.value(
 		QStringLiteral("connection/defaultListenPort"),
 		settings.nDefaultListenPort).toUInt());
-	settings.strDefaultRole = storage.value(
-		QStringLiteral("connection/defaultRole"), settings.strDefaultRole).toString();
 	if (storage.status() != QSettings::NoError)
 	{
 		if (pError != nullptr)
@@ -65,7 +63,7 @@ bool KQSettingsApplicationStore::saveSettings(
 		settings.nApprovalTimeoutSeconds);
 	storage.setValue(QStringLiteral("connection/defaultListenPort"),
 		settings.nDefaultListenPort);
-	storage.setValue(QStringLiteral("connection/defaultRole"), settings.strDefaultRole);
+	storage.remove(QStringLiteral("connection/defaultRole"));
 	storage.sync();
 	if (storage.status() == QSettings::NoError)
 		return true;
