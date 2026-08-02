@@ -65,6 +65,7 @@ signals:
 	void setRoleRequested(const QString &strRole);
 	void startSignalingServerRequested(quint16 nPort);
 	void connectSignalingRequested(const QString &strHost, quint16 nPort);
+	void retryLastConnectionRequested();
 	void refreshLanDevicesRequested();
 	void connectLanDeviceRequested(const QString &strDeviceId);
 	void requestRecentDevicesRequested();

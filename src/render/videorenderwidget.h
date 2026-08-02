@@ -31,6 +31,7 @@ public slots:
 	void setRemoteScreenSize(int nWidth, int nHeight);
 	void enqueueFrame(const KDecodedVideoFrame &frame);
 	void presentFrame(const KDecodedVideoFrame &frame);
+	void suspendRemoteInput();
 	void clearFrame();
 
 signals:

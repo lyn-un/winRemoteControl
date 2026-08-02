@@ -27,6 +27,7 @@ public:
 	virtual bool initialize(KSessionRole role, QString *pErrorMessage) = 0;
 	virtual void shutdown() = 0;
 	virtual void createOffer() = 0;
+	virtual void restartIce() = 0;
 	virtual void handleSignalingMessage(const QString &strMessage) = 0;
 	virtual void pushVideoFrame(const KVideoFrame &frame) = 0;
 	virtual void sendInputMessage(const KInputMessage &message) = 0;

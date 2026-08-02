@@ -19,7 +19,7 @@ enum KSessionState
 	NegotiatingSessionState,
 	ConnectedSessionState,
 	StreamingSessionState,
-	InterruptedSessionState,
+	ReconnectingSessionState,
 	StoppingSessionState
 };
 
@@ -56,7 +56,7 @@ public:
 	bool markConnected();
 	bool beginStreaming();
 	bool stopStreaming();
-	bool interrupt();
+	bool beginReconnecting();
 	bool restore();
 	bool beginStopping();
 	void finish(bool bKeepListening);
@@ -70,7 +70,7 @@ public:
 	bool isConnecting() const;
 	bool isAwaitingApproval() const;
 	bool isNegotiating() const;
-	bool isInterrupted() const;
+	bool isReconnecting() const;
 	bool isStopping() const;
 	bool hasActiveSession() const;
 	bool canHandlePeerTermination() const;

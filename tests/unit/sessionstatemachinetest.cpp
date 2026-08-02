@@ -82,15 +82,18 @@ namespace
 		stateMachine.approveConnection();
 		stateMachine.markConnected();
 		stateMachine.beginStreaming();
-		check(stateMachine.interrupt(), QStringLiteral("active stream can be interrupted"));
-		check(stateMachine.isInterrupted(), QStringLiteral("interrupted state is recognized"));
-		check(!stateMachine.canSendInput(), QStringLiteral("input is disabled while interrupted"));
+		check(stateMachine.beginReconnecting(), QStringLiteral("active stream can begin reconnecting"));
+		check(stateMachine.isReconnecting(), QStringLiteral("reconnecting state is recognized"));
+		check(!stateMachine.canSendInput(), QStringLiteral("input is disabled while reconnecting"));
+		check(!stateMachine.canSendVideo(), QStringLiteral("video sending is disabled while reconnecting"));
+		check(!stateMachine.beginReconnecting(),
+			QStringLiteral("duplicate reconnecting transition is rejected"));
 		check(stateMachine.restore(), QStringLiteral("interrupted stream can restore"));
 		check(stateMachine.state() == StreamingSessionState,
 			QStringLiteral("streaming state is restored"));
 
 		stateMachine.stopStreaming();
-		check(stateMachine.interrupt(), QStringLiteral("connected session can be interrupted"));
+		check(stateMachine.beginReconnecting(), QStringLiteral("connected session can begin reconnecting"));
 		check(stateMachine.restore(), QStringLiteral("connected session can restore"));
 		check(stateMachine.state() == ConnectedSessionState,
 			QStringLiteral("connected state is restored"));
@@ -104,7 +107,7 @@ namespace
 		check(stateMachine.setRole(ControlledSessionRole), QStringLiteral("idle role can change"));
 		check(stateMachine.beginListening(), QStringLiteral("selected controlled role can listen"));
 		check(!stateMachine.setRole(ControllerSessionRole), QStringLiteral("active role cannot change"));
-		check(!stateMachine.interrupt(), QStringLiteral("listener cannot be interrupted"));
+		check(!stateMachine.beginReconnecting(), QStringLiteral("listener cannot begin reconnecting"));
 		check(!stateMachine.canHandlePeerTermination(),
 			QStringLiteral("listener ignores peer termination"));
 		check(stateMachine.beginStopping(), QStringLiteral("listener can be stopped explicitly"));

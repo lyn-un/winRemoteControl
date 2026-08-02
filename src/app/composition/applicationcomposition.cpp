@@ -114,6 +114,8 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		m_pSessionViewModel, &KSessionViewModel::startSignalingServer);
 	connect(pWebViewWidget, &KWebViewWidget::connectSignalingRequested,
 		m_pRecentDeviceService, &KRecentDeviceService::connectEndpoint);
+	connect(pWebViewWidget, &KWebViewWidget::retryLastConnectionRequested,
+		m_pSessionViewModel, &KSessionViewModel::retryLastConnection);
 	connect(pWebViewWidget, &KWebViewWidget::refreshLanDevicesRequested,
 		m_pDiscoveryViewModel, &KDeviceDiscoveryViewModel::refreshLanDevices);
 	connect(pWebViewWidget, &KWebViewWidget::connectLanDeviceRequested,
@@ -180,6 +182,8 @@ void KApplicationComposition::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWin
 
 	KWebViewWidget *pWebViewWidget = pWindow->webViewWidget();
 	KVideoRenderWidget *pVideoRenderWidget = pWindow->videoRenderWidget();
+	connect(pWebViewWidget, &KWebViewWidget::retryLastConnectionRequested,
+		m_pSessionViewModel, &KSessionViewModel::retryLastConnection);
 	connect(m_pSessionViewModel, &KSessionViewModel::statusChanged,
 		pWebViewWidget, &KWebViewWidget::sendStatusChanged);
 	connect(m_pSessionViewModel, &KSessionViewModel::errorOccurred,
@@ -212,6 +216,8 @@ void KApplicationComposition::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWin
 		pVideoRenderWidget, &KVideoRenderWidget::enqueueFrame);
 	connect(m_pSessionViewModel, &KSessionViewModel::clearPreviewRequested,
 		pVideoRenderWidget, &KVideoRenderWidget::clearFrame);
+	connect(m_pSessionViewModel, &KSessionViewModel::suspendRemoteInputRequested,
+		pVideoRenderWidget, &KVideoRenderWidget::suspendRemoteInput);
 	connect(pVideoRenderWidget, &KVideoRenderWidget::remoteMouseMoveRequested,
 		m_pSessionViewModel, &KSessionViewModel::sendRemoteMouseMove);
 	connect(pVideoRenderWidget, &KVideoRenderWidget::remoteMouseButtonRequested,

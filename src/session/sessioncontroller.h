@@ -30,6 +30,7 @@ public slots:
 	virtual void setRole(const QString &strRole) = 0;
 	virtual void startSignalingServer(quint16 nPort) = 0;
 	virtual void connectSignaling(const QString &strHost, quint16 nPort) = 0;
+	virtual void retryLastConnection() = 0;
 	virtual void disconnectSession() = 0;
 	virtual void enterRemoteDesktop(const KStreamConfig &config) = 0;
 	virtual void leaveRemoteDesktop() = 0;

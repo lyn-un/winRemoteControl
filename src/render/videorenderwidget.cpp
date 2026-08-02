@@ -198,10 +198,15 @@ void KVideoRenderWidget::presentFrame(const KDecodedVideoFrame &frame)
 	}
 }
 
-void KVideoRenderWidget::clearFrame()
+void KVideoRenderWidget::suspendRemoteInput()
 {
 	cancelPendingMouseMove();
 	releaseRemoteKeys();
+}
+
+void KVideoRenderWidget::clearFrame()
+{
+	suspendRemoteInput();
 	{
 		std::lock_guard<std::mutex> guard(m_frameMutex);
 		m_bHasPendingFrame = false;

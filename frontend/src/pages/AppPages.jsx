@@ -462,7 +462,10 @@ export function DesktopPage() {
   const state = useNativeState();
   const previewSlotRef = useRef(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const sessionUnavailable = ["Interrupted", "Stopping", "Disconnected", "Failed"].includes(state.webrtcState);
+  const reconnecting = state.webrtcState === "Reconnecting";
+  const retrying = ["Connecting", "AwaitingApproval", "Negotiating"].includes(state.webrtcState);
+  const sessionEnded = ["Disconnected", "Failed"].includes(state.webrtcState);
+  const sessionUnavailable = reconnecting || retrying || sessionEnded || state.webrtcState === "Stopping";
   const qualityPresets = {
     auto: { fps: 30, width: 1280, height: 720, bitrateKbps: 3000 },
   };
@@ -532,11 +535,21 @@ export function DesktopPage() {
       <section className="desktop-stage">
         <div ref={previewSlotRef} className="native-preview-slot desktop-slot" />
         {sessionUnavailable && (
-          <div className="desktop-disconnected">
+          <div className={`desktop-disconnected ${reconnecting || retrying ? "is-recovering" : ""}`}>
             <div className="disconnect-orbit"><span /><span /><b>!</b></div>
-            <strong>{state.webrtcState === "Interrupted" ? "连接暂时中断" : "远程连接已断开"}</strong>
-            <p>{state.webrtcState === "Interrupted" ? "正在等待网络恢复，恢复前不会继续发送输入。" : "本次远程控制已经结束，请返回主界面重新连接。"}</p>
-            {state.webrtcState !== "Interrupted" && <button className="primary-button" onClick={() => sendCommand("closeDesktop")}>返回主界面</button>}
+            <strong>{reconnecting ? "正在恢复连接" : retrying ? "正在重新连接" : state.webrtcState === "Stopping" ? "正在结束会话" : "远程连接已断开"}</strong>
+            <p>{reconnecting
+              ? "正在尝试恢复当前会话，恢复期间已暂停键盘和鼠标输入。"
+              : retrying
+                ? state.webrtcState === "AwaitingApproval" ? "已重新联系被控端，正在等待对方确认。" : "正在重新建立安全连接，请稍候。"
+                : state.webrtcState === "Stopping" ? "正在安全释放输入、视频和网络资源。" : "当前会话已经结束，可以重新申请控制或返回主界面。"}</p>
+            {retrying && <button className="outline-button" onClick={() => sendCommand("disconnectSession")}>取消重连</button>}
+            {sessionEnded && (
+              <div className="desktop-recovery-actions">
+                <button className="outline-button" onClick={() => sendCommand("closeDesktop")}>返回主界面</button>
+                <button className="primary-button" onClick={() => sendCommand("retryLastConnection")}>重新连接</button>
+              </div>
+            )}
           </div>
         )}
       </section>

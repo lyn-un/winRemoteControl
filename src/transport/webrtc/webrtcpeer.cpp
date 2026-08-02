@@ -387,6 +387,16 @@ void KWebRtcPeer::createOffer()
 		webrtc::PeerConnectionInterface::RTCOfferAnswerOptions());
 }
 
+void KWebRtcPeer::restartIce()
+{
+	if (!m_spPeerConnection)
+		return;
+
+	m_spPeerConnection->RestartIce();
+	m_spPeerConnection->CreateOffer(KCreateSessionDescriptionObserver::create(this).get(),
+		webrtc::PeerConnectionInterface::RTCOfferAnswerOptions());
+}
+
 void KWebRtcPeer::handleSignalingMessage(const QString &strMessage)
 {
 	const QJsonDocument document = QJsonDocument::fromJson(strMessage.toUtf8());

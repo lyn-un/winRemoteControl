@@ -354,6 +354,8 @@ void KWebViewWidget::handleWebMessage(const QString &strMessage)
 	else if (strCommand == QStringLiteral("connectSignaling"))
 		emit connectSignalingRequested(document.object().value(QStringLiteral("host")).toString(),
 			static_cast<quint16>(document.object().value(QStringLiteral("port")).toInt(39000)));
+	else if (strCommand == QStringLiteral("retryLastConnection"))
+		emit retryLastConnectionRequested();
 	else if (strCommand == QStringLiteral("refreshLanDevices"))
 		emit refreshLanDevicesRequested();
 	else if (strCommand == QStringLiteral("connectLanDevice"))

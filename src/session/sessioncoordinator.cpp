@@ -16,7 +16,7 @@
 
 namespace
 {
-	constexpr int kDisconnectGraceMs = 5000;
+	constexpr int kReconnectTimeoutMs = 10000;
 	constexpr int kInitialApprovalResponseTimeoutMs = 5000;
 	constexpr int kApprovalResponseGraceMs = 5000;
 
@@ -69,15 +69,15 @@ KSessionCoordinator::KSessionCoordinator(
 	, m_spSignalingTransport(std::move(spSignalingTransport))
 	, m_pSignaling(m_spSignalingTransport.get())
 	, m_pInputInjector(new KInputInjector(std::move(spInputInjector), this))
-	, m_pDisconnectGraceTimer(new QTimer(this))
+	, m_pReconnectTimer(new QTimer(this))
 	, m_pApprovalTimer(new QTimer(this))
 {
 	Q_ASSERT(m_spRemotePeerTransport != nullptr);
 	Q_ASSERT(m_pSignaling != nullptr);
-	m_pDisconnectGraceTimer->setSingleShot(true);
+	m_pReconnectTimer->setSingleShot(true);
 	m_pApprovalTimer->setSingleShot(true);
-	connect(m_pDisconnectGraceTimer, &QTimer::timeout,
-		this, &KSessionCoordinator::handleDisconnectGraceTimeout);
+	connect(m_pReconnectTimer, &QTimer::timeout,
+		this, &KSessionCoordinator::handleReconnectTimeout);
 	connect(m_pApprovalTimer, &QTimer::timeout,
 		this, &KSessionCoordinator::handleApprovalTimeout);
 	connect(m_pSignaling, &KSignalingTransport::stateChanged,
@@ -114,6 +114,11 @@ void KSessionCoordinator::setRole(const QString &strRole)
 	}
 	if (m_sessionStateMachine.state() == IdleSessionState)
 		m_sessionStateMachine.setRole(role);
+	if (role == ControlledSessionRole)
+	{
+		m_strLastConnectionHost.clear();
+		m_nLastConnectionPort = 0;
+	}
 
 	emit webRtcStateChanged(QStringLiteral("Role:%1")
 		.arg(KSessionStateMachine::roleName(m_sessionStateMachine.role())));
@@ -121,6 +126,7 @@ void KSessionCoordinator::setRole(const QString &strRole)
 
 void KSessionCoordinator::startSignalingServer(quint16 nPort)
 {
+	m_bSignalingConnected = false;
 	if (!m_applicationSettings.bRemoteAccessEnabled)
 	{
 		emit sessionError(QStringLiteral("远程控制已在设置中关闭"));
@@ -150,6 +156,14 @@ void KSessionCoordinator::startSignalingServer(quint16 nPort)
 void KSessionCoordinator::connectSignaling(const QString &strHost, quint16 nPort)
 {
 	const QString strTargetHost = strHost;
+	if (strTargetHost.isEmpty() || nPort == 0)
+	{
+		emit sessionError(QStringLiteral("无效的被控端地址或端口"));
+		return;
+	}
+	m_strLastConnectionHost = strTargetHost;
+	m_nLastConnectionPort = nPort;
+	m_bSignalingConnected = false;
 	if (m_sessionStateMachine.state() != IdleSessionState)
 		finishSession(NewConnectionSessionEndReason, QString(), false, true, false);
 	m_pSignaling->stop();
@@ -163,6 +177,27 @@ void KSessionCoordinator::connectSignaling(const QString &strHost, quint16 nPort
 	m_sessionStateMachine.beginConnecting();
 	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
 	m_pSignaling->connectToHost(strTargetHost, nPort);
+}
+
+void KSessionCoordinator::retryLastConnection()
+{
+	if (m_sessionStateMachine.role() != ControllerSessionRole
+		|| m_sessionStateMachine.state() != IdleSessionState
+		|| m_strLastConnectionHost.isEmpty()
+		|| m_nLastConnectionPort == 0)
+	{
+		emit sessionError(QStringLiteral("没有可用于重新连接的被控端地址"));
+		return;
+	}
+
+	const QString strHost = m_strLastConnectionHost;
+	const quint16 nPort = m_nLastConnectionPort;
+	connectSignaling(strHost, nPort);
+	KSessionTraceLogger::write(QStringLiteral("controller"),
+		QStringLiteral("session_reconnect_requested"),
+		QStringLiteral("retry"),
+		-1,
+		QStringLiteral("generation=%1").arg(m_sessionStateMachine.generation()));
 }
 
 void KSessionCoordinator::disconnectSession()
@@ -347,6 +382,7 @@ void KSessionCoordinator::finishSession(KSessionEndReason reason,
 	bool bNotifyRemote,
 	bool bReportError)
 {
+	const bool bRecovering = m_sessionStateMachine.isReconnecting();
 	if (bNotifyRemote
 		&& m_sessionStateMachine.isAwaitingApproval()
 		&& !m_strAccessRequestId.isEmpty())
@@ -385,9 +421,20 @@ void KSessionCoordinator::finishSession(KSessionEndReason reason,
 		sendSessionMessage(message);
 	}
 
-	m_pDisconnectGraceTimer->stop();
+	if (bRecovering)
+	{
+		KSessionTraceLogger::write(roleToString(role),
+			QStringLiteral("session_recovery_failed"),
+			strReason,
+			-1,
+			QStringLiteral("costMs=%1")
+				.arg(m_reconnectElapsedTimer.isValid() ? m_reconnectElapsedTimer.elapsed() : -1));
+	}
+	m_pReconnectTimer->stop();
 	m_pApprovalTimer->stop();
-	m_nDisconnectGraceGeneration = 0;
+	m_nReconnectGeneration = 0;
+	m_reconnectElapsedTimer.invalidate();
+	m_bSignalingConnected = false;
 	clearApprovalState(strReason);
 	m_bDeviceInfoRequested = false;
 	m_bInputChannelOpen = false;
@@ -662,6 +709,7 @@ void KSessionCoordinator::handleOutgoingConnectionEstablished()
 {
 	if (!m_sessionStateMachine.isConnecting())
 		return;
+	m_bSignalingConnected = true;
 
 	if (!m_sessionStateMachine.beginAwaitingApproval())
 		return;
@@ -687,6 +735,7 @@ void KSessionCoordinator::handleOutgoingConnectionEstablished()
 
 void KSessionCoordinator::handleOutgoingConnectionFailed(const QString &strMessage)
 {
+	m_bSignalingConnected = false;
 	if (!m_sessionStateMachine.isConnecting())
 		return;
 
@@ -704,6 +753,7 @@ void KSessionCoordinator::handleIncomingConnectionEstablished(
 
 	if (!m_sessionStateMachine.beginAwaitingApproval())
 		return;
+	m_bSignalingConnected = true;
 	m_strAccessSourceAddress = strSourceAddress;
 	m_nApprovalGeneration = m_sessionStateMachine.generation();
 	m_pApprovalTimer->start(kInitialApprovalResponseTimeoutMs);
@@ -746,7 +796,7 @@ void KSessionCoordinator::handleSignalingMessage(const QString &strMessage)
 	if (m_sessionStateMachine.state() == NegotiatingSessionState
 		|| m_sessionStateMachine.state() == ConnectedSessionState
 		|| m_sessionStateMachine.state() == StreamingSessionState
-		|| m_sessionStateMachine.state() == InterruptedSessionState)
+		|| m_sessionStateMachine.state() == ReconnectingSessionState)
 	{
 		m_spRemotePeerTransport->handleSignalingMessage(strMessage);
 		return;
@@ -966,6 +1016,7 @@ void KSessionCoordinator::updateListeningAvailability(bool bAvailable, quint16 n
 
 void KSessionCoordinator::handleSignalingConnectionLost()
 {
+	m_bSignalingConnected = false;
 	if (m_sessionStateMachine.isNegotiating())
 	{
 		finishSession(SignalingLostSessionEndReason,
@@ -978,13 +1029,39 @@ void KSessionCoordinator::handleSignalingConnectionLost()
 
 void KSessionCoordinator::handlePeerConnectionInterrupted()
 {
-	if (!m_sessionStateMachine.interrupt())
+	if (!m_sessionStateMachine.beginReconnecting())
 		return;
 
 	m_pInputInjector->releaseAllInputs();
 	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
-	m_nDisconnectGraceGeneration = m_sessionStateMachine.generation();
-	m_pDisconnectGraceTimer->start(kDisconnectGraceMs);
+	m_nReconnectGeneration = m_sessionStateMachine.generation();
+	m_reconnectElapsedTimer.start();
+	m_pReconnectTimer->start(kReconnectTimeoutMs);
+	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
+		QStringLiteral("session_recovery_start"),
+		QStringLiteral("ice_disconnected"),
+		-1,
+		QStringLiteral("generation=%1 signalingAvailable=%2 timeoutMs=%3")
+			.arg(m_nReconnectGeneration)
+			.arg(m_bSignalingConnected ? 1 : 0)
+			.arg(kReconnectTimeoutMs));
+
+	if (m_sessionStateMachine.role() != ControllerSessionRole)
+		return;
+	if (!m_bSignalingConnected)
+	{
+		KSessionTraceLogger::write(QStringLiteral("controller"),
+			QStringLiteral("ice_restart_skipped"),
+			QStringLiteral("signaling_unavailable"));
+		return;
+	}
+
+	KSessionTraceLogger::write(QStringLiteral("controller"),
+		QStringLiteral("ice_restart_requested"),
+		QStringLiteral("request"),
+		-1,
+		QStringLiteral("attempt=1"));
+	m_spRemotePeerTransport->restartIce();
 }
 
 void KSessionCoordinator::handlePeerConnectionRestored()
@@ -992,8 +1069,17 @@ void KSessionCoordinator::handlePeerConnectionRestored()
 	if (!m_sessionStateMachine.restore())
 		return;
 
-	m_pDisconnectGraceTimer->stop();
-	m_nDisconnectGraceGeneration = 0;
+	const qint64 nCostMs = m_reconnectElapsedTimer.isValid()
+		? m_reconnectElapsedTimer.elapsed()
+		: -1;
+	m_pReconnectTimer->stop();
+	m_nReconnectGeneration = 0;
+	m_reconnectElapsedTimer.invalidate();
+	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
+		QStringLiteral("session_recovery_success"),
+		QStringLiteral("restored"),
+		-1,
+		QStringLiteral("costMs=%1").arg(nCostMs));
 	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
 }
 
@@ -1009,10 +1095,10 @@ void KSessionCoordinator::handlePeerConnectionTerminated(const QString &strReaso
 		true);
 }
 
-void KSessionCoordinator::handleDisconnectGraceTimeout()
+void KSessionCoordinator::handleReconnectTimeout()
 {
-	if (!m_sessionStateMachine.isInterrupted()
-		|| m_nDisconnectGraceGeneration != m_sessionStateMachine.generation())
+	if (!m_sessionStateMachine.isReconnecting()
+		|| m_nReconnectGeneration != m_sessionStateMachine.generation())
 		return;
 
 	finishSession(DisconnectTimeoutSessionEndReason,

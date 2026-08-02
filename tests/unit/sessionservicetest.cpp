@@ -95,6 +95,11 @@ namespace
 			++nCreateOfferCount;
 		}
 
+		void restartIce() override
+		{
+			++nRestartIceCount;
+		}
+
 		void handleSignalingMessage(const QString &strMessage) override
 		{
 			strLastSignalingMessage = strMessage;
@@ -144,6 +149,21 @@ namespace
 			emit inputMessageReceived(message);
 		}
 
+		void interruptConnection()
+		{
+			emit connectionInterrupted();
+		}
+
+		void restoreConnection()
+		{
+			emit connectionRestored();
+		}
+
+		void terminateConnection(const QString &strReason)
+		{
+			emit connectionTerminated(strReason);
+		}
+
 		KSessionRole initializedRole = ControllerSessionRole;
 		KSessionMessage lastSentSessionMessage;
 		KInputMessage lastSentInputMessage;
@@ -153,6 +173,7 @@ namespace
 		int nInitializeCount = 0;
 		int nShutdownCount = 0;
 		int nCreateOfferCount = 0;
+		int nRestartIceCount = 0;
 		int nVideoFrameCount = 0;
 		int nSentInputCount = 0;
 		int nSentSessionCount = 0;
@@ -286,6 +307,21 @@ namespace
 				&& pTransport->lastVideoFrame.nFrameIndex == 7,
 			QStringLiteral("streaming video uses generic transport port"));
 
+		const int nReleaseInputsBeforeRecovery = pInputInjector->nReleaseInputsCount;
+		pTransport->interruptConnection();
+		check(pTransport->nRestartIceCount == 0,
+			QStringLiteral("controlled peer never initiates ICE restart"));
+		check(pInputInjector->nReleaseInputsCount == nReleaseInputsBeforeRecovery + 1,
+			QStringLiteral("controlled peer releases input when recovery begins"));
+		pTransport->deliverInputMessage(keyMessage);
+		service.pushVideoFrame(videoFrame);
+		check(pInputInjector->nInjectCount == 1 && pTransport->nVideoFrameCount == 1,
+			QStringLiteral("input injection and video sending pause during recovery"));
+		pTransport->restoreConnection();
+		service.pushVideoFrame(videoFrame);
+		check(pTransport->nVideoFrameCount == 2,
+			QStringLiteral("video sending resumes after connection recovery"));
+
 		KSessionMessage stopStreaming;
 		stopStreaming.type = StopStreamingSessionMessageType;
 		pTransport->deliverSessionMessage(stopStreaming);
@@ -386,6 +422,74 @@ namespace
 		controlled.disconnectSession();
 	}
 
+	void testRecoveryAndSecureRetry()
+	{
+		auto spControlledPeer = std::make_unique<KFakeRemotePeerTransport>();
+		KFakeRemotePeerTransport *pControlledPeer = spControlledPeer.get();
+		KSessionCoordinator controlled(std::make_unique<KFakeDeviceInfoProvider>(),
+			std::make_unique<KFakeInputInjector>(),
+			std::move(spControlledPeer),
+			std::make_unique<KTcpSignalingTransport>());
+		KApplicationSettings settings;
+		settings.approvalMode = AutoAcceptRemoteApprovalMode;
+		controlled.applyApplicationSettings(settings);
+
+		auto spControllerPeer = std::make_unique<KFakeRemotePeerTransport>();
+		KFakeRemotePeerTransport *pControllerPeer = spControllerPeer.get();
+		KSessionCoordinator controller(std::make_unique<KFakeDeviceInfoProvider>(),
+			std::make_unique<KFakeInputInjector>(),
+			std::move(spControllerPeer),
+			std::make_unique<KTcpSignalingTransport>());
+		QString strControllerState;
+		QString strSignalingState;
+		QObject::connect(&controller, &KSessionCoordinator::webRtcStateChanged,
+			[&strControllerState](const QString &strState) { strControllerState = strState; });
+		QObject::connect(&controller, &KSessionCoordinator::signalingChanged,
+			[&strSignalingState](const QString &strState) { strSignalingState = strState; });
+
+		const quint16 nPort = reserveLocalPort();
+		controlled.startSignalingServer(nPort);
+		controller.connectSignaling(QStringLiteral("127.0.0.1"), nPort);
+		check(waitUntil([pControllerPeer]() { return pControllerPeer->nCreateOfferCount == 1; }),
+			QStringLiteral("automatic approval creates the initial offer"));
+		pControllerPeer->openSessionChannel();
+		pControllerPeer->openInputChannel();
+		controller.enterRemoteDesktop(KStreamConfig());
+
+		const int nShutdownCount = pControllerPeer->nShutdownCount;
+		pControllerPeer->interruptConnection();
+		check(strControllerState == QStringLiteral("Reconnecting"),
+			QStringLiteral("ICE interruption enters reconnecting state"));
+		check(pControllerPeer->nRestartIceCount == 1,
+			QStringLiteral("controller requests one ICE restart while signaling is available"));
+		pControllerPeer->interruptConnection();
+		check(pControllerPeer->nRestartIceCount == 1,
+			QStringLiteral("duplicate interruption does not request another ICE restart"));
+		pControllerPeer->restoreConnection();
+		check(strControllerState == QStringLiteral("Streaming"),
+			QStringLiteral("successful recovery restores streaming state"));
+		check(pControllerPeer->nShutdownCount == nShutdownCount,
+			QStringLiteral("successful recovery keeps the existing peer"));
+
+		controlled.disconnectSession();
+		check(waitUntil([&strSignalingState]()
+			{ return strSignalingState == QStringLiteral("Disconnected"); }),
+			QStringLiteral("controller observes signaling loss"));
+		pControllerPeer->interruptConnection();
+		check(pControllerPeer->nRestartIceCount == 1,
+			QStringLiteral("ICE restart is skipped when signaling is unavailable"));
+		pControllerPeer->terminateConnection(QStringLiteral("ice_failed"));
+		check(strControllerState == QStringLiteral("Disconnected"),
+			QStringLiteral("failed recovery ends the controller session"));
+
+		controlled.startSignalingServer(nPort);
+		controller.retryLastConnection();
+		check(waitUntil([pControllerPeer]() { return pControllerPeer->nCreateOfferCount == 2; }),
+			QStringLiteral("retry uses the saved endpoint and performs access approval again"));
+		controller.disconnectSession();
+		controlled.disconnectSession();
+	}
+
 	void testDenyPolicyRejectsBeforeOffer()
 	{
 		auto spControlledPeer = std::make_unique<KFakeRemotePeerTransport>();
@@ -442,6 +546,7 @@ int main(int argc, char *argv[])
 	QCoreApplication application(argc, argv);
 	testControlledSessionWithFakeTransport();
 	testApprovalBeforeOffer();
+	testRecoveryAndSecureRetry();
 	testDenyPolicyRejectsBeforeOffer();
 	testDisabledRemoteAccessCannotListen();
 	if (g_nFailureCount == 0)

@@ -112,19 +112,19 @@ bool KSessionStateMachine::stopStreaming()
 	return true;
 }
 
-bool KSessionStateMachine::interrupt()
+bool KSessionStateMachine::beginReconnecting()
 {
-	if (!canHandlePeerTermination() || m_state == InterruptedSessionState)
+	if (!canHandlePeerTermination() || m_state == ReconnectingSessionState)
 		return false;
 
 	m_bRestoreStreaming = m_state == StreamingSessionState;
-	m_state = InterruptedSessionState;
+	m_state = ReconnectingSessionState;
 	return true;
 }
 
 bool KSessionStateMachine::restore()
 {
-	if (m_state != InterruptedSessionState)
+	if (m_state != ReconnectingSessionState)
 		return false;
 
 	m_state = m_bRestoreStreaming ? StreamingSessionState : ConnectedSessionState;
@@ -196,9 +196,9 @@ bool KSessionStateMachine::isNegotiating() const
 		|| m_state == NegotiatingSessionState;
 }
 
-bool KSessionStateMachine::isInterrupted() const
+bool KSessionStateMachine::isReconnecting() const
 {
-	return m_state == InterruptedSessionState;
+	return m_state == ReconnectingSessionState;
 }
 
 bool KSessionStateMachine::isStopping() const
@@ -260,8 +260,8 @@ QString KSessionStateMachine::stateName(KSessionState state)
 		return QStringLiteral("Connected");
 	if (state == StreamingSessionState)
 		return QStringLiteral("Streaming");
-	if (state == InterruptedSessionState)
-		return QStringLiteral("Interrupted");
+	if (state == ReconnectingSessionState)
+		return QStringLiteral("Reconnecting");
 	return QStringLiteral("Stopping");
 }
 

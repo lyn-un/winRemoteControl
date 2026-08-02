@@ -12,6 +12,7 @@
 #include "core/transport/remotepeertransport.h"
 #include "session/sessioncontroller.h"
 
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QObject>
 #include <QtCore/QString>
 
@@ -42,6 +43,7 @@ public slots:
 	void setRole(const QString &strRole) override;
 	void startSignalingServer(quint16 nPort) override;
 	void connectSignaling(const QString &strHost, quint16 nPort) override;
+	void retryLastConnection() override;
 	void disconnectSession() override;
 	void enterRemoteDesktop(const KStreamConfig &config) override;
 	void leaveRemoteDesktop() override;
@@ -84,7 +86,7 @@ private:
 	void handlePeerConnectionInterrupted();
 	void handlePeerConnectionRestored();
 	void handlePeerConnectionTerminated(const QString &strReason);
-	void handleDisconnectGraceTimeout();
+	void handleReconnectTimeout();
 	void sendDeviceInfoMessage();
 	void updateListeningAvailability(bool bAvailable, quint16 nPort = 0);
 
@@ -93,10 +95,14 @@ private:
 	bool m_bInputChannelOpen = false;
 	bool m_bSessionChannelOpen = false;
 	quint64 m_nLastInjectedInputSeq = 0;
-	quint64 m_nDisconnectGraceGeneration = 0;
+	quint64 m_nReconnectGeneration = 0;
 	qint64 m_nLastInjectedInputMs = -1;
+	bool m_bSignalingConnected = false;
 	bool m_bListeningAvailable = false;
 	quint16 m_nListeningPort = 0;
+	quint16 m_nLastConnectionPort = 0;
+	QString m_strLastConnectionHost;
+	QElapsedTimer m_reconnectElapsedTimer;
 	KApplicationSettings m_applicationSettings;
 	QString m_strAccessRequestId;
 	QString m_strAccessDeviceName;
@@ -107,7 +113,7 @@ private:
 	std::unique_ptr<KSignalingTransport> m_spSignalingTransport;
 	KSignalingTransport *m_pSignaling = nullptr;
 	KInputInjector *m_pInputInjector = nullptr;
-	QTimer *m_pDisconnectGraceTimer = nullptr;
+	QTimer *m_pReconnectTimer = nullptr;
 	QTimer *m_pApprovalTimer = nullptr;
 };
 

@@ -86,11 +86,21 @@ void KRemoteDesktopWindow::handleFrameReady(int nWidth,
 
 void KRemoteDesktopWindow::handleSessionStateChanged(const QString &strState)
 {
-	const bool bUnavailable = strState == QStringLiteral("Interrupted")
+	const bool bAvailable = strState == QStringLiteral("Connected")
+		|| strState == QStringLiteral("Streaming");
+	const bool bUnavailable = strState == QStringLiteral("Reconnecting")
+		|| strState == QStringLiteral("Connecting")
+		|| strState == QStringLiteral("AwaitingApproval")
+		|| strState == QStringLiteral("Negotiating")
+		|| strState == QStringLiteral("Listening")
+		|| strState == QStringLiteral("Idle")
 		|| strState == QStringLiteral("Disconnected")
 		|| strState == QStringLiteral("Failed")
 		|| strState == QStringLiteral("Stopping");
-	m_bSessionAvailable = !bUnavailable;
+	if (!bAvailable && !bUnavailable)
+		return;
+
+	m_bSessionAvailable = bAvailable;
 	if (!m_bSessionAvailable)
 	{
 		m_pVideoRenderWidget->hide();

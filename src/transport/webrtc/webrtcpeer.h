@@ -45,6 +45,7 @@ public:
 	bool initialize(KSessionRole role, QString *pErrorMessage) override;
 	void shutdown() override;
 	void createOffer() override;
+	void restartIce() override;
 	void handleSignalingMessage(const QString &strMessage) override;
 	void pushVideoFrame(const KVideoFrame &frame) override;
 	void sendInputMessage(const KInputMessage &message) override;

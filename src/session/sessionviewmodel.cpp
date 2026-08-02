@@ -63,8 +63,15 @@ void KSessionViewModel::connectSignaling(const QString &strHost, quint16 nPort)
 	m_pSessionController->connectSignaling(strHost, nPort);
 }
 
+void KSessionViewModel::retryLastConnection()
+{
+	m_bEnterDesktopAfterReconnect = true;
+	m_pSessionController->retryLastConnection();
+}
+
 void KSessionViewModel::disconnectSession()
 {
+	m_bEnterDesktopAfterReconnect = false;
 	m_remoteScreenSize = QSize();
 	m_inputFeedbackTracker.reset();
 	m_pSessionController->disconnectSession();
@@ -78,6 +85,7 @@ void KSessionViewModel::enterRemoteDesktop()
 
 void KSessionViewModel::leaveRemoteDesktop()
 {
+	m_bEnterDesktopAfterReconnect = false;
 	m_inputFeedbackTracker.reset();
 	m_pSessionController->leaveRemoteDesktop();
 	emit clearPreviewRequested();
@@ -163,8 +171,18 @@ void KSessionViewModel::handleCaptureStatusChanged(const QString &strStatus)
 void KSessionViewModel::handleWebRtcStateChanged(const QString &strState)
 {
 	emit webRtcStateChanged(strState);
-	if (strState == QStringLiteral("Interrupted")
-		|| strState == QStringLiteral("Disconnected")
+	if (strState == QStringLiteral("Connected") && m_bEnterDesktopAfterReconnect)
+	{
+		m_bEnterDesktopAfterReconnect = false;
+		enterRemoteDesktop();
+		return;
+	}
+	if (strState == QStringLiteral("Reconnecting"))
+	{
+		m_inputFeedbackTracker.reset();
+		emit suspendRemoteInputRequested();
+	}
+	else if (strState == QStringLiteral("Disconnected")
 		|| strState == QStringLiteral("Listening")
 		|| strState == QStringLiteral("Failed")
 		|| strState == QStringLiteral("Stopped"))
@@ -176,6 +194,7 @@ void KSessionViewModel::handleWebRtcStateChanged(const QString &strState)
 		|| strState == QStringLiteral("Listening")
 		|| strState == QStringLiteral("Failed"))
 	{
+		m_bEnterDesktopAfterReconnect = false;
 		m_remoteScreenSize = QSize();
 		m_inputFeedbackTracker.reset();
 	}

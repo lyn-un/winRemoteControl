@@ -35,6 +35,7 @@ public slots:
 	void setRole(const QString &strRole);
 	void startSignalingServer(quint16 nPort);
 	void connectSignaling(const QString &strHost, quint16 nPort);
+	void retryLastConnection();
 	void disconnectSession();
 	void enterRemoteDesktop();
 	void leaveRemoteDesktop();
@@ -62,6 +63,7 @@ signals:
 	void renderFrameReady(const KDecodedVideoFrame &frame);
 	void networkStatsReady(const KNetworkStats &stats);
 	void clearPreviewRequested();
+	void suspendRemoteInputRequested();
 
 private slots:
 	void handleCaptureStatusChanged(const QString &strStatus);
@@ -79,6 +81,7 @@ private:
 	KCaptureController *m_pCaptureController = nullptr;
 	KSessionController *m_pSessionController = nullptr;
 	quint64 m_nInputSequence = 0;
+	bool m_bEnterDesktopAfterReconnect = false;
 	QSize m_remoteScreenSize;
 	KInputFeedbackTracker m_inputFeedbackTracker;
 	KStreamConfig m_streamConfig;
