@@ -2,6 +2,7 @@
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDateTime>
+#include <QtCore/QDebug>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QMutex>
@@ -16,9 +17,14 @@ namespace
 	static QMutex g_sessionTraceMutex;
 	static bool g_bSessionTraceInitialized = false;
 	static bool g_bSessionTraceEnabled = false;
+	static bool g_bSessionTraceConfigured = false;
+	static bool g_bConfiguredSessionTraceEnabled = false;
+	static QString g_strSessionTraceLogDirectory;
 
 	static QString logDirectoryPath()
 	{
+		if (!g_strSessionTraceLogDirectory.isEmpty())
+			return g_strSessionTraceLogDirectory;
 		const QString strBasePath = QCoreApplication::applicationDirPath().isEmpty()
 			? QDir::currentPath()
 			: QCoreApplication::applicationDirPath();
@@ -37,12 +43,20 @@ namespace
 			return;
 
 		g_bSessionTraceInitialized = true;
-		g_bSessionTraceEnabled = qEnvironmentVariableIsSet(kSessionTraceEnvName)
-			&& qEnvironmentVariable(kSessionTraceEnvName) != QStringLiteral("0");
+		g_bSessionTraceEnabled = g_bSessionTraceConfigured
+			? g_bConfiguredSessionTraceEnabled
+			: qEnvironmentVariableIsSet(kSessionTraceEnvName)
+				&& qEnvironmentVariable(kSessionTraceEnvName) != QStringLiteral("0");
 		if (!g_bSessionTraceEnabled)
 			return;
 
-		QDir().mkpath(logDirectoryPath());
+		const QString strLogDirectory = logDirectoryPath();
+		if (!QDir().mkpath(strLogDirectory))
+		{
+			qWarning().noquote() << QStringLiteral("Unable to create trace log directory: %1")
+				.arg(strLogDirectory);
+			g_bSessionTraceEnabled = false;
+		}
 	}
 
 	static void rotateIfNeeded(const QString &strFilePath)
@@ -55,6 +69,19 @@ namespace
 		QFile::remove(strOldFilePath);
 		file.rename(strOldFilePath);
 	}
+}
+
+void KSessionTraceLogger::configure(bool bEnabled, const QString &strLogDirectory)
+{
+	QMutexLocker locker(&g_sessionTraceMutex);
+	if (g_bSessionTraceInitialized)
+	{
+		qWarning() << "Session trace logger was configured after initialization";
+		return;
+	}
+	g_bSessionTraceConfigured = true;
+	g_bConfiguredSessionTraceEnabled = bEnabled;
+	g_strSessionTraceLogDirectory = QDir::cleanPath(strLogDirectory);
 }
 
 bool KSessionTraceLogger::isEnabled()
@@ -80,7 +107,12 @@ void KSessionTraceLogger::write(const QString &strRole,
 
 	QFile file(strFilePath);
 	if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
+	{
+		qWarning().noquote() << QStringLiteral("Unable to open session trace log: %1")
+			.arg(strFilePath);
+		g_bSessionTraceEnabled = false;
 		return;
+	}
 
 	QTextStream stream(&file);
 	stream << QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"))

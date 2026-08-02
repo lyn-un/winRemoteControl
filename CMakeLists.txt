@@ -123,6 +123,8 @@ add_library(wrc_diagnostics STATIC
 	src/common/latencytracelogger.h
 	src/common/sessiontracelogger.cpp
 	src/common/sessiontracelogger.h
+	src/common/traceoptions.cpp
+	src/common/traceoptions.h
 )
 
 target_include_directories(wrc_diagnostics PUBLIC
@@ -546,6 +548,15 @@ if(BUILD_TESTING)
 		Qt6::Core
 	)
 	add_test(NAME wrc_clipboard_sync_tests COMMAND wrc_clipboard_sync_tests)
+
+	add_executable(wrc_trace_options_tests
+		tests/unit/traceoptionstest.cpp
+	)
+	target_link_libraries(wrc_trace_options_tests PRIVATE
+		wrc_diagnostics
+		Qt6::Core
+	)
+	add_test(NAME wrc_trace_options_tests COMMAND wrc_trace_options_tests)
 
 	add_executable(wrc_frame_watermark_tests
 		tests/unit/framewatermarktest.cpp

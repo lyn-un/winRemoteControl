@@ -2,9 +2,9 @@
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDateTime>
+#include <QtCore/QDebug>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
-#include <QtCore/QFileInfo>
 #include <QtCore/QMutex>
 #include <QtCore/QMutexLocker>
 #include <QtCore/QQueue>
@@ -23,13 +23,11 @@ namespace
 	constexpr int kLatencyTraceMaxQueuedLines = 8192;
 	constexpr char kLatencyTraceEnvName[] = "WRC_LATENCY_TRACE";
 
-	static QString logFilePath(const QString &strProcessSide)
+	static QString logFilePath(const QString &strLogDirectory,
+		const QString &strProcessSide)
 	{
-		const QString strBasePath = QCoreApplication::applicationDirPath().isEmpty()
-			? QDir::currentPath()
-			: QCoreApplication::applicationDirPath();
-		return QDir(strBasePath).absoluteFilePath(
-			QStringLiteral("logs/latency_trace_%1.log").arg(strProcessSide));
+		return QDir(strLogDirectory).absoluteFilePath(
+			QStringLiteral("latency_trace_%1.log").arg(strProcessSide));
 	}
 
 	static void rotateIfNeeded(const QString &strFilePath)
@@ -58,6 +56,19 @@ namespace
 			initialize();
 			QMutexLocker locker(&m_mutex);
 			return m_bEnabled && !m_bStopping;
+		}
+
+		void configure(bool bEnabled, const QString &strLogDirectory)
+		{
+			QMutexLocker locker(&m_mutex);
+			if (m_bInitialized)
+			{
+				qWarning() << "Latency trace logger was configured after initialization";
+				return;
+			}
+			m_bConfigured = true;
+			m_bConfiguredEnabled = bEnabled;
+			m_strLogDirectory = QDir::cleanPath(strLogDirectory);
 		}
 
 		void enqueue(const QString &strSide, const QString &strStage, const QString &strExtra)
@@ -106,20 +117,27 @@ namespace
 
 		void shutdown()
 		{
+			bool bShouldWait = false;
 			{
 				QMutexLocker locker(&m_mutex);
-				if (!m_bInitialized || !m_bEnabled || m_bStopping)
+				if (!m_bInitialized)
 					return;
-				m_bStopping = true;
-				m_waitCondition.wakeOne();
+				if (m_bEnabled && !m_bStopping)
+				{
+					m_bStopping = true;
+					m_waitCondition.wakeOne();
+				}
+				bShouldWait = isRunning();
 			}
-			wait();
+			if (bShouldWait)
+				wait();
 		}
 
 	protected:
 		void run() override
 		{
 			QString strProcessSide;
+			QString strLogDirectory;
 			{
 				QMutexLocker locker(&m_mutex);
 				while (m_strProcessSide.isEmpty() && !m_bStopping)
@@ -127,16 +145,27 @@ namespace
 				strProcessSide = m_strProcessSide.isEmpty()
 					? QStringLiteral("unknown")
 					: m_strProcessSide;
+				strLogDirectory = m_strLogDirectory;
 			}
 
-			const QString strFilePath = logFilePath(strProcessSide);
-			const QFileInfo fileInfo(strFilePath);
-			QDir().mkpath(fileInfo.absolutePath());
+			if (!QDir().mkpath(strLogDirectory))
+			{
+				qWarning().noquote() << QStringLiteral("Unable to create trace log directory: %1")
+					.arg(strLogDirectory);
+				disableAfterWriteFailure();
+				return;
+			}
+			const QString strFilePath = logFilePath(strLogDirectory, strProcessSide);
 			rotateIfNeeded(strFilePath);
 
 			QFile file(strFilePath);
 			if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
+			{
+				qWarning().noquote() << QStringLiteral("Unable to open latency trace log: %1")
+					.arg(strFilePath);
+				disableAfterWriteFailure();
 				return;
+			}
 
 			QTextStream stream(&file);
 			for (;;)
@@ -178,17 +207,36 @@ namespace
 			if (m_bInitialized)
 				return;
 			m_bInitialized = true;
-			m_bEnabled = qEnvironmentVariableIsSet(kLatencyTraceEnvName)
-				&& qEnvironmentVariable(kLatencyTraceEnvName) != QStringLiteral("0");
+			m_bEnabled = m_bConfigured
+				? m_bConfiguredEnabled
+				: qEnvironmentVariableIsSet(kLatencyTraceEnvName)
+					&& qEnvironmentVariable(kLatencyTraceEnvName) != QStringLiteral("0");
+			if (m_strLogDirectory.isEmpty())
+			{
+				const QString strBasePath = QCoreApplication::applicationDirPath().isEmpty()
+					? QDir::currentPath()
+					: QCoreApplication::applicationDirPath();
+				m_strLogDirectory = QDir(strBasePath).absoluteFilePath(QStringLiteral("logs"));
+			}
 			if (m_bEnabled)
 				start();
+		}
+
+		void disableAfterWriteFailure()
+		{
+			QMutexLocker locker(&m_mutex);
+			m_bEnabled = false;
+			m_pendingLines.clear();
 		}
 
 		QMutex m_mutex;
 		QWaitCondition m_waitCondition;
 		QQueue<QString> m_pendingLines;
 		QString m_strProcessSide;
+		QString m_strLogDirectory;
 		quint64 m_nDroppedLines = 0;
+		bool m_bConfigured = false;
+		bool m_bConfiguredEnabled = false;
 		bool m_bInitialized = false;
 		bool m_bEnabled = false;
 		bool m_bStopping = false;
@@ -199,6 +247,11 @@ namespace
 		static KLatencyTraceWorker worker;
 		return worker;
 	}
+}
+
+void KLatencyTraceLogger::configure(bool bEnabled, const QString &strLogDirectory)
+{
+	latencyTraceWorker().configure(bEnabled, strLogDirectory);
 }
 
 bool KLatencyTraceLogger::isEnabled()

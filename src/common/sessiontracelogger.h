@@ -6,6 +6,7 @@
 class KSessionTraceLogger
 {
 public:
+	static void configure(bool bEnabled, const QString &strLogDirectory);
 	static bool isEnabled();
 	static void write(const QString &strRole,
 		const QString &strStage,

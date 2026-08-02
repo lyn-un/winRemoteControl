@@ -2,11 +2,14 @@
 
 #include "core/media/decodedvideoframe.h"
 #include "common/latencytracelogger.h"
+#include "common/sessiontracelogger.h"
+#include "common/traceoptions.h"
 #include "core/media/networkstats.h"
 #include "core/media/streamconfig.h"
 #include "core/media/videoframe.h"
 #include "core/protocol/clipboardmessage.h"
 
+#include <QtCore/QCommandLineParser>
 #include <QtCore/QMetaType>
 #include <QtNetwork/QNetworkProxy>
 #include <QtWidgets/QApplication>
@@ -20,6 +23,17 @@ int main(int nArgc, char *pArgv[])
 		return -1;
 
 	QApplication app(nArgc, pArgv);
+	QCommandLineParser parser;
+	parser.setApplicationDescription(QStringLiteral("winRemoteControl LAN remote desktop client"));
+	parser.addHelpOption();
+	KTraceOptionsParser::addOptions(&parser);
+	parser.process(app);
+	const KTraceOptions traceOptions = KTraceOptionsParser::options(
+		parser, QCoreApplication::applicationDirPath());
+	KSessionTraceLogger::configure(
+		traceOptions.bSessionTraceEnabled, traceOptions.strLogDirectory);
+	KLatencyTraceLogger::configure(
+		traceOptions.bLatencyTraceEnabled, traceOptions.strLogDirectory);
 	KLatencyTraceLogger::write(QStringLiteral("app"),
 		QStringLiteral("startup"),
 		QStringLiteral("dir=%1").arg(QCoreApplication::applicationDirPath()));
