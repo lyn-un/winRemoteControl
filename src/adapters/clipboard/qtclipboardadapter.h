@@ -1,6 +1,7 @@
 #ifndef _WINREMOTECONTROL_ADAPTERS_CLIPBOARD_QTCLIPBOARDADAPTER_H_
 #define _WINREMOTECONTROL_ADAPTERS_CLIPBOARD_QTCLIPBOARDADAPTER_H_
 
+#include "adapters/clipboard/clipboardchangefilter.h"
 #include "core/clipboard/clipboardadapter.h"
 
 class QClipboard;
@@ -17,8 +18,10 @@ public:
 
 private:
 	void handleClipboardChanged();
+	void logIgnoredChange(const QString &strReason, quint32 nSequence) const;
 
 	QClipboard *m_pClipboard = nullptr;
+	KClipboardChangeFilter m_changeFilter;
 };
 
 #endif // _WINREMOTECONTROL_ADAPTERS_CLIPBOARD_QTCLIPBOARDADAPTER_H_

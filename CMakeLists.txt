@@ -92,6 +92,8 @@ target_link_libraries(wrc_core PUBLIC
 )
 
 add_library(wrc_windows_adapters STATIC
+	src/adapters/clipboard/clipboardchangefilter.cpp
+	src/adapters/clipboard/clipboardchangefilter.h
 	src/adapters/clipboard/qtclipboardadapter.cpp
 	src/adapters/clipboard/qtclipboardadapter.h
 	src/adapters/windows/device/windowsdeviceinfoprovider.cpp
@@ -113,6 +115,7 @@ target_include_directories(wrc_windows_adapters PUBLIC
 
 target_link_libraries(wrc_windows_adapters PUBLIC
 	wrc_core
+	wrc_diagnostics
 	Qt6::Core
 	Qt6::Gui
 	user32
@@ -548,6 +551,15 @@ if(BUILD_TESTING)
 		Qt6::Core
 	)
 	add_test(NAME wrc_clipboard_sync_tests COMMAND wrc_clipboard_sync_tests)
+
+	add_executable(wrc_clipboard_change_filter_tests
+		tests/unit/clipboardchangefiltertest.cpp
+	)
+	target_link_libraries(wrc_clipboard_change_filter_tests PRIVATE
+		wrc_windows_adapters
+		Qt6::Core
+	)
+	add_test(NAME wrc_clipboard_change_filter_tests COMMAND wrc_clipboard_change_filter_tests)
 
 	add_executable(wrc_trace_options_tests
 		tests/unit/traceoptionstest.cpp

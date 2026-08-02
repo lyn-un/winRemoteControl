@@ -61,7 +61,6 @@ private:
 	bool m_bReadySent = false;
 	bool m_bSessionEstablished = false;
 	QString m_strSessionState;
-	QString m_strSuppressedText;
 	KClipboardMessage m_pendingMessage;
 	int m_nPendingAttempt = 0;
 	QQueue<QString> m_recentMessageIds;

@@ -34,7 +34,6 @@ namespace
 		{
 			strText = strValue;
 			++nSetCount;
-			emit textChanged(strText);
 			return true;
 		}
 

@@ -74,7 +74,6 @@ void KClipboardSyncService::setEnabled(bool bEnabled)
 		m_pRetryTimer->stop();
 		m_pendingMessage = KClipboardMessage();
 		m_nPendingAttempt = 0;
-		m_strSuppressedText.clear();
 	}
 	KSessionTraceLogger::write(QStringLiteral("local"),
 		QStringLiteral("clipboard_sync"),
@@ -103,11 +102,6 @@ void KClipboardSyncService::shutdown()
 
 void KClipboardSyncService::handleLocalTextChanged(const QString &strText)
 {
-	if (!m_strSuppressedText.isNull() && strText == m_strSuppressedText)
-	{
-		m_strSuppressedText = QString();
-		return;
-	}
 	if (!isActive())
 		return;
 
@@ -161,7 +155,6 @@ void KClipboardSyncService::handleRemoteMessage(const KClipboardMessage &message
 			m_pRetryTimer->stop();
 			m_pendingMessage = KClipboardMessage();
 			m_nPendingAttempt = 0;
-			m_strSuppressedText.clear();
 		}
 		emitState();
 		return;
@@ -189,7 +182,6 @@ void KClipboardSyncService::handleChannelChanged(bool bOpen)
 		m_pRetryTimer->stop();
 		m_pendingMessage = KClipboardMessage();
 		m_nPendingAttempt = 0;
-		m_strSuppressedText.clear();
 	}
 	sendReadyIfNeeded();
 	emitState();
@@ -205,7 +197,6 @@ void KClipboardSyncService::handleSessionStateChanged(const QString &strState)
 		m_pRetryTimer->stop();
 		m_pendingMessage = KClipboardMessage();
 		m_nPendingAttempt = 0;
-		m_strSuppressedText.clear();
 	}
 	if (strState == QStringLiteral("Connected") && !m_bSessionEstablished)
 	{
@@ -242,11 +233,9 @@ void KClipboardSyncService::applyRemoteMessage(const KClipboardMessage &message,
 		return;
 	}
 
-	m_strSuppressedText = message.strText;
 	QString strError;
 	if (!m_spClipboardAdapter->setText(message.strText, &strError))
 	{
-		m_strSuppressedText.clear();
 		if (nAttempt < kMaximumApplyAttempts && isActive())
 		{
 			m_pendingMessage = message;
@@ -276,12 +265,6 @@ void KClipboardSyncService::applyRemoteMessage(const KClipboardMessage &message,
 		QStringLiteral("messageId=%1 attempts=%2")
 			.arg(message.strMessageId)
 			.arg(nAttempt));
-	QTimer::singleShot(0, this,
-		[this, strText = message.strText]()
-		{
-			if (m_strSuppressedText == strText)
-				m_strSuppressedText = QString();
-		});
 }
 
 void KClipboardSyncService::rememberMessageId(const QString &strMessageId)
@@ -302,7 +285,6 @@ void KClipboardSyncService::resetSession()
 	m_bPeerReady = false;
 	m_bReadySent = false;
 	m_bSessionEstablished = false;
-	m_strSuppressedText = QString();
 	m_pendingMessage = KClipboardMessage();
 	m_nPendingAttempt = 0;
 	m_recentMessageIds.clear();
