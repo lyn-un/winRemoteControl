@@ -84,6 +84,7 @@ namespace
 	constexpr char kVideoLabel[] = "wrc-screen";
 	constexpr char kInputChannelLabel[] = "input";
 	constexpr char kSessionChannelLabel[] = "session";
+	constexpr char kClipboardChannelLabel[] = "clipboard";
 	constexpr int kStatsPollingIntervalMs = 1000;
 	constexpr int kBitsPerKilobit = 1000;
 	constexpr int kReceiverMaxFrameRateFps = 60;
@@ -309,6 +310,7 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 	: KRemotePeerTransport(pParent)
 	, m_pInputDataChannel(new KWebRtcDataChannel(this))
 	, m_pSessionDataChannel(new KWebRtcDataChannel(this))
+	, m_pClipboardDataChannel(new KWebRtcDataChannel(this))
 	, m_pRemoteFrameProcessor(new KWebRtcRemoteFrameProcessor(this))
 	, m_spLatencyProbe(std::make_unique<KWebRtcLatencyProbe>())
 {
@@ -320,6 +322,10 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 		this, &KWebRtcPeer::handleSessionChannelChanged);
 	connect(m_pSessionDataChannel, &KWebRtcDataChannel::textMessageReceived,
 		this, &KWebRtcPeer::handleSessionChannelMessage);
+	connect(m_pClipboardDataChannel, &KWebRtcDataChannel::openChanged,
+		this, &KWebRtcPeer::handleClipboardChannelChanged);
+	connect(m_pClipboardDataChannel, &KWebRtcDataChannel::textMessageReceived,
+		this, &KWebRtcPeer::handleClipboardChannelMessage);
 	connect(m_pRemoteFrameProcessor, &KWebRtcRemoteFrameProcessor::frameReady,
 		this, &KWebRtcPeer::remoteFrameReady);
 	connect(m_pRemoteFrameProcessor, &KWebRtcRemoteFrameProcessor::frameStatsReady,
@@ -343,6 +349,8 @@ bool KWebRtcPeer::initialize(KSessionRole role, QString *pErrorMessage)
 		return false;
 	if (m_role == ControllerSessionRole && !createSessionDataChannel(pErrorMessage))
 		return false;
+	if (m_role == ControllerSessionRole && !createClipboardDataChannel(pErrorMessage))
+		return false;
 	if (m_role == ControlledSessionRole && !addLocalVideoTrack(pErrorMessage))
 		return false;
 	if (m_role == ControllerSessionRole && !addRemoteVideoReceiver(pErrorMessage))
@@ -357,6 +365,7 @@ void KWebRtcPeer::shutdown()
 	stopStatsPolling();
 	m_pInputDataChannel->clear();
 	m_pSessionDataChannel->clear();
+	m_pClipboardDataChannel->clear();
 
 	if (m_spRemoteVideoTrack)
 		m_spRemoteVideoTrack->RemoveSink(this);
@@ -447,6 +456,11 @@ void KWebRtcPeer::sendLatencyPing()
 		return;
 	}
 	m_pInputDataChannel->sendText(m_spLatencyProbe->createPing());
+}
+
+void KWebRtcPeer::sendClipboardMessage(const KClipboardMessage &message)
+{
+	m_pClipboardDataChannel->sendText(KClipboardMessageCodec::encode(message));
 }
 
 void KWebRtcPeer::sendSessionMessage(const KSessionMessage &message)
@@ -673,6 +687,8 @@ void KWebRtcPeer::OnDataChannel(webrtc::scoped_refptr<webrtc::DataChannelInterfa
 		m_pInputDataChannel->setChannel(channel);
 	else if (channel->label() == kSessionChannelLabel)
 		m_pSessionDataChannel->setChannel(channel);
+	else if (channel->label() == kClipboardChannelLabel)
+		m_pClipboardDataChannel->setChannel(channel);
 }
 
 void KWebRtcPeer::OnRenegotiationNeeded()
@@ -752,6 +768,11 @@ void KWebRtcPeer::handleSessionChannelChanged(bool bOpen)
 		: QStringLiteral("SessionChannelClosed"));
 }
 
+void KWebRtcPeer::handleClipboardChannelChanged(bool bOpen)
+{
+	emit clipboardChannelChanged(bOpen);
+}
+
 void KWebRtcPeer::handleSessionChannelMessage(const QString &strMessage)
 {
 	KSessionMessage message;
@@ -766,6 +787,22 @@ void KWebRtcPeer::handleSessionChannelMessage(const QString &strMessage)
 		return;
 	}
 	emit sessionMessageReceived(message);
+}
+
+void KWebRtcPeer::handleClipboardChannelMessage(const QString &strMessage)
+{
+	KClipboardMessage message;
+	QString strError;
+	if (!KClipboardMessageCodec::decode(strMessage, &message, &strError))
+	{
+		KSessionTraceLogger::write(roleToString(m_role),
+			QStringLiteral("protocol_reject"),
+			QStringLiteral("clipboard"),
+			strMessage.toUtf8().size(),
+			strError);
+		return;
+	}
+	emit clipboardMessageReceived(message);
 }
 
 void KWebRtcPeer::handleInputChannelMessage(const QString &strMessage)
@@ -923,6 +960,26 @@ bool KWebRtcPeer::createSessionDataChannel(QString *pErrorMessage)
 	}
 
 	m_pSessionDataChannel->setChannel(result.value());
+	return true;
+}
+
+bool KWebRtcPeer::createClipboardDataChannel(QString *pErrorMessage)
+{
+	webrtc::DataChannelInit init;
+	init.ordered = true;
+	webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::DataChannelInterface>> result =
+		m_spPeerConnection->CreateDataChannelOrError(kClipboardChannelLabel, &init);
+	if (!result.ok())
+	{
+		if (pErrorMessage != nullptr)
+		{
+			*pErrorMessage = rtcErrorMessage(
+				QStringLiteral("Create clipboard DataChannel failed"), result.error());
+		}
+		return false;
+	}
+
+	m_pClipboardDataChannel->setChannel(result.value());
 	return true;
 }
 

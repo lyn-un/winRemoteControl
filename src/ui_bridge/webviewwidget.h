@@ -58,6 +58,11 @@ public slots:
 		const QString &strSourceAddress,
 		qint64 nExpiresAtMs);
 	void sendIncomingAccessRequestCleared(const QString &strRequestId, const QString &strReason);
+	void sendClipboardSyncStateChanged(bool bEnabled,
+		bool bAvailable,
+		bool bActive,
+		const QString &strStatus);
+	void sendClipboardSyncError(const QString &strError);
 
 signals:
 	void startCaptureRequested();
@@ -66,6 +71,8 @@ signals:
 	void startSignalingServerRequested(quint16 nPort);
 	void connectSignalingRequested(const QString &strHost, quint16 nPort);
 	void retryLastConnectionRequested();
+	void setClipboardSyncEnabledRequested(bool bEnabled);
+	void requestClipboardSyncStateRequested();
 	void refreshLanDevicesRequested();
 	void connectLanDeviceRequested(const QString &strDeviceId);
 	void requestRecentDevicesRequested();

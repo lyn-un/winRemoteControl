@@ -67,6 +67,7 @@ public:
 	bool canSendInput() const;
 	bool canReceiveInput() const;
 	bool canSendVideo() const;
+	bool canSyncClipboard() const;
 	bool isConnecting() const;
 	bool isAwaitingApproval() const;
 	bool isNegotiating() const;

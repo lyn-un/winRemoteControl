@@ -43,6 +43,8 @@ target_link_libraries(wrc_foundation INTERFACE
 add_library(wrc_protocol STATIC
 	src/core/protocol/accessmessage.cpp
 	src/core/protocol/accessmessage.h
+	src/core/protocol/clipboardmessage.cpp
+	src/core/protocol/clipboardmessage.h
 	src/core/protocol/landiscoverymessage.cpp
 	src/core/protocol/landiscoverymessage.h
 	src/core/protocol/inputmessage.cpp
@@ -61,6 +63,7 @@ target_link_libraries(wrc_protocol PUBLIC
 )
 
 add_library(wrc_core STATIC
+	src/core/clipboard/clipboardadapter.h
 	src/core/devices/recentdevicestore.h
 	src/core/discovery/devicediscoverycontroller.h
 	src/core/discovery/discovereddevice.h
@@ -89,6 +92,8 @@ target_link_libraries(wrc_core PUBLIC
 )
 
 add_library(wrc_windows_adapters STATIC
+	src/adapters/clipboard/qtclipboardadapter.cpp
+	src/adapters/clipboard/qtclipboardadapter.h
 	src/adapters/windows/device/windowsdeviceinfoprovider.cpp
 	src/adapters/windows/device/windowsdeviceinfoprovider.h
 	src/adapters/windows/input/windowsinputinjector.cpp
@@ -176,6 +181,22 @@ add_library(wrc_recent_device_application STATIC
 add_library(wrc_settings_application STATIC
 	src/settings/applicationsettingsservice.cpp
 	src/settings/applicationsettingsservice.h
+)
+
+add_library(wrc_clipboard_application STATIC
+	src/clipboard/clipboardsyncservice.cpp
+	src/clipboard/clipboardsyncservice.h
+)
+
+target_include_directories(wrc_clipboard_application PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_clipboard_application PUBLIC
+	wrc_core
+	wrc_session_application
+	wrc_diagnostics
+	Qt6::Core
 )
 
 target_include_directories(wrc_settings_application PUBLIC
@@ -394,6 +415,7 @@ target_include_directories(wrc_qt_presentation PUBLIC
 target_link_libraries(wrc_qt_presentation PUBLIC
 	wrc_core
 	wrc_session_application
+	wrc_clipboard_application
 	wrc_diagnostics
 	Qt6::Widgets
 	Qt6::Gui
@@ -515,6 +537,15 @@ if(BUILD_TESTING)
 		Qt6::Core
 	)
 	add_test(NAME wrc_application_settings_tests COMMAND wrc_application_settings_tests)
+
+	add_executable(wrc_clipboard_sync_tests
+		tests/unit/clipboardsyncservicetest.cpp
+	)
+	target_link_libraries(wrc_clipboard_sync_tests PRIVATE
+		wrc_clipboard_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_clipboard_sync_tests COMMAND wrc_clipboard_sync_tests)
 
 	add_executable(wrc_frame_watermark_tests
 		tests/unit/framewatermarktest.cpp

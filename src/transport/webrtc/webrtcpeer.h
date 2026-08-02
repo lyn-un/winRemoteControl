@@ -49,6 +49,7 @@ public:
 	void handleSignalingMessage(const QString &strMessage) override;
 	void pushVideoFrame(const KVideoFrame &frame) override;
 	void sendInputMessage(const KInputMessage &message) override;
+	void sendClipboardMessage(const KClipboardMessage &message) override;
 	void sendSessionMessage(const KSessionMessage &message) override;
 	void setStreamConfig(const KStreamConfig &config) override;
 
@@ -73,12 +74,15 @@ private:
 	bool createPeerConnection(QString *pErrorMessage);
 	bool createInputDataChannel(QString *pErrorMessage);
 	bool createSessionDataChannel(QString *pErrorMessage);
+	bool createClipboardDataChannel(QString *pErrorMessage);
 	bool addLocalVideoTrack(QString *pErrorMessage);
 	bool addRemoteVideoReceiver(QString *pErrorMessage);
 	void handleInputChannelChanged(bool bOpen);
 	void handleSessionChannelChanged(bool bOpen);
+	void handleClipboardChannelChanged(bool bOpen);
 	void handleInputChannelMessage(const QString &strMessage);
 	void handleSessionChannelMessage(const QString &strMessage);
+	void handleClipboardChannelMessage(const QString &strMessage);
 	void handleLocalDescription(webrtc::SessionDescriptionInterface *pDescription);
 	void handleLocalDescriptionFailure(webrtc::RTCError error);
 	void handleRemoteDescriptionSuccess(webrtc::SdpType sdpType);
@@ -102,6 +106,7 @@ private:
 	webrtc::scoped_refptr<webrtc::PeerConnectionInterface> m_spPeerConnection;
 	KWebRtcDataChannel *m_pInputDataChannel = nullptr;
 	KWebRtcDataChannel *m_pSessionDataChannel = nullptr;
+	KWebRtcDataChannel *m_pClipboardDataChannel = nullptr;
 	KWebRtcRemoteFrameProcessor *m_pRemoteFrameProcessor = nullptr;
 	std::unique_ptr<KWebRtcLatencyProbe> m_spLatencyProbe;
 	webrtc::scoped_refptr<KWebRtcVideoSource> m_spVideoSource;

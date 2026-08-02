@@ -1,0 +1,348 @@
+#include "clipboard/clipboardsyncservice.h"
+
+#include "common/sessiontracelogger.h"
+#include "core/clipboard/clipboardadapter.h"
+#include "session/sessioncontroller.h"
+
+#include <QtCore/QTimer>
+#include <QtCore/QUuid>
+
+namespace
+{
+	constexpr int kMaximumRecentMessageIds = 128;
+	constexpr int kMaximumApplyAttempts = 3;
+	constexpr int kApplyRetryIntervalMs = 100;
+
+	bool IsTerminalSessionState(const QString &strState)
+	{
+		return strState == QStringLiteral("Idle")
+			|| strState == QStringLiteral("Listening")
+			|| strState == QStringLiteral("Disconnected")
+			|| strState == QStringLiteral("Failed");
+	}
+
+	bool IsBusinessSessionState(const QString &strState)
+	{
+		return strState == QStringLiteral("Idle")
+			|| strState == QStringLiteral("Listening")
+			|| strState == QStringLiteral("Connecting")
+			|| strState == QStringLiteral("AwaitingApproval")
+			|| strState == QStringLiteral("Negotiating")
+			|| strState == QStringLiteral("Connected")
+			|| strState == QStringLiteral("Streaming")
+			|| strState == QStringLiteral("Reconnecting")
+			|| strState == QStringLiteral("Stopping")
+			|| strState == QStringLiteral("Disconnected")
+			|| strState == QStringLiteral("Failed");
+	}
+}
+
+KClipboardSyncService::KClipboardSyncService(
+	std::unique_ptr<KClipboardAdapter> spClipboardAdapter,
+	KSessionController *pSessionController,
+	QObject *pParent)
+	: QObject(pParent)
+	, m_spClipboardAdapter(std::move(spClipboardAdapter))
+	, m_pSessionController(pSessionController)
+	, m_pRetryTimer(new QTimer(this))
+{
+	m_pRetryTimer->setSingleShot(true);
+	connect(m_pRetryTimer, &QTimer::timeout,
+		this, &KClipboardSyncService::retryPendingApply);
+	connect(m_spClipboardAdapter.get(), &KClipboardAdapter::textChanged,
+		this, &KClipboardSyncService::handleLocalTextChanged);
+	connect(m_pSessionController, &KSessionController::clipboardMessageReceived,
+		this, &KClipboardSyncService::handleRemoteMessage);
+	connect(m_pSessionController, &KSessionController::clipboardChannelChanged,
+		this, &KClipboardSyncService::handleChannelChanged);
+	connect(m_pSessionController, &KSessionController::webRtcStateChanged,
+		this, &KClipboardSyncService::handleSessionStateChanged);
+}
+
+KClipboardSyncService::~KClipboardSyncService()
+{
+	shutdown();
+}
+
+void KClipboardSyncService::setEnabled(bool bEnabled)
+{
+	if (m_bEnabled == bEnabled)
+		return;
+	m_bEnabled = bEnabled;
+	if (!m_bEnabled)
+	{
+		m_pRetryTimer->stop();
+		m_pendingMessage = KClipboardMessage();
+		m_nPendingAttempt = 0;
+		m_strSuppressedText.clear();
+	}
+	KSessionTraceLogger::write(QStringLiteral("local"),
+		QStringLiteral("clipboard_sync"),
+		m_bEnabled ? QStringLiteral("enabled") : QStringLiteral("disabled"));
+	if (m_bPeerReady && m_strSessionState == QStringLiteral("Streaming"))
+	{
+		KClipboardMessage message;
+		message.type = SyncStateClipboardMessageType;
+		message.strMessageId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+		message.bEnabled = m_bEnabled;
+		m_pSessionController->sendClipboardMessage(message);
+	}
+	emitState();
+}
+
+void KClipboardSyncService::requestState()
+{
+	emitState();
+}
+
+void KClipboardSyncService::shutdown()
+{
+	m_pRetryTimer->stop();
+	resetSession();
+}
+
+void KClipboardSyncService::handleLocalTextChanged(const QString &strText)
+{
+	if (!m_strSuppressedText.isNull() && strText == m_strSuppressedText)
+	{
+		m_strSuppressedText = QString();
+		return;
+	}
+	if (!isActive())
+		return;
+
+	const int nTextBytes = strText.toUtf8().size();
+	if (nTextBytes > KClipboardMessageCodec::kMaximumTextBytes)
+	{
+		KSessionTraceLogger::write(QStringLiteral("local"),
+			QStringLiteral("clipboard_drop"),
+			QStringLiteral("too_large"),
+			nTextBytes);
+		emit syncError(QStringLiteral("剪贴板文本超过 256 KB，未同步"));
+		return;
+	}
+
+	KClipboardMessage message;
+	message.type = TextClipboardMessageType;
+	message.strMessageId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+	message.strText = strText;
+	KSessionTraceLogger::write(QStringLiteral("local"),
+		QStringLiteral("clipboard_send"),
+		QStringLiteral("text"),
+		nTextBytes,
+		QStringLiteral("messageId=%1").arg(message.strMessageId));
+	m_pSessionController->sendClipboardMessage(message);
+}
+
+void KClipboardSyncService::handleRemoteMessage(const KClipboardMessage &message)
+{
+	if (m_recentMessageIdSet.contains(message.strMessageId))
+	{
+		KSessionTraceLogger::write(QStringLiteral("local"),
+			QStringLiteral("clipboard_drop"),
+			QStringLiteral("duplicate"),
+			message.strText.toUtf8().size(),
+			QStringLiteral("messageId=%1").arg(message.strMessageId));
+		return;
+	}
+	if (message.type == ReadyClipboardMessageType)
+	{
+		rememberMessageId(message.strMessageId);
+		m_bPeerReady = true;
+		emitState();
+		return;
+	}
+	if (message.type == SyncStateClipboardMessageType)
+	{
+		rememberMessageId(message.strMessageId);
+		m_bEnabled = message.bEnabled;
+		if (!m_bEnabled)
+		{
+			m_pRetryTimer->stop();
+			m_pendingMessage = KClipboardMessage();
+			m_nPendingAttempt = 0;
+			m_strSuppressedText.clear();
+		}
+		emitState();
+		return;
+	}
+	if (message.type != TextClipboardMessageType || !isActive())
+	{
+		KSessionTraceLogger::write(QStringLiteral("local"),
+			QStringLiteral("clipboard_drop"),
+			QStringLiteral("inactive"),
+			message.strText.toUtf8().size(),
+			QStringLiteral("messageId=%1").arg(message.strMessageId));
+		return;
+	}
+
+	applyRemoteMessage(message, 1);
+}
+
+void KClipboardSyncService::handleChannelChanged(bool bOpen)
+{
+	m_bChannelOpen = bOpen;
+	if (!m_bChannelOpen)
+	{
+		m_bPeerReady = false;
+		m_bReadySent = false;
+		m_pRetryTimer->stop();
+		m_pendingMessage = KClipboardMessage();
+		m_nPendingAttempt = 0;
+		m_strSuppressedText.clear();
+	}
+	sendReadyIfNeeded();
+	emitState();
+}
+
+void KClipboardSyncService::handleSessionStateChanged(const QString &strState)
+{
+	if (!IsBusinessSessionState(strState))
+		return;
+	m_strSessionState = strState;
+	if (strState != QStringLiteral("Streaming"))
+	{
+		m_pRetryTimer->stop();
+		m_pendingMessage = KClipboardMessage();
+		m_nPendingAttempt = 0;
+		m_strSuppressedText.clear();
+	}
+	if (strState == QStringLiteral("Connected") && !m_bSessionEstablished)
+	{
+		m_bSessionEstablished = true;
+		m_bEnabled = true;
+	}
+	else if (IsTerminalSessionState(strState))
+	{
+		resetSession();
+		m_strSessionState = strState;
+	}
+	sendReadyIfNeeded();
+	emitState();
+}
+
+void KClipboardSyncService::retryPendingApply()
+{
+	if (m_pendingMessage.strMessageId.isEmpty() || !isActive())
+	{
+		m_pendingMessage = KClipboardMessage();
+		m_nPendingAttempt = 0;
+		return;
+	}
+	applyRemoteMessage(m_pendingMessage, m_nPendingAttempt + 1);
+}
+
+void KClipboardSyncService::applyRemoteMessage(const KClipboardMessage &message, int nAttempt)
+{
+	m_pendingMessage = KClipboardMessage();
+	m_nPendingAttempt = 0;
+	if (m_spClipboardAdapter->text() == message.strText)
+	{
+		rememberMessageId(message.strMessageId);
+		return;
+	}
+
+	m_strSuppressedText = message.strText;
+	QString strError;
+	if (!m_spClipboardAdapter->setText(message.strText, &strError))
+	{
+		m_strSuppressedText.clear();
+		if (nAttempt < kMaximumApplyAttempts && isActive())
+		{
+			m_pendingMessage = message;
+			m_nPendingAttempt = nAttempt;
+			m_pRetryTimer->start(kApplyRetryIntervalMs);
+			return;
+		}
+
+		KSessionTraceLogger::write(QStringLiteral("local"),
+			QStringLiteral("clipboard_apply"),
+			QStringLiteral("failed"),
+			message.strText.toUtf8().size(),
+			QStringLiteral("messageId=%1 attempts=%2")
+				.arg(message.strMessageId)
+				.arg(nAttempt));
+		emit syncError(strError.isEmpty()
+			? QStringLiteral("无法写入系统剪贴板")
+			: strError);
+		return;
+	}
+
+	rememberMessageId(message.strMessageId);
+	KSessionTraceLogger::write(QStringLiteral("local"),
+		QStringLiteral("clipboard_apply"),
+		QStringLiteral("success"),
+		message.strText.toUtf8().size(),
+		QStringLiteral("messageId=%1 attempts=%2")
+			.arg(message.strMessageId)
+			.arg(nAttempt));
+	QTimer::singleShot(0, this,
+		[this, strText = message.strText]()
+		{
+			if (m_strSuppressedText == strText)
+				m_strSuppressedText = QString();
+		});
+}
+
+void KClipboardSyncService::rememberMessageId(const QString &strMessageId)
+{
+	if (m_recentMessageIdSet.contains(strMessageId))
+		return;
+	m_recentMessageIdSet.insert(strMessageId);
+	m_recentMessageIds.enqueue(strMessageId);
+	while (m_recentMessageIds.size() > kMaximumRecentMessageIds)
+		m_recentMessageIdSet.remove(m_recentMessageIds.dequeue());
+}
+
+void KClipboardSyncService::resetSession()
+{
+	m_pRetryTimer->stop();
+	m_bEnabled = true;
+	m_bChannelOpen = false;
+	m_bPeerReady = false;
+	m_bReadySent = false;
+	m_bSessionEstablished = false;
+	m_strSuppressedText = QString();
+	m_pendingMessage = KClipboardMessage();
+	m_nPendingAttempt = 0;
+	m_recentMessageIds.clear();
+	m_recentMessageIdSet.clear();
+}
+
+void KClipboardSyncService::emitState()
+{
+	const bool bActive = isActive();
+	QString strStatus = QStringLiteral("unavailable");
+	if (!m_bEnabled)
+		strStatus = QStringLiteral("disabled");
+	else if (m_strSessionState == QStringLiteral("Reconnecting"))
+		strStatus = QStringLiteral("paused");
+	else if (bActive)
+		strStatus = QStringLiteral("active");
+	else if (m_bChannelOpen)
+		strStatus = QStringLiteral("waiting");
+	emit syncStateChanged(m_bEnabled, m_bChannelOpen && m_bPeerReady, bActive, strStatus);
+}
+
+void KClipboardSyncService::sendReadyIfNeeded()
+{
+	if (m_bReadySent
+		|| !m_bChannelOpen
+		|| m_strSessionState != QStringLiteral("Streaming"))
+	{
+		return;
+	}
+
+	KClipboardMessage message;
+	message.type = ReadyClipboardMessageType;
+	message.strMessageId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+	m_bReadySent = true;
+	m_pSessionController->sendClipboardMessage(message);
+}
+
+bool KClipboardSyncService::isActive() const
+{
+	return m_bEnabled
+		&& m_bPeerReady
+		&& m_strSessionState == QStringLiteral("Streaming");
+}

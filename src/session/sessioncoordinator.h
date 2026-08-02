@@ -6,6 +6,7 @@
 #include "core/media/streamconfig.h"
 #include "core/media/videoframe.h"
 #include "core/protocol/inputmessage.h"
+#include "core/protocol/clipboardmessage.h"
 #include "core/protocol/accessmessage.h"
 #include "core/protocol/sessionmessage.h"
 #include "core/session/sessionstatemachine.h"
@@ -51,6 +52,7 @@ public slots:
 	void stopStreaming() override;
 	void pushVideoFrame(const KVideoFrame &frame) override;
 	void sendInputMessage(const KInputMessage &message) override;
+	void sendClipboardMessage(const KClipboardMessage &message) override;
 	void sendStreamConfig(const KStreamConfig &config) override;
 	void handleCaptureFailure() override;
 	void applyApplicationSettings(const KApplicationSettings &settings) override;
@@ -69,6 +71,8 @@ private:
 	void handleRemoteFrame(const KDecodedVideoFrame &frame);
 	void handleInputMessage(const KInputMessage &message);
 	void handleInputChannelChanged(bool bOpen);
+	void handleClipboardMessage(const KClipboardMessage &message);
+	void handleClipboardChannelChanged(bool bOpen);
 	void handleSessionChannelChanged(bool bOpen);
 	void handleSessionMessage(const KSessionMessage &message);
 	void handleInputInjected(quint64 nSeq, qint64 nInjectedMs);
@@ -93,6 +97,7 @@ private:
 	KSessionStateMachine m_sessionStateMachine;
 	bool m_bDeviceInfoRequested = false;
 	bool m_bInputChannelOpen = false;
+	bool m_bClipboardChannelOpen = false;
 	bool m_bSessionChannelOpen = false;
 	quint64 m_nLastInjectedInputSeq = 0;
 	quint64 m_nReconnectGeneration = 0;

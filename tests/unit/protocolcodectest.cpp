@@ -1,4 +1,5 @@
 #include "core/protocol/accessmessage.h"
+#include "core/protocol/clipboardmessage.h"
 #include "core/protocol/inputmessage.h"
 #include "core/protocol/landiscoverymessage.h"
 #include "core/protocol/sessionmessage.h"
@@ -363,6 +364,69 @@ namespace
 		check(!KAccessMessageCodec::decode(strOverlongName, &message, nullptr),
 			QStringLiteral("overlong access device name is rejected"));
 	}
+
+	void testClipboardMessages()
+	{
+		const QString strMessageId = QStringLiteral("12345678-1234-1234-1234-1234567890ab");
+		KClipboardMessage source;
+		source.type = TextClipboardMessageType;
+		source.strMessageId = strMessageId;
+		source.strText = QString::fromUtf8("中文\nemoji: 😀");
+		KClipboardMessage decoded;
+		check(KClipboardMessageCodec::decode(
+			KClipboardMessageCodec::encode(source), &decoded, nullptr)
+			&& decoded.type == TextClipboardMessageType
+			&& decoded.strMessageId == strMessageId
+			&& decoded.strText == source.strText,
+			QStringLiteral("clipboard text round-trips"));
+
+		source.strText = QString(KClipboardMessageCodec::kMaximumTextBytes, QLatin1Char('a'));
+		check(KClipboardMessageCodec::decode(
+			KClipboardMessageCodec::encode(source), &decoded, nullptr),
+			QStringLiteral("clipboard text size boundary is accepted"));
+
+		KClipboardMessage stateSource;
+		stateSource.type = SyncStateClipboardMessageType;
+		stateSource.strMessageId = strMessageId;
+		stateSource.bEnabled = false;
+		check(KClipboardMessageCodec::decode(
+			KClipboardMessageCodec::encode(stateSource), &decoded, nullptr)
+			&& decoded.type == SyncStateClipboardMessageType
+			&& !decoded.bEnabled,
+			QStringLiteral("clipboard sync state round-trips"));
+
+		KClipboardMessage readySource;
+		readySource.type = ReadyClipboardMessageType;
+		readySource.strMessageId = strMessageId;
+		check(KClipboardMessageCodec::decode(
+			KClipboardMessageCodec::encode(readySource), &decoded, nullptr)
+			&& decoded.type == ReadyClipboardMessageType,
+			QStringLiteral("clipboard capability handshake round-trips"));
+	}
+
+	void testInvalidClipboardMessages()
+	{
+		KClipboardMessage message;
+		check(!KClipboardMessageCodec::decode(QStringLiteral("[]"), &message, nullptr),
+			QStringLiteral("non-object clipboard message is rejected"));
+		check(!KClipboardMessageCodec::decode(
+			QStringLiteral("{\"type\":\"clipboardText\",\"messageId\":\"bad\",\"text\":\"x\"}"),
+			&message, nullptr),
+			QStringLiteral("invalid clipboard UUID is rejected"));
+		check(!KClipboardMessageCodec::decode(
+			QStringLiteral("{\"type\":\"clipboardText\",\"messageId\":"
+				"\"12345678-1234-1234-1234-1234567890ab\",\"text\":1}"),
+			&message, nullptr),
+			QStringLiteral("non-string clipboard text is rejected"));
+
+		KClipboardMessage oversized;
+		oversized.type = TextClipboardMessageType;
+		oversized.strMessageId = QStringLiteral("12345678-1234-1234-1234-1234567890ab");
+		oversized.strText = QString(KClipboardMessageCodec::kMaximumTextBytes + 1, QLatin1Char('a'));
+		check(!KClipboardMessageCodec::decode(
+			KClipboardMessageCodec::encode(oversized), &message, nullptr),
+			QStringLiteral("oversized clipboard text is rejected"));
+	}
 }
 
 int main(int nArgc, char *pArgv[])
@@ -383,6 +447,8 @@ int main(int nArgc, char *pArgv[])
 	testInvalidLanDiscoveryMessages();
 	testAccessMessages();
 	testInvalidAccessMessages();
+	testClipboardMessages();
+	testInvalidClipboardMessages();
 
 	if (g_nFailureCount == 0)
 		qInfo() << "All protocol codec tests passed";

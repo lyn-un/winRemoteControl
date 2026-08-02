@@ -334,6 +334,13 @@ void KSessionCoordinator::sendInputMessage(const KInputMessage &message)
 	m_spRemotePeerTransport->sendInputMessage(message);
 }
 
+void KSessionCoordinator::sendClipboardMessage(const KClipboardMessage &message)
+{
+	if (!m_sessionStateMachine.canSyncClipboard() || !m_bClipboardChannelOpen)
+		return;
+	m_spRemotePeerTransport->sendClipboardMessage(message);
+}
+
 void KSessionCoordinator::sendSessionMessage(const KSessionMessage &message)
 {
 	const QString strType = KSessionMessageCodec::typeName(message.type);
@@ -438,6 +445,7 @@ void KSessionCoordinator::finishSession(KSessionEndReason reason,
 	clearApprovalState(strReason);
 	m_bDeviceInfoRequested = false;
 	m_bInputChannelOpen = false;
+	m_bClipboardChannelOpen = false;
 	m_bSessionChannelOpen = false;
 	m_pInputInjector->releaseAllInputs();
 	resetInputTraceState();
@@ -520,6 +528,10 @@ void KSessionCoordinator::wirePeer()
 		this, &KSessionCoordinator::handleInputInjected);
 	connect(pTransport, &KRemotePeerTransport::inputChannelChanged,
 		this, &KSessionCoordinator::handleInputChannelChanged);
+	connect(pTransport, &KRemotePeerTransport::clipboardMessageReceived,
+		this, &KSessionCoordinator::handleClipboardMessage);
+	connect(pTransport, &KRemotePeerTransport::clipboardChannelChanged,
+		this, &KSessionCoordinator::handleClipboardChannelChanged);
 	connect(pTransport, &KRemotePeerTransport::sessionMessageReceived,
 		this, &KSessionCoordinator::handleSessionMessage);
 	connect(pTransport, &KRemotePeerTransport::sessionChannelChanged,
@@ -579,6 +591,44 @@ void KSessionCoordinator::handleInputChannelChanged(bool bOpen)
 			false,
 			true);
 	}
+}
+
+void KSessionCoordinator::handleClipboardMessage(const KClipboardMessage &message)
+{
+	const bool bTextMessage = message.type == TextClipboardMessageType;
+	const QString strKind = bTextMessage
+		? QStringLiteral("text")
+		: message.type == ReadyClipboardMessageType
+			? QStringLiteral("ready")
+			: QStringLiteral("sync_state");
+	const int nPayloadBytes = bTextMessage ? message.strText.toUtf8().size() : -1;
+	if (!m_sessionStateMachine.canSyncClipboard() || !m_bClipboardChannelOpen)
+	{
+		KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
+			QStringLiteral("clipboard_drop"),
+			QStringLiteral("session_inactive"),
+			nPayloadBytes,
+			QStringLiteral("messageId=%1").arg(message.strMessageId));
+		return;
+	}
+
+	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
+		QStringLiteral("clipboard_recv"),
+		strKind,
+		nPayloadBytes,
+		QStringLiteral("messageId=%1").arg(message.strMessageId));
+	emit clipboardMessageReceived(message);
+}
+
+void KSessionCoordinator::handleClipboardChannelChanged(bool bOpen)
+{
+	m_bClipboardChannelOpen = bOpen;
+	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
+		QStringLiteral("channel"),
+		QStringLiteral("clipboard"),
+		-1,
+		QStringLiteral("open=%1").arg(bOpen ? 1 : 0));
+	emit clipboardChannelChanged(bOpen);
 }
 
 void KSessionCoordinator::handleSessionChannelChanged(bool bOpen)

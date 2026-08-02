@@ -6,6 +6,7 @@
 #include "core/media/streamconfig.h"
 #include "core/media/videoframe.h"
 #include "core/protocol/inputmessage.h"
+#include "core/protocol/clipboardmessage.h"
 #include "core/settings/applicationsettings.h"
 
 #include <QtCore/QObject>
@@ -38,6 +39,7 @@ public slots:
 	virtual void stopStreaming() = 0;
 	virtual void pushVideoFrame(const KVideoFrame &frame) = 0;
 	virtual void sendInputMessage(const KInputMessage &message) = 0;
+	virtual void sendClipboardMessage(const KClipboardMessage &message) = 0;
 	virtual void sendStreamConfig(const KStreamConfig &config) = 0;
 	virtual void handleCaptureFailure() = 0;
 	virtual void applyApplicationSettings(const KApplicationSettings &settings) = 0;
@@ -60,6 +62,8 @@ signals:
 	void stopCaptureRequested();
 	void streamConfigChanged(const KStreamConfig &config);
 	void inputChannelChanged(bool bOpen);
+	void clipboardMessageReceived(const KClipboardMessage &message);
+	void clipboardChannelChanged(bool bOpen);
 	void sessionChannelChanged(bool bOpen);
 	void inputTraceUpdated(quint64 nSeq, qint64 nInjectedMs);
 	void inputFeedbackFrameRequested();

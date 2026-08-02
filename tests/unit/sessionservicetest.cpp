@@ -117,6 +117,12 @@ namespace
 			++nSentInputCount;
 		}
 
+		void sendClipboardMessage(const KClipboardMessage &message) override
+		{
+			lastSentClipboardMessage = message;
+			++nSentClipboardCount;
+		}
+
 		void sendSessionMessage(const KSessionMessage &message) override
 		{
 			lastSentSessionMessage = message;
@@ -137,6 +143,16 @@ namespace
 		void openInputChannel()
 		{
 			emit inputChannelChanged(true);
+		}
+
+		void openClipboardChannel()
+		{
+			emit clipboardChannelChanged(true);
+		}
+
+		void deliverClipboardMessage(const KClipboardMessage &message)
+		{
+			emit clipboardMessageReceived(message);
 		}
 
 		void deliverSessionMessage(const KSessionMessage &message)
@@ -167,6 +183,7 @@ namespace
 		KSessionRole initializedRole = ControllerSessionRole;
 		KSessionMessage lastSentSessionMessage;
 		KInputMessage lastSentInputMessage;
+		KClipboardMessage lastSentClipboardMessage;
 		KVideoFrame lastVideoFrame;
 		KStreamConfig lastStreamConfig;
 		QString strLastSignalingMessage;
@@ -176,6 +193,7 @@ namespace
 		int nRestartIceCount = 0;
 		int nVideoFrameCount = 0;
 		int nSentInputCount = 0;
+		int nSentClipboardCount = 0;
 		int nSentSessionCount = 0;
 		int nStreamConfigCount = 0;
 	};

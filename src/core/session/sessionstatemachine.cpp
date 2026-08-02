@@ -179,6 +179,11 @@ bool KSessionStateMachine::canSendVideo() const
 	return m_role == ControlledSessionRole && m_state == StreamingSessionState;
 }
 
+bool KSessionStateMachine::canSyncClipboard() const
+{
+	return m_state == StreamingSessionState;
+}
+
 bool KSessionStateMachine::isConnecting() const
 {
 	return m_role == ControllerSessionRole && m_state == ConnectingSessionState;

@@ -2,6 +2,7 @@
 
 #include "adapters/windows/device/windowsdeviceinfoprovider.h"
 #include "adapters/windows/input/windowsinputinjector.h"
+#include "adapters/clipboard/qtclipboardadapter.h"
 #include "adapters/signaling/tcpsignalingtransport.h"
 #include "adapters/discovery/udplandiscoverytransport.h"
 #include "adapters/settings/qsettingsrecentdevicestore.h"
@@ -16,6 +17,7 @@
 #include "transport/webrtc/webrtcpeer.h"
 #include "session/sessioncoordinator.h"
 #include "settings/applicationsettingsservice.h"
+#include "clipboard/clipboardsyncservice.h"
 #include "ui_bridge/webviewwidget.h"
 #include "ui_bridge/devicediscoveryviewmodel.h"
 
@@ -81,6 +83,10 @@ KApplicationComposition::KApplicationComposition(QObject *pParent)
 		this))
 	, m_pApplicationSettingsService(new KApplicationSettingsService(
 		std::make_unique<KQSettingsApplicationStore>(ApplicationSettingsFilePath()),
+		this))
+	, m_pClipboardSyncService(new KClipboardSyncService(
+		std::make_unique<KQtClipboardAdapter>(),
+		m_pSessionService,
 		this))
 {
 	m_pRecentDeviceService->initialize();
@@ -184,6 +190,14 @@ void KApplicationComposition::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWin
 	KVideoRenderWidget *pVideoRenderWidget = pWindow->videoRenderWidget();
 	connect(pWebViewWidget, &KWebViewWidget::retryLastConnectionRequested,
 		m_pSessionViewModel, &KSessionViewModel::retryLastConnection);
+	connect(pWebViewWidget, &KWebViewWidget::setClipboardSyncEnabledRequested,
+		m_pClipboardSyncService, &KClipboardSyncService::setEnabled);
+	connect(pWebViewWidget, &KWebViewWidget::requestClipboardSyncStateRequested,
+		m_pClipboardSyncService, &KClipboardSyncService::requestState);
+	connect(m_pClipboardSyncService, &KClipboardSyncService::syncStateChanged,
+		pWebViewWidget, &KWebViewWidget::sendClipboardSyncStateChanged);
+	connect(m_pClipboardSyncService, &KClipboardSyncService::syncError,
+		pWebViewWidget, &KWebViewWidget::sendClipboardSyncError);
 	connect(m_pSessionViewModel, &KSessionViewModel::statusChanged,
 		pWebViewWidget, &KWebViewWidget::sendStatusChanged);
 	connect(m_pSessionViewModel, &KSessionViewModel::errorOccurred,
@@ -251,6 +265,7 @@ void KApplicationComposition::shutdown()
 		return;
 
 	m_bShutdown = true;
+	m_pClipboardSyncService->shutdown();
 	m_pDiscoveryService->stop();
 	m_pSessionService->disconnectSession();
 	m_pCaptureService->stopCapture();

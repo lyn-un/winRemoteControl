@@ -33,6 +33,13 @@ export function useNativeState() {
   const [recentDeviceError, setRecentDeviceError] = useState("");
   const [applicationSettings, setApplicationSettings] = useState(null);
   const [applicationSettingsError, setApplicationSettingsError] = useState("");
+  const [clipboardSync, setClipboardSync] = useState({
+    enabled: true,
+    available: false,
+    active: false,
+    status: "unavailable",
+  });
+  const [clipboardSyncError, setClipboardSyncError] = useState("");
   const [incomingAccessRequest, setIncomingAccessRequest] = useState(null);
   const [fps, setFps] = useState(0);
   const frameTimes = useRef([]);
@@ -180,6 +187,22 @@ export function useNativeState() {
         return;
       }
 
+      if (message.type === "clipboardSyncStateChanged") {
+        setClipboardSync({
+          enabled: Boolean(message.enabled),
+          available: Boolean(message.available),
+          active: Boolean(message.active),
+          status: message.status || "unavailable",
+        });
+        setClipboardSyncError("");
+        return;
+      }
+
+      if (message.type === "clipboardSyncError") {
+        setClipboardSyncError(message.message || "剪贴板同步失败");
+        return;
+      }
+
       if (message.type === "frameReady") {
         const now = performance.now();
         frameTimes.current = [...frameTimes.current.filter((item) => now - item < 1000), now];
@@ -245,6 +268,8 @@ export function useNativeState() {
     applicationSettings,
     applicationSettingsError,
     incomingAccessRequest,
+    clipboardSync,
+    clipboardSyncError,
     fps,
   };
 }

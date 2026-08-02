@@ -6,6 +6,7 @@
 #include "core/media/streamconfig.h"
 #include "core/media/videoframe.h"
 #include "core/protocol/inputmessage.h"
+#include "core/protocol/clipboardmessage.h"
 #include "core/protocol/sessionmessage.h"
 #include "core/session/sessionstatemachine.h"
 
@@ -31,6 +32,7 @@ public:
 	virtual void handleSignalingMessage(const QString &strMessage) = 0;
 	virtual void pushVideoFrame(const KVideoFrame &frame) = 0;
 	virtual void sendInputMessage(const KInputMessage &message) = 0;
+	virtual void sendClipboardMessage(const KClipboardMessage &message) = 0;
 	virtual void sendSessionMessage(const KSessionMessage &message) = 0;
 	virtual void setStreamConfig(const KStreamConfig &config) = 0;
 
@@ -46,6 +48,8 @@ signals:
 	void networkStatsReady(const KNetworkStats &stats);
 	void inputMessageReceived(const KInputMessage &message);
 	void inputChannelChanged(bool bOpen);
+	void clipboardMessageReceived(const KClipboardMessage &message);
+	void clipboardChannelChanged(bool bOpen);
 	void sessionMessageReceived(const KSessionMessage &message);
 	void sessionChannelChanged(bool bOpen);
 	void connectionInterrupted();

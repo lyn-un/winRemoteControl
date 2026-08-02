@@ -5,6 +5,7 @@
 #include "core/media/networkstats.h"
 #include "core/media/streamconfig.h"
 #include "core/media/videoframe.h"
+#include "core/protocol/clipboardmessage.h"
 
 #include <QtCore/QMetaType>
 #include <QtNetwork/QNetworkProxy>
@@ -27,6 +28,7 @@ int main(int nArgc, char *pArgv[])
 	qRegisterMetaType<KStreamConfig>("KStreamConfig");
 	qRegisterMetaType<KNetworkStats>("KNetworkStats");
 	qRegisterMetaType<KVideoFrame>("KVideoFrame");
+	qRegisterMetaType<KClipboardMessage>("KClipboardMessage");
 
 	KMainWindow mainWindow;
 	mainWindow.resize(1280, 760);

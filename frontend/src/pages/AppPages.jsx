@@ -516,6 +516,7 @@ export function DesktopPage() {
 
   useEffect(() => {
     sendCommand("setStreamConfig", qualityPresets.auto);
+    sendCommand("requestClipboardSyncState");
   }, []);
 
   return (
@@ -530,7 +531,7 @@ export function DesktopPage() {
           <span className="desktop-stat">{state.frame ? `${state.frame.width} × ${state.frame.height}` : "等待画面"}</span>
           <span className="desktop-stat">{state.fps} FPS</span>
         </div>
-        <DesktopWindowControls />
+        <DesktopWindowControls clipboardSync={state.clipboardSync} />
       </header>
       <section className="desktop-stage">
         <div ref={previewSlotRef} className="native-preview-slot desktop-slot" />
@@ -554,6 +555,7 @@ export function DesktopPage() {
         )}
       </section>
       {state.error && <p className="desktop-error">{state.error}</p>}
+      {state.clipboardSyncError && <p className="desktop-error clipboard-error">{state.clipboardSyncError}</p>}
     </main>
   );
 }

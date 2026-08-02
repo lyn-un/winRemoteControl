@@ -32,6 +32,7 @@ namespace
 		check(stateMachine.canEnterRemoteDesktop(), QStringLiteral("connected controller can enter desktop"));
 		check(stateMachine.beginStreaming(), QStringLiteral("connected controller can stream"));
 		check(stateMachine.canSendInput(), QStringLiteral("streaming controller can send input"));
+		check(stateMachine.canSyncClipboard(), QStringLiteral("streaming controller can sync clipboard"));
 		check(stateMachine.canLeaveRemoteDesktop(), QStringLiteral("streaming controller can leave desktop"));
 		check(!stateMachine.markConnected(),
 			QStringLiteral("duplicate channel event cannot regress an active stream"));
@@ -62,6 +63,8 @@ namespace
 		check(stateMachine.beginStreaming(), QStringLiteral("controlled host begins streaming"));
 		check(stateMachine.canReceiveInput() && stateMachine.canSendVideo(),
 			QStringLiteral("streaming controlled host enables media and input"));
+		check(stateMachine.canSyncClipboard(),
+			QStringLiteral("streaming controlled host can sync clipboard"));
 		check(stateMachine.beginStopping(), QStringLiteral("controlled session starts stopping"));
 		check(!stateMachine.beginStopping(), QStringLiteral("duplicate stop is rejected"));
 		stateMachine.finish(true);
@@ -86,6 +89,8 @@ namespace
 		check(stateMachine.isReconnecting(), QStringLiteral("reconnecting state is recognized"));
 		check(!stateMachine.canSendInput(), QStringLiteral("input is disabled while reconnecting"));
 		check(!stateMachine.canSendVideo(), QStringLiteral("video sending is disabled while reconnecting"));
+		check(!stateMachine.canSyncClipboard(),
+			QStringLiteral("clipboard sync is disabled while reconnecting"));
 		check(!stateMachine.beginReconnecting(),
 			QStringLiteral("duplicate reconnecting transition is rejected"));
 		check(stateMachine.restore(), QStringLiteral("interrupted stream can restore"));

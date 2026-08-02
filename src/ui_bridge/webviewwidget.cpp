@@ -216,6 +216,28 @@ void KWebViewWidget::sendIncomingAccessRequestCleared(
 	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
 }
 
+void KWebViewWidget::sendClipboardSyncStateChanged(bool bEnabled,
+	bool bAvailable,
+	bool bActive,
+	const QString &strStatus)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("clipboardSyncStateChanged"));
+	object.insert(QStringLiteral("enabled"), bEnabled);
+	object.insert(QStringLiteral("available"), bAvailable);
+	object.insert(QStringLiteral("active"), bActive);
+	object.insert(QStringLiteral("status"), strStatus);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendClipboardSyncError(const QString &strError)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("clipboardSyncError"));
+	object.insert(QStringLiteral("message"), strError);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
 void KWebViewWidget::resizeEvent(QResizeEvent *pEvent)
 {
 	QWidget::resizeEvent(pEvent);
@@ -356,6 +378,11 @@ void KWebViewWidget::handleWebMessage(const QString &strMessage)
 			static_cast<quint16>(document.object().value(QStringLiteral("port")).toInt(39000)));
 	else if (strCommand == QStringLiteral("retryLastConnection"))
 		emit retryLastConnectionRequested();
+	else if (strCommand == QStringLiteral("setClipboardSyncEnabled"))
+		emit setClipboardSyncEnabledRequested(
+			document.object().value(QStringLiteral("enabled")).toBool(true));
+	else if (strCommand == QStringLiteral("requestClipboardSyncState"))
+		emit requestClipboardSyncStateRequested();
 	else if (strCommand == QStringLiteral("refreshLanDevices"))
 		emit refreshLanDevicesRequested();
 	else if (strCommand == QStringLiteral("connectLanDevice"))

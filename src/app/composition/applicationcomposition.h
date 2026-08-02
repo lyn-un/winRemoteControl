@@ -12,6 +12,7 @@ class KDeviceDiscoveryController;
 class KDeviceDiscoveryViewModel;
 class KRecentDeviceService;
 class KApplicationSettingsService;
+class KClipboardSyncService;
 
 class KApplicationComposition : public QObject
 {
@@ -40,6 +41,7 @@ private:
 	KDeviceDiscoveryViewModel *m_pDiscoveryViewModel = nullptr;
 	KRecentDeviceService *m_pRecentDeviceService = nullptr;
 	KApplicationSettingsService *m_pApplicationSettingsService = nullptr;
+	KClipboardSyncService *m_pClipboardSyncService = nullptr;
 	bool m_bShutdown = false;
 };
 
