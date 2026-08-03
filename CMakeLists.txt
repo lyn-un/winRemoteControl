@@ -76,6 +76,9 @@ add_library(wrc_core STATIC
 	src/core/discovery/discovereddevice.h
 	src/core/discovery/landiscoverytransport.h
 	src/core/input/inputinjectorinterface.h
+	src/core/media/captureframe.h
+	src/core/media/captureframesink.h
+	src/core/media/capturesource.h
 	src/core/media/capturecontroller.h
 	src/core/session/deviceinfoprovider.h
 	src/core/session/sessionerror.cpp
@@ -364,13 +367,6 @@ target_link_libraries(wrc_webrtc_adapter PUBLIC
 )
 
 add_library(wrc_windows_capture_adapter STATIC
-	src/common/framewatermark.cpp
-	src/common/framewatermark.h
-	src/capture/captureframe.h
-	src/capture/captureservice.cpp
-	src/capture/captureservice.h
-	src/capture/captureworker.cpp
-	src/capture/captureworker.h
 	src/capture/dxgidesktopduplicator.cpp
 	src/capture/dxgidesktopduplicator.h
 )
@@ -386,15 +382,45 @@ target_include_directories(wrc_windows_capture_adapter PUBLIC
 	"${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 
-target_include_directories(wrc_windows_capture_adapter PRIVATE
-	"${WEBRTC_ROOT}"
-	"${WEBRTC_ROOT}/third_party/libyuv/include"
-)
-
 target_link_libraries(wrc_windows_capture_adapter PUBLIC
 	wrc_core
+	Qt6::Core
+	Qt6::Gui
+	d3d11
+	dxgi
+	dxguid
+)
+
+add_library(wrc_capture_application STATIC
+	src/common/framewatermark.cpp
+	src/common/framewatermark.h
+	src/capture/captureframesink.cpp
+	src/capture/captureframesink.h
+	src/capture/captureservice.cpp
+	src/capture/captureservice.h
+	src/capture/captureworker.cpp
+	src/capture/captureworker.h
+)
+
+target_compile_definitions(wrc_capture_application PRIVATE
+	UNICODE
+	_UNICODE
+	WIN32_LEAN_AND_MEAN
+	NOMINMAX
+)
+
+target_include_directories(wrc_capture_application PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_include_directories(wrc_capture_application PRIVATE
+	"${FFMPEG_ROOT}/include"
+)
+
+target_link_libraries(wrc_capture_application PUBLIC
+	wrc_core
 	wrc_ffmpeg_adapter
-	wrc_webrtc_adapter
+	wrc_windows_capture_adapter
 	wrc_diagnostics
 	Qt6::Core
 	Qt6::Gui
@@ -478,6 +504,7 @@ target_link_libraries(winRemoteControl PRIVATE
 	wrc_udp_discovery_adapter
 	wrc_webrtc_adapter
 	wrc_windows_adapters
+	wrc_capture_application
 	wrc_windows_capture_adapter
 	wrc_qt_presentation
 	Qt6::Widgets
@@ -487,6 +514,15 @@ target_link_libraries(winRemoteControl PRIVATE
 )
 
 if(BUILD_TESTING)
+	add_executable(wrc_capture_pipeline_tests
+		tests/unit/capturepipelinetest.cpp
+	)
+	target_link_libraries(wrc_capture_pipeline_tests PRIVATE
+		wrc_capture_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_capture_pipeline_tests COMMAND wrc_capture_pipeline_tests)
+
 	add_executable(wrc_protocol_tests
 		tests/unit/protocolcodectest.cpp
 	)

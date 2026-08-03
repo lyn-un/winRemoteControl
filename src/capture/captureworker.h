@@ -1,20 +1,16 @@
 #ifndef _WINREMOTECONTROL_CAPTUREWORKER_H_
 #define _WINREMOTECONTROL_CAPTUREWORKER_H_
 
-#include "core/media/decodedvideoframe.h"
-#include "core/media/streamconfig.h"
-#include "core/media/videoframe.h"
+#include "capture/captureframesink.h"
+#include "core/media/capturesource.h"
 
-#include <QtCore/QObject>
 #include <QtCore/QElapsedTimer>
-#include <QtCore/QString>
+#include <QtCore/QObject>
 
 #include <atomic>
 #include <condition_variable>
+#include <memory>
 #include <mutex>
-#include <vector>
-
-struct KCaptureFrame;
 
 class KCaptureWorker : public QObject
 {
@@ -24,10 +20,13 @@ public:
 	enum WorkMode
 	{
 		LocalPreviewWorkMode,
-		WebRtcSourceWorkMode
+		RemoteVideoWorkMode
 	};
 
 	explicit KCaptureWorker(WorkMode mode = LocalPreviewWorkMode, QObject *pParent = nullptr);
+	KCaptureWorker(std::unique_ptr<IKCaptureSource> upSource,
+		std::unique_ptr<IKCaptureFrameSink> upSink,
+		QObject *pParent = nullptr);
 	~KCaptureWorker() override;
 
 	KCaptureWorker(const KCaptureWorker &) = delete;
@@ -44,35 +43,21 @@ signals:
 	void statusChanged(const QString &strStatus);
 	void captureError(const QString &strMessage);
 	void decodedFrameReady(const KDecodedVideoFrame &frame);
-	void webRtcFrameReady(const KVideoFrame &frame);
+	void videoFrameReady(const KVideoFrame &frame);
 	void frameReady(int nWidth, int nHeight, quint64 nFrameIndex, qint64 nTimestampMs);
 	void workFinished();
 
 private:
-	KStreamConfig streamConfig() const;
-	void inputTraceState(quint64 *pSeq, qint64 *pInjectedMs) const;
 	bool waitForNextFrame(qint64 nSleepMs);
 	bool shouldTraceImmediateFrameRequest();
-	static KStreamConfig normalizeStreamConfig(const KStreamConfig &config);
-	static bool convertBgraToI420(KCaptureFrame &captureFrame,
-		const KStreamConfig &config,
-		quint64 nLastInputSeq,
-		qint64 nLastInputAgeMs,
-		KVideoFrame *pVideoFrame);
-	static bool resizeBgraFrame(const KCaptureFrame &captureFrame,
-		int nTargetWidth,
-		int nTargetHeight,
-		std::vector<unsigned char> *pScaledBgraBuffer);
 
-	WorkMode m_mode = LocalPreviewWorkMode;
+	std::unique_ptr<IKCaptureSource> m_upSource;
+	std::unique_ptr<IKCaptureFrameSink> m_upSink;
 	std::atomic_bool m_bRunning = false;
-	mutable std::mutex m_configMutex;
-	mutable std::mutex m_inputTraceMutex;
+	std::atomic_int m_nFrameRate = 30;
 	std::mutex m_waitMutex;
 	std::condition_variable m_waitCondition;
-	KStreamConfig m_streamConfig;
-	quint64 m_nLastInputSeq = 0;
-	qint64 m_nLastInputInjectedMs = -1;
+	bool m_bRemoteVideo = false;
 	bool m_bImmediateFrameRequested = false;
 	bool m_bImmediateFrameTracePending = false;
 	QElapsedTimer m_immediateFrameTraceTimer;

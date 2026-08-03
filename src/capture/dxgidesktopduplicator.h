@@ -1,7 +1,7 @@
 #ifndef _WINREMOTECONTROL_DXGIDESKTOPDUPLICATOR_H_
 #define _WINREMOTECONTROL_DXGIDESKTOPDUPLICATOR_H_
 
-#include "capture/captureframe.h"
+#include "core/media/capturesource.h"
 
 #include <QtCore/QString>
 
@@ -13,25 +13,18 @@
 
 #include <vector>
 
-class KDxgiDesktopDuplicator
+class KDxgiDesktopDuplicator : public IKCaptureSource
 {
 public:
-	enum CaptureResult
-	{
-		CapturedCaptureResult,
-		TimeoutCaptureResult,
-		ErrorCaptureResult
-	};
-
 	KDxgiDesktopDuplicator();
 	~KDxgiDesktopDuplicator();
 
 	KDxgiDesktopDuplicator(const KDxgiDesktopDuplicator &) = delete;
 	KDxgiDesktopDuplicator &operator=(const KDxgiDesktopDuplicator &) = delete;
 
-	bool initialize(QString *pErrorMessage);
-	void shutdown();
-	CaptureResult captureNextFrame(KCaptureFrame *pFrame, QString *pErrorMessage);
+	bool initialize(QString *pErrorMessage) override;
+	void shutdown() override;
+	CaptureResult captureNextFrame(KCaptureFrame *pFrame, QString *pErrorMessage) override;
 
 private:
 	bool detectHdrOutput(const Microsoft::WRL::ComPtr<IDXGIOutput> &spOutput, QString *pErrorMessage);

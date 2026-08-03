@@ -28,7 +28,7 @@ void KCaptureService::startCapture()
 
 void KCaptureService::startWebRtcCapture()
 {
-	startCaptureWithMode(KCaptureWorker::WebRtcSourceWorkMode);
+	startCaptureWithMode(KCaptureWorker::RemoteVideoWorkMode);
 }
 
 void KCaptureService::startCaptureWithMode(KCaptureWorker::WorkMode mode)
@@ -37,7 +37,7 @@ void KCaptureService::startCaptureWithMode(KCaptureWorker::WorkMode mode)
 		return;
 
 	clearPendingWebRtcFrame();
-	m_bAcceptWebRtcFrames = (mode == KCaptureWorker::WebRtcSourceWorkMode);
+	m_bAcceptWebRtcFrames = (mode == KCaptureWorker::RemoteVideoWorkMode);
 	m_pCaptureThread = new QThread(this);
 	m_pCaptureWorker = new KCaptureWorker(mode);
 	m_pCaptureWorker->setStreamConfig(m_streamConfig);
@@ -52,7 +52,7 @@ void KCaptureService::startCaptureWithMode(KCaptureWorker::WorkMode mode)
 		this, &KCaptureService::captureError);
 	connect(m_pCaptureWorker, &KCaptureWorker::decodedFrameReady,
 		this, &KCaptureService::decodedFrameReady);
-	connect(m_pCaptureWorker, &KCaptureWorker::webRtcFrameReady,
+	connect(m_pCaptureWorker, &KCaptureWorker::videoFrameReady,
 		this, &KCaptureService::enqueueWebRtcFrame, Qt::QueuedConnection);
 	connect(m_pCaptureWorker, &KCaptureWorker::frameReady,
 		this, &KCaptureService::frameReady);

@@ -375,7 +375,7 @@ bool KDxgiDesktopDuplicator::createDuplication(const Microsoft::WRL::ComPtr<IDXG
 	return true;
 }
 
-KDxgiDesktopDuplicator::CaptureResult KDxgiDesktopDuplicator::captureNextFrame(KCaptureFrame *pFrame,
+IKCaptureSource::CaptureResult KDxgiDesktopDuplicator::captureNextFrame(KCaptureFrame *pFrame,
 	QString *pErrorMessage)
 {
 	if (pFrame == nullptr)
