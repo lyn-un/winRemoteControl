@@ -161,6 +161,8 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		pWebViewWidget, &KWebViewWidget::sendWebRtcStateChanged);
 	connect(m_pSessionViewModel, &KSessionViewModel::sessionChannelChanged,
 		pWebViewWidget, &KWebViewWidget::sendSessionChannelChanged);
+	connect(m_pSessionService, &KSessionCoordinator::sessionCapabilitiesChanged,
+		pWebViewWidget, &KWebViewWidget::sendSessionCapabilitiesChanged);
 	connect(m_pSessionViewModel, &KSessionViewModel::remoteDeviceInfoChanged,
 		pWebViewWidget, &KWebViewWidget::sendDeviceInfoChanged);
 	connect(m_pDiscoveryViewModel, &KDeviceDiscoveryViewModel::lanDevicesChanged,
@@ -220,6 +222,8 @@ void KApplicationComposition::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWin
 		pWindow, &KRemoteDesktopWindow::handleSessionStateChanged);
 	connect(m_pSessionViewModel, &KSessionViewModel::remoteDeviceInfoChanged,
 		pWebViewWidget, &KWebViewWidget::sendDeviceInfoChanged);
+	connect(m_pSessionService, &KSessionCoordinator::sessionCapabilitiesChanged,
+		pWebViewWidget, &KWebViewWidget::sendSessionCapabilitiesChanged);
 	connect(m_pSessionViewModel, &KSessionViewModel::remoteDeviceInfoChanged,
 		pWindow,
 		[pWindow](const QString &, const QString &, const QString &, int nScreenWidth, int nScreenHeight)

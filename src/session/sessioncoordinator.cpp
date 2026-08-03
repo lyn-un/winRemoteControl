@@ -15,6 +15,7 @@
 #include <QtCore/QUuid>
 
 #include <utility>
+#include <algorithm>
 
 namespace
 {
@@ -60,6 +61,7 @@ KSessionCoordinator::KSessionCoordinator(
 	, m_pReconnectTimer(new QTimer(this))
 	, m_pApprovalTimer(new QTimer(this))
 	, m_pStopWatchdogTimer(new QTimer(this))
+	, m_pCapabilityTimer(new QTimer(this))
 {
 	Q_ASSERT(m_spRemotePeerTransport != nullptr);
 	Q_ASSERT(m_pSignaling != nullptr);
@@ -68,12 +70,15 @@ KSessionCoordinator::KSessionCoordinator(
 	m_pReconnectTimer->setSingleShot(true);
 	m_pApprovalTimer->setSingleShot(true);
 	m_pStopWatchdogTimer->setSingleShot(true);
+	m_pCapabilityTimer->setSingleShot(true);
 	connect(m_pReconnectTimer, &QTimer::timeout,
 		this, &KSessionCoordinator::handleReconnectTimeout);
 	connect(m_pApprovalTimer, &QTimer::timeout,
 		this, &KSessionCoordinator::handleApprovalTimeout);
 	connect(m_pStopWatchdogTimer, &QTimer::timeout,
 		this, &KSessionCoordinator::handleStopWatchdog);
+	connect(m_pCapabilityTimer, &QTimer::timeout,
+		this, &KSessionCoordinator::handleCapabilityTimeout);
 	connect(m_pSignaling, &KSignalingTransport::stateChanged,
 		this, &KSessionCoordinator::signalingChanged);
 	connect(m_pSignaling, &KSignalingTransport::signalingError,
@@ -210,6 +215,10 @@ void KSessionCoordinator::initializeSessionHandlers()
 		[this](const KSessionMessage &message) { handleEndSessionMessage(message); });
 	m_sessionHandlers.insert(StreamConfigSessionMessageType,
 		[this](const KSessionMessage &message) { handleStreamConfigMessage(message); });
+	m_sessionHandlers.insert(CapabilitiesSessionMessageType,
+		[this](const KSessionMessage &message) { handleCapabilitiesMessage(message); });
+	m_sessionHandlers.insert(CapabilityRejectedSessionMessageType,
+		[this](const KSessionMessage &message) { handleCapabilityRejectedMessage(message); });
 }
 
 void KSessionCoordinator::publishSessionState()
@@ -539,6 +548,19 @@ void KSessionCoordinator::sendStreamConfig(const KStreamConfig &config)
 	KSessionMessage message;
 	message.type = StreamConfigSessionMessageType;
 	message.streamConfig = config;
+	if (m_negotiatedCapabilities.bValid)
+	{
+		if (message.streamConfig.nWidth > 0)
+			message.streamConfig.nWidth = std::min(message.streamConfig.nWidth,
+				m_negotiatedCapabilities.nMaximumWidth);
+		if (message.streamConfig.nHeight > 0)
+			message.streamConfig.nHeight = std::min(message.streamConfig.nHeight,
+				m_negotiatedCapabilities.nMaximumHeight);
+		message.streamConfig.nFps = std::min(message.streamConfig.nFps,
+			m_negotiatedCapabilities.nMaximumFps);
+		message.streamConfig.nBitrateKbps = std::min(message.streamConfig.nBitrateKbps,
+			m_negotiatedCapabilities.nMaximumBitrateKbps);
+	}
 	sendSessionMessage(message);
 }
 
@@ -609,6 +631,7 @@ void KSessionCoordinator::finishSession(KSessionEndReason reason,
 	}
 	m_pReconnectTimer->stop();
 	m_pApprovalTimer->stop();
+	m_pCapabilityTimer->stop();
 	m_nReconnectGeneration = 0;
 	m_reconnectElapsedTimer.invalidate();
 	m_bSignalingConnected = false;
@@ -619,6 +642,9 @@ void KSessionCoordinator::finishSession(KSessionEndReason reason,
 	m_bInputChannelOpen = false;
 	m_bClipboardChannelOpen = false;
 	m_bSessionChannelOpen = false;
+	m_bCapabilitiesReceived = false;
+	m_negotiatedCapabilities = KNegotiatedCapabilities();
+	emit sessionCapabilitiesChanged(m_negotiatedCapabilities);
 	m_pInputInjector->releaseAllInputs();
 	resetInputTraceState();
 	m_bCaptureShutdownPending = m_bCaptureActive;
@@ -982,7 +1008,7 @@ void KSessionCoordinator::handleClipboardChannelChanged(bool bOpen)
 		QStringLiteral("clipboard"),
 		-1,
 		QStringLiteral("open=%1").arg(bOpen ? 1 : 0));
-	emit clipboardChannelChanged(bOpen);
+	emit clipboardChannelChanged(bOpen && m_negotiatedCapabilities.bClipboardText);
 }
 
 void KSessionCoordinator::handleSessionChannelChanged(bool bOpen)
@@ -996,6 +1022,8 @@ void KSessionCoordinator::handleSessionChannelChanged(bool bOpen)
 		QStringLiteral("open=%1").arg(bOpen ? 1 : 0));
 	if (!bOpen)
 	{
+		m_pCapabilityTimer->stop();
+		m_bCapabilitiesReceived = false;
 		m_bDeviceInfoRequested = false;
 		if (bWasOpen && !m_sessionStateMachine.isStopping())
 		{
@@ -1007,9 +1035,28 @@ void KSessionCoordinator::handleSessionChannelChanged(bool bOpen)
 		}
 		return;
 	}
+	m_bCapabilitiesReceived = false;
+	m_negotiatedCapabilities = KNegotiatedCapabilities();
+	m_pCapabilityTimer->start(3000);
+	KSessionMessage capabilitiesMessage;
+	capabilitiesMessage.type = CapabilitiesSessionMessageType;
+	capabilitiesMessage.capabilities = localCapabilities();
+	sendSessionMessage(capabilitiesMessage);
+}
+
+void KSessionCoordinator::completeCapabilityNegotiation(
+	const KNegotiatedCapabilities &capabilities)
+{
+	if (m_bCapabilitiesReceived || !m_bSessionChannelOpen)
+		return;
+	m_bCapabilitiesReceived = true;
+	m_pCapabilityTimer->stop();
+	m_negotiatedCapabilities = capabilities;
 	if (!m_sessionStateMachine.markConnected())
 		return;
 	publishSessionState();
+	emit sessionCapabilitiesChanged(capabilities);
+	emit clipboardChannelChanged(m_bClipboardChannelOpen && capabilities.bClipboardText);
 	if (m_sessionStateMachine.role() == ControllerSessionRole)
 	{
 		if (m_bDeviceInfoRequested)
@@ -1032,8 +1079,90 @@ void KSessionCoordinator::handleSessionChannelChanged(bool bOpen)
 	}
 }
 
+KSessionCapabilities KSessionCoordinator::localCapabilities() const
+{
+	KSessionCapabilities capabilities;
+	capabilities.supportedCodecs = { QStringLiteral("h264") };
+	capabilities.supportedChannels = {
+		QStringLiteral("video"), QStringLiteral("session"), QStringLiteral("input"),
+		QStringLiteral("clipboard")
+	};
+	capabilities.nMaximumWidth = KProtocolConstraints::kMaximumStreamWidth;
+	capabilities.nMaximumHeight = KProtocolConstraints::kMaximumStreamHeight;
+	capabilities.nMaximumFps = KProtocolConstraints::kMaximumStreamFps;
+	capabilities.nMaximumBitrateKbps = KProtocolConstraints::kMaximumStreamBitrateKbps;
+	KMonitorCapability monitor;
+	monitor.strId = QStringLiteral("default");
+	monitor.nWidth = capabilities.nMaximumWidth;
+	monitor.nHeight = capabilities.nMaximumHeight;
+	monitor.bPrimary = true;
+	capabilities.monitorList.append(monitor);
+	return capabilities;
+}
+
+void KSessionCoordinator::handleCapabilitiesMessage(const KSessionMessage &message)
+{
+	if (!m_bSessionChannelOpen || m_sessionStateMachine.state() != NegotiatingSessionState)
+		return;
+	KNegotiatedCapabilities negotiated;
+	QString strError;
+	if (!KSessionMessageCodec::negotiate(localCapabilities(), message.capabilities,
+			&negotiated, &strError))
+	{
+		KSessionMessage rejection;
+		rejection.type = CapabilityRejectedSessionMessageType;
+		rejection.strReason = QStringLiteral("incompatible_capabilities");
+		sendSessionMessage(rejection);
+		finishSession(ConnectFailedSessionEndReason, QStringLiteral("incompatible_protocol"),
+			m_sessionStateMachine.shouldKeepListening(), false, false);
+		reportSessionError(ProtocolSessionErrorDomain,
+			IncompatibleProtocolSessionErrorCode, NegotiationSessionErrorStage,
+			false, strError);
+		return;
+	}
+	completeCapabilityNegotiation(negotiated);
+}
+
+void KSessionCoordinator::handleCapabilityRejectedMessage(const KSessionMessage &message)
+{
+	if (m_sessionStateMachine.state() != NegotiatingSessionState)
+		return;
+	finishSession(ConnectFailedSessionEndReason, QStringLiteral("incompatible_protocol"),
+		m_sessionStateMachine.shouldKeepListening(), false, false);
+	reportSessionError(ProtocolSessionErrorDomain,
+		IncompatibleProtocolSessionErrorCode, NegotiationSessionErrorStage,
+		false, message.strReason);
+}
+
+void KSessionCoordinator::handleCapabilityTimeout()
+{
+	if (m_sessionStateMachine.state() != NegotiatingSessionState || m_bCapabilitiesReceived)
+		return;
+	finishSession(ConnectFailedSessionEndReason, QStringLiteral("capability_timeout"),
+		m_sessionStateMachine.shouldKeepListening(), false, false);
+	reportSessionError(ProtocolSessionErrorDomain,
+		IncompatibleProtocolSessionErrorCode, NegotiationSessionErrorStage,
+		false, QStringLiteral("The peer does not support capability negotiation; upgrade both clients"));
+}
+
 void KSessionCoordinator::handleSessionMessage(const KSessionMessage &message)
 {
+	if (!m_bCapabilitiesReceived
+		&& message.type != CapabilitiesSessionMessageType
+		&& message.type != CapabilityRejectedSessionMessageType
+		&& message.type != EndSessionMessageType)
+	{
+		KSessionMessage rejection;
+		rejection.type = CapabilityRejectedSessionMessageType;
+		rejection.strReason = QStringLiteral("capability_negotiation_required");
+		sendSessionMessage(rejection);
+		finishSession(ConnectFailedSessionEndReason, QStringLiteral("incompatible_protocol"),
+			m_sessionStateMachine.shouldKeepListening(), false, false);
+		reportSessionError(ProtocolSessionErrorDomain,
+			IncompatibleProtocolSessionErrorCode, NegotiationSessionErrorStage,
+			false, QStringLiteral("The peer sent session data before capability negotiation"));
+		return;
+	}
 	const QString strMessage = KSessionMessageCodec::encode(message);
 	const QString strType = KSessionMessageCodec::typeName(message.type);
 	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),

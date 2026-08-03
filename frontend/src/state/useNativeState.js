@@ -41,6 +41,7 @@ export function useNativeState() {
     status: "unavailable",
   });
   const [clipboardSyncError, setClipboardSyncError] = useState("");
+	const [sessionCapabilities, setSessionCapabilities] = useState(null);
   const [incomingAccessRequest, setIncomingAccessRequest] = useState(null);
   const [fps, setFps] = useState(0);
   const frameTimes = useRef([]);
@@ -216,6 +217,23 @@ export function useNativeState() {
         return;
       }
 
+		if (message.type === "sessionCapabilitiesChanged") {
+			setSessionCapabilities(message.available ? {
+				protocolVersion: Number(message.protocolVersion) || 0,
+				videoCodec: message.videoCodec || "",
+				maximumWidth: Number(message.maximumWidth) || 0,
+				maximumHeight: Number(message.maximumHeight) || 0,
+				maximumFps: Number(message.maximumFps) || 0,
+				maximumBitrateKbps: Number(message.maximumBitrateKbps) || 0,
+				clipboardText: Boolean(message.clipboardText),
+				keyboard: Boolean(message.keyboard),
+				unicodeText: Boolean(message.unicodeText),
+				mouseButtons: Boolean(message.mouseButtons),
+				mouseWheel: Boolean(message.mouseWheel),
+			} : null);
+			return;
+		}
+
       if (message.type === "frameReady") {
         const now = performance.now();
         frameTimes.current = [...frameTimes.current.filter((item) => now - item < 1000), now];
@@ -284,6 +302,7 @@ export function useNativeState() {
     incomingAccessRequest,
     clipboardSync,
     clipboardSyncError,
+		sessionCapabilities,
     fps,
   };
 }

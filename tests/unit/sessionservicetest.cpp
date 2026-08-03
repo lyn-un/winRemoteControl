@@ -165,6 +165,18 @@ namespace
 			emit sessionMessageReceived(m_nGeneration, message);
 		}
 
+		void deliverDefaultCapabilities()
+		{
+			KSessionMessage message;
+			message.type = CapabilitiesSessionMessageType;
+			message.capabilities.supportedCodecs = { QStringLiteral("h264") };
+			message.capabilities.supportedChannels = {
+				QStringLiteral("video"), QStringLiteral("session"), QStringLiteral("input"),
+				QStringLiteral("clipboard")
+			};
+			deliverSessionMessage(message);
+		}
+
 		void deliverInputMessage(const KInputMessage &message)
 		{
 			emit inputMessageReceived(m_nGeneration, message);
@@ -308,6 +320,7 @@ namespace
 			&& listeningAvailability.last() == qMakePair(false, quint16(0)),
 			QStringLiteral("incoming session pauses discovery availability"));
 		pTransport->openSessionChannel();
+		pTransport->deliverDefaultCapabilities();
 		pTransport->openInputChannel();
 
 		KSessionMessage deviceInfoRequest;
@@ -494,6 +507,7 @@ namespace
 		check(waitUntil([pControllerPeer]() { return pControllerPeer->nCreateOfferCount == 1; }),
 			QStringLiteral("automatic approval creates the initial offer"));
 		pControllerPeer->openSessionChannel();
+		pControllerPeer->deliverDefaultCapabilities();
 		pControllerPeer->openInputChannel();
 		controller.enterRemoteDesktop(KStreamConfig());
 

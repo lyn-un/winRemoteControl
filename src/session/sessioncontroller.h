@@ -7,6 +7,7 @@
 #include "core/media/videoframe.h"
 #include "core/protocol/inputmessage.h"
 #include "core/protocol/clipboardmessage.h"
+#include "core/protocol/sessionmessage.h"
 #include "core/settings/applicationsettings.h"
 #include "core/session/sessionerror.h"
 #include "core/session/sessionstatemachine.h"
@@ -72,6 +73,7 @@ signals:
 	void clipboardMessageReceived(const KClipboardMessage &message);
 	void clipboardChannelChanged(bool bOpen);
 	void sessionChannelChanged(bool bOpen);
+	void sessionCapabilitiesChanged(const KNegotiatedCapabilities &capabilities);
 	void inputTraceUpdated(quint64 nSeq, qint64 nInjectedMs);
 	void inputFeedbackFrameRequested();
 	void incomingAccessObserved(const QString &strDeviceName, const QString &strSourceAddress);

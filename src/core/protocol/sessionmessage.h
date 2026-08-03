@@ -4,6 +4,8 @@
 #include "core/media/streamconfig.h"
 
 #include <QtCore/QString>
+#include <QtCore/QStringList>
+#include <QtCore/QVector>
 
 enum KSessionMessageType
 {
@@ -13,7 +15,52 @@ enum KSessionMessageType
 	StartStreamingSessionMessageType,
 	StopStreamingSessionMessageType,
 	EndSessionMessageType,
-	StreamConfigSessionMessageType
+	StreamConfigSessionMessageType,
+	CapabilitiesSessionMessageType,
+	CapabilityRejectedSessionMessageType
+};
+
+struct KMonitorCapability
+{
+	QString strId;
+	int nWidth = 0;
+	int nHeight = 0;
+	bool bPrimary = false;
+};
+
+struct KSessionCapabilities
+{
+	int nProtocolMinVersion = 2;
+	int nProtocolMaxVersion = 2;
+	QStringList supportedCodecs;
+	QStringList supportedChannels;
+	int nMaximumWidth = 1920;
+	int nMaximumHeight = 1080;
+	int nMaximumFps = 60;
+	int nMaximumBitrateKbps = 20000;
+	bool bClipboardText = true;
+	bool bKeyboard = true;
+	bool bUnicodeText = true;
+	bool bMouseButtons = true;
+	bool bMouseWheel = true;
+	QVector<KMonitorCapability> monitorList;
+};
+
+struct KNegotiatedCapabilities
+{
+	bool bValid = false;
+	int nProtocolVersion = 0;
+	QString strVideoCodec;
+	QStringList channels;
+	int nMaximumWidth = 0;
+	int nMaximumHeight = 0;
+	int nMaximumFps = 0;
+	int nMaximumBitrateKbps = 0;
+	bool bClipboardText = false;
+	bool bKeyboard = false;
+	bool bUnicodeText = false;
+	bool bMouseButtons = false;
+	bool bMouseWheel = false;
 };
 
 struct KRemoteDeviceInfo
@@ -31,6 +78,7 @@ struct KSessionMessage
 	QString strReason;
 	KRemoteDeviceInfo deviceInfo;
 	KStreamConfig streamConfig;
+	KSessionCapabilities capabilities;
 };
 
 class KSessionMessageCodec
@@ -41,6 +89,10 @@ public:
 	static QString encode(const KSessionMessage &message);
 	static bool decode(const QString &strMessage, KSessionMessage *pMessage, QString *pErrorMessage);
 	static QString typeName(KSessionMessageType type);
+	static bool negotiate(const KSessionCapabilities &local,
+		const KSessionCapabilities &remote,
+		KNegotiatedCapabilities *pNegotiated,
+		QString *pErrorMessage);
 };
 
 #endif // _WINREMOTECONTROL_CORE_PROTOCOL_SESSIONMESSAGE_H_

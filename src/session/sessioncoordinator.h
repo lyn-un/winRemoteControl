@@ -101,6 +101,11 @@ private:
 	void handleStopStreamingMessage(const KSessionMessage &message);
 	void handleEndSessionMessage(const KSessionMessage &message);
 	void handleStreamConfigMessage(const KSessionMessage &message);
+	void handleCapabilitiesMessage(const KSessionMessage &message);
+	void handleCapabilityRejectedMessage(const KSessionMessage &message);
+	void handleCapabilityTimeout();
+	void completeCapabilityNegotiation(const KNegotiatedCapabilities &capabilities);
+	KSessionCapabilities localCapabilities() const;
 	void handleInputInjected(quint64 nSeq, qint64 nInjectedMs);
 	void handleOutgoingConnectionEstablished();
 	void handleOutgoingConnectionFailed(const QString &strMessage);
@@ -163,12 +168,15 @@ private:
 	QTimer *m_pReconnectTimer = nullptr;
 	QTimer *m_pApprovalTimer = nullptr;
 	QTimer *m_pStopWatchdogTimer = nullptr;
+	QTimer *m_pCapabilityTimer = nullptr;
 	bool m_bCaptureShutdownPending = false;
 	bool m_bPeerShutdownPending = false;
 	bool m_bStopKeepListening = false;
 	bool m_bStopReportError = false;
 	bool m_bStopRecovering = false;
 	KSessionRole m_stopRole = ControllerSessionRole;
+	KNegotiatedCapabilities m_negotiatedCapabilities;
+	bool m_bCapabilitiesReceived = false;
 	QString m_strStopReason;
 	quint64 m_nStoppingGeneration = 0;
 	PendingRequestType m_pendingRequestType = NoPendingRequest;

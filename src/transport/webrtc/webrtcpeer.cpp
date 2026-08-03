@@ -350,6 +350,13 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 	m_protocolRouter.registerHandler(SessionProtocolChannel,
 		KSessionMessageCodec::typeName(EndSessionMessageType), allowMessage,
 		[this](const KProtocolEnvelope &envelope) { decodeSessionMessage(envelope); });
+	for (KSessionMessageType type : { CapabilitiesSessionMessageType,
+		CapabilityRejectedSessionMessageType })
+	{
+		m_protocolRouter.registerHandler(SessionProtocolChannel,
+			KSessionMessageCodec::typeName(type), allowMessage,
+			[this](const KProtocolEnvelope &envelope) { decodeSessionMessage(envelope); });
+	}
 	for (KClipboardMessageType type : { ReadyClipboardMessageType,
 		TextClipboardMessageType, SyncStateClipboardMessageType })
 	{

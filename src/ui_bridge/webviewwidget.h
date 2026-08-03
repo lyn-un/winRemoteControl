@@ -7,6 +7,7 @@
 #include "core/devices/recentdevice.h"
 #include "core/settings/applicationsettings.h"
 #include "core/session/sessionerror.h"
+#include "core/protocol/sessionmessage.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QPoint>
@@ -65,6 +66,7 @@ public slots:
 		bool bActive,
 		const QString &strStatus);
 	void sendClipboardSyncError(const QString &strError);
+	void sendSessionCapabilitiesChanged(const KNegotiatedCapabilities &capabilities);
 
 signals:
 	void startCaptureRequested();

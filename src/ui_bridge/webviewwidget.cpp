@@ -252,6 +252,26 @@ void KWebViewWidget::sendClipboardSyncError(const QString &strError)
 	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
 }
 
+void KWebViewWidget::sendSessionCapabilitiesChanged(
+	const KNegotiatedCapabilities &capabilities)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("sessionCapabilitiesChanged"));
+	object.insert(QStringLiteral("available"), capabilities.bValid);
+	object.insert(QStringLiteral("protocolVersion"), capabilities.nProtocolVersion);
+	object.insert(QStringLiteral("videoCodec"), capabilities.strVideoCodec);
+	object.insert(QStringLiteral("maximumWidth"), capabilities.nMaximumWidth);
+	object.insert(QStringLiteral("maximumHeight"), capabilities.nMaximumHeight);
+	object.insert(QStringLiteral("maximumFps"), capabilities.nMaximumFps);
+	object.insert(QStringLiteral("maximumBitrateKbps"), capabilities.nMaximumBitrateKbps);
+	object.insert(QStringLiteral("clipboardText"), capabilities.bClipboardText);
+	object.insert(QStringLiteral("keyboard"), capabilities.bKeyboard);
+	object.insert(QStringLiteral("unicodeText"), capabilities.bUnicodeText);
+	object.insert(QStringLiteral("mouseButtons"), capabilities.bMouseButtons);
+	object.insert(QStringLiteral("mouseWheel"), capabilities.bMouseWheel);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
 void KWebViewWidget::resizeEvent(QResizeEvent *pEvent)
 {
 	QWidget::resizeEvent(pEvent);

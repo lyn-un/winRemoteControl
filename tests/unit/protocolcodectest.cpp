@@ -541,6 +541,49 @@ namespace
 			&decoded, nullptr),
 			QStringLiteral("oversized signaling message is rejected"));
 	}
+
+	void testSessionCapabilities()
+	{
+		KSessionMessage source;
+		source.type = CapabilitiesSessionMessageType;
+		source.capabilities.supportedCodecs = { QStringLiteral("h264") };
+		source.capabilities.supportedChannels = {
+			QStringLiteral("video"), QStringLiteral("session"), QStringLiteral("input"),
+			QStringLiteral("clipboard")
+		};
+		KMonitorCapability monitor;
+		monitor.strId = QStringLiteral("default");
+		monitor.nWidth = 1920;
+		monitor.nHeight = 1080;
+		monitor.bPrimary = true;
+		source.capabilities.monitorList.append(monitor);
+
+		KSessionMessage decoded;
+		check(KSessionMessageCodec::decode(KSessionMessageCodec::encode(source),
+				&decoded, nullptr)
+			&& decoded.type == CapabilitiesSessionMessageType
+			&& decoded.capabilities.supportedCodecs.contains(QStringLiteral("h264"))
+			&& decoded.capabilities.monitorList.size() == 1,
+			QStringLiteral("session capabilities round-trip"));
+
+		KNegotiatedCapabilities negotiated;
+		check(KSessionMessageCodec::negotiate(source.capabilities, decoded.capabilities,
+				&negotiated, nullptr)
+			&& negotiated.bValid
+			&& negotiated.bClipboardText,
+			QStringLiteral("compatible capabilities negotiate required channels"));
+
+		KSessionCapabilities incompatible = decoded.capabilities;
+		incompatible.supportedCodecs = { QStringLiteral("vp9") };
+		check(!KSessionMessageCodec::negotiate(source.capabilities, incompatible,
+				&negotiated, nullptr),
+			QStringLiteral("missing H.264 intersection is rejected"));
+		check(!KSessionMessageCodec::decode(
+			QStringLiteral("{\"version\":1,\"type\":\"capabilities\","
+				"\"protocolMinVersion\":3,\"protocolMaxVersion\":2}"),
+			&decoded, nullptr),
+			QStringLiteral("invalid capability version range is rejected"));
+	}
 }
 
 int main(int nArgc, char *pArgv[])
@@ -565,6 +608,7 @@ int main(int nArgc, char *pArgv[])
 	testInvalidClipboardMessages();
 	testProtocolVersionsAndUnknownFields();
 	testWebRtcSignalingMessages();
+	testSessionCapabilities();
 
 	if (g_nFailureCount == 0)
 		qInfo() << "All protocol codec tests passed";
