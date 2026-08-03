@@ -1,6 +1,7 @@
 #include "adapters/signaling/tcpsignalingtransport.h"
 
 #include "common/latencytracelogger.h"
+#include "core/protocol/protocolconstraints.h"
 
 #include <QtCore/QTimer>
 #include <QtCore/QJsonDocument>
@@ -13,6 +14,7 @@
 namespace
 {
 	constexpr int kConnectTimeoutMs = 3000;
+	constexpr int kInitialReadTimeoutMs = 5000;
 	constexpr char kMessageType[] = "type";
 	constexpr char kBusy[] = "busy";
 }
@@ -20,10 +22,14 @@ namespace
 KTcpSignalingTransport::KTcpSignalingTransport(QObject *pParent)
 	: KSignalingTransport(pParent)
 	, m_pConnectTimeoutTimer(new QTimer(this))
+	, m_pReadTimeoutTimer(new QTimer(this))
 {
 	m_pConnectTimeoutTimer->setSingleShot(true);
+	m_pReadTimeoutTimer->setSingleShot(true);
 	connect(m_pConnectTimeoutTimer, &QTimer::timeout,
 		this, &KTcpSignalingTransport::handleConnectTimeout);
+	connect(m_pReadTimeoutTimer, &QTimer::timeout,
+		this, &KTcpSignalingTransport::handleReadTimeout);
 }
 
 KTcpSignalingTransport::~KTcpSignalingTransport()
@@ -77,6 +83,7 @@ void KTcpSignalingTransport::disconnectPeer()
 	m_bOutgoingConnectionPending = false;
 	m_bPeerBusy = false;
 	m_pConnectTimeoutTimer->stop();
+	m_pReadTimeoutTimer->stop();
 	m_connectElapsedTimer.invalidate();
 	closeSocket();
 	m_readBuffer.clear();
@@ -90,6 +97,7 @@ void KTcpSignalingTransport::stop()
 	m_bOutgoingConnectionPending = false;
 	m_bPeerBusy = false;
 	m_pConnectTimeoutTimer->stop();
+	m_pReadTimeoutTimer->stop();
 	m_connectElapsedTimer.invalidate();
 	closeSocket();
 	if (m_pServer != nullptr)
@@ -113,6 +121,11 @@ void KTcpSignalingTransport::sendMessage(const QString &strMessage)
 		return;
 
 	QByteArray data = strMessage.toUtf8();
+	if (data.size() > KProtocolConstraints::kMaximumSignalingMessageBytes)
+	{
+		emit signalingError(QStringLiteral("Outgoing signaling message exceeds size limit"));
+		return;
+	}
 	data.append('\n');
 	m_pSocket->write(data);
 	m_pSocket->flush();
@@ -140,6 +153,7 @@ void KTcpSignalingTransport::handleNewConnection()
 	closeSocket();
 	setSocket(pSocket);
 	m_bPeerBusy = true;
+	m_pReadTimeoutTimer->start(kInitialReadTimeoutMs);
 	emit stateChanged(QStringLiteral("Connected"));
 	emit incomingConnectionEstablished(pSocket->peerAddress().toString(), pSocket->peerPort());
 }
@@ -149,31 +163,65 @@ void KTcpSignalingTransport::handleReadyRead()
 	if (m_pSocket == nullptr)
 		return;
 
-	m_readBuffer.append(m_pSocket->readAll());
-	for (;;)
+	while (m_pSocket != nullptr && m_pSocket->bytesAvailable() > 0)
 	{
-		const int nLineEnd = m_readBuffer.indexOf('\n');
-		if (nLineEnd < 0)
-			break;
-
-		const QByteArray line = m_readBuffer.left(nLineEnd).trimmed();
-		m_readBuffer.remove(0, nLineEnd + 1);
-		if (line.isEmpty())
-			continue;
-
-		const QJsonDocument document = QJsonDocument::fromJson(line);
-		if (document.isObject()
-			&& document.object().value(QString::fromLatin1(kMessageType)).toString()
-				== QString::fromLatin1(kBusy))
+		const qsizetype nRemainingBytes = KProtocolConstraints::kMaximumSignalingMessageBytes
+			+ 1 - m_readBuffer.size();
+		if (nRemainingBytes <= 0)
 		{
-			emit signalingError(QStringLiteral("The controlled host is already in another session"));
-			closeSocket();
-			emit stateChanged(QStringLiteral("ConnectionFailed"));
-			emit connectionLost();
+			rejectPeerData(QStringLiteral("Signaling receive buffer exceeds size limit"));
 			return;
 		}
+		m_readBuffer.append(m_pSocket->read(nRemainingBytes));
+		for (;;)
+		{
+			const qsizetype nLineEnd = m_readBuffer.indexOf('\n');
+			if (nLineEnd < 0)
+				break;
+			if (nLineEnd > KProtocolConstraints::kMaximumSignalingMessageBytes)
+			{
+				rejectPeerData(QStringLiteral("Signaling message exceeds size limit"));
+				return;
+			}
 
-		emit messageReceived(QString::fromUtf8(line));
+			const QByteArray line = m_readBuffer.left(nLineEnd).trimmed();
+			m_readBuffer.remove(0, nLineEnd + 1);
+			if (line.isEmpty())
+				continue;
+
+			const QJsonDocument document = QJsonDocument::fromJson(line);
+			if (!document.isObject())
+			{
+				++m_nConsecutiveInvalidMessages;
+				if (m_nConsecutiveInvalidMessages
+					>= KProtocolConstraints::kMaximumInvalidMessages)
+				{
+					rejectPeerData(QStringLiteral("Too many invalid signaling messages"));
+					return;
+				}
+				continue;
+			}
+
+			m_nConsecutiveInvalidMessages = 0;
+			m_pReadTimeoutTimer->stop();
+			if (document.object().value(QString::fromLatin1(kMessageType)).toString()
+				== QString::fromLatin1(kBusy))
+			{
+				emit signalingError(QStringLiteral("The controlled host is already in another session"));
+				closeSocket();
+				emit stateChanged(QStringLiteral("ConnectionFailed"));
+				emit connectionLost();
+				return;
+			}
+
+			emit messageReceived(QString::fromUtf8(line));
+		}
+
+		if (m_readBuffer.size() > KProtocolConstraints::kMaximumSignalingMessageBytes)
+		{
+			rejectPeerData(QStringLiteral("Signaling receive buffer exceeds size limit"));
+			return;
+		}
 	}
 }
 
@@ -183,6 +231,7 @@ void KTcpSignalingTransport::handleConnected()
 	{
 		m_bOutgoingConnectionPending = false;
 		m_pConnectTimeoutTimer->stop();
+		m_pReadTimeoutTimer->start(kInitialReadTimeoutMs);
 		const qint64 nCostMs = m_connectElapsedTimer.elapsed();
 		m_connectElapsedTimer.invalidate();
 		KLatencyTraceLogger::write(QStringLiteral("controller"),
@@ -198,6 +247,7 @@ void KTcpSignalingTransport::handleConnected()
 
 void KTcpSignalingTransport::handleDisconnected()
 {
+	m_pReadTimeoutTimer->stop();
 	emit stateChanged(QStringLiteral("Disconnected"));
 	emit connectionLost();
 }
@@ -226,8 +276,17 @@ void KTcpSignalingTransport::handleConnectTimeout()
 		QStringLiteral("Signaling connection timed out after %1 ms").arg(kConnectTimeoutMs));
 }
 
+void KTcpSignalingTransport::handleReadTimeout()
+{
+	if (!isConnected())
+		return;
+	rejectPeerData(QStringLiteral("Signaling handshake timed out"));
+}
+
 void KTcpSignalingTransport::setSocket(QTcpSocket *pSocket)
 {
+	m_readBuffer.clear();
+	m_nConsecutiveInvalidMessages = 0;
 	m_pSocket = pSocket;
 	connect(m_pSocket, &QTcpSocket::readyRead,
 		this, &KTcpSignalingTransport::handleReadyRead);
@@ -241,6 +300,7 @@ void KTcpSignalingTransport::setSocket(QTcpSocket *pSocket)
 
 void KTcpSignalingTransport::closeSocket()
 {
+	m_pReadTimeoutTimer->stop();
 	if (m_pSocket == nullptr)
 		return;
 
@@ -250,6 +310,20 @@ void KTcpSignalingTransport::closeSocket()
 	m_pSocket = nullptr;
 }
 
+void KTcpSignalingTransport::rejectPeerData(const QString &strMessage)
+{
+	m_pReadTimeoutTimer->stop();
+	m_bOutgoingConnectionPending = false;
+	m_bPeerBusy = false;
+	m_readBuffer.clear();
+	closeSocket();
+	emit signalingError(strMessage);
+	emit stateChanged(m_pServer != nullptr && m_pServer->isListening()
+		? QStringLiteral("Listening")
+		: QStringLiteral("ConnectionFailed"));
+	emit connectionLost();
+}
+
 void KTcpSignalingTransport::failOutgoingConnection(const QString &strReason, const QString &strMessage)
 {
 	if (!m_bOutgoingConnectionPending)
@@ -257,6 +331,7 @@ void KTcpSignalingTransport::failOutgoingConnection(const QString &strReason, co
 
 	m_bOutgoingConnectionPending = false;
 	m_pConnectTimeoutTimer->stop();
+	m_pReadTimeoutTimer->stop();
 	const qint64 nCostMs = m_connectElapsedTimer.elapsed();
 	m_connectElapsedTimer.invalidate();
 	KLatencyTraceLogger::write(QStringLiteral("controller"),

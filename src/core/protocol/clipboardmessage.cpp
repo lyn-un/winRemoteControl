@@ -1,5 +1,7 @@
 #include "core/protocol/clipboardmessage.h"
 
+#include "core/protocol/protocolconstraints.h"
+
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QJsonParseError>
@@ -8,6 +10,7 @@
 namespace
 {
 	constexpr char kType[] = "type";
+	constexpr char kVersion[] = "version";
 	constexpr char kClipboardText[] = "clipboardText";
 	constexpr char kClipboardReady[] = "clipboardReady";
 	constexpr char kClipboardSyncState[] = "clipboardSyncState";
@@ -26,11 +29,22 @@ namespace
 	{
 		return !strValue.isEmpty() && !QUuid::fromString(strValue).isNull();
 	}
+
+	bool HasSupportedVersion(const QJsonObject &object)
+	{
+		const QJsonValue value = object.value(QString::fromLatin1(kVersion));
+		if (value.isUndefined())
+			return true;
+		return value.isDouble()
+			&& value.toDouble() == static_cast<double>(value.toInt())
+			&& value.toInt() == KClipboardMessageCodec::kProtocolVersion;
+	}
 }
 
 QString KClipboardMessageCodec::encode(const KClipboardMessage &message)
 {
 	QJsonObject object;
+	object.insert(QString::fromLatin1(kVersion), kProtocolVersion);
 	QString strType = QString::fromLatin1(kClipboardText);
 	if (message.type == ReadyClipboardMessageType)
 		strType = QString::fromLatin1(kClipboardReady);
@@ -51,13 +65,18 @@ bool KClipboardMessageCodec::decode(const QString &strMessage,
 {
 	if (pMessage == nullptr)
 		return FailDecode(QStringLiteral("Clipboard message output is null"), pErrorMessage);
+	const QByteArray data = strMessage.toUtf8();
+	if (data.size() > KProtocolConstraints::kMaximumClipboardMessageBytes)
+		return FailDecode(QStringLiteral("Clipboard message is too large"), pErrorMessage);
 
 	QJsonParseError parseError;
-	const QJsonDocument document = QJsonDocument::fromJson(strMessage.toUtf8(), &parseError);
+	const QJsonDocument document = QJsonDocument::fromJson(data, &parseError);
 	if (parseError.error != QJsonParseError::NoError || !document.isObject())
 		return FailDecode(QStringLiteral("Clipboard message is not a JSON object"), pErrorMessage);
 
 	const QJsonObject object = document.object();
+	if (!HasSupportedVersion(object))
+		return FailDecode(QStringLiteral("Unsupported clipboard protocol version"), pErrorMessage);
 	const QJsonValue typeValue = object.value(QString::fromLatin1(kType));
 	const QJsonValue messageIdValue = object.value(QString::fromLatin1(kMessageId));
 	const QString strType = typeValue.toString();

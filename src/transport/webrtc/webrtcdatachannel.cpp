@@ -5,8 +5,9 @@
 #include <string>
 #include <utility>
 
-KWebRtcDataChannel::KWebRtcDataChannel(QObject *pParent)
+KWebRtcDataChannel::KWebRtcDataChannel(int nMaximumMessageBytes, QObject *pParent)
 	: QObject(pParent)
+	, m_nMaximumMessageBytes(nMaximumMessageBytes)
 {
 }
 
@@ -49,6 +50,8 @@ bool KWebRtcDataChannel::sendText(const QString &strMessage)
 		return false;
 
 	const QByteArray utf8Message = strMessage.toUtf8();
+	if (utf8Message.size() > m_nMaximumMessageBytes)
+		return false;
 	webrtc::DataBuffer buffer(std::string(utf8Message.constData(),
 		static_cast<size_t>(utf8Message.size())));
 	return m_spChannel->Send(buffer);
@@ -62,7 +65,17 @@ void KWebRtcDataChannel::OnStateChange()
 void KWebRtcDataChannel::OnMessage(const webrtc::DataBuffer &buffer)
 {
 	if (buffer.binary)
+	{
+		emit messageRejected(static_cast<int>(buffer.data.size()),
+			QStringLiteral("Binary DataChannel message is not supported"));
 		return;
+	}
+	if (buffer.data.size() > static_cast<size_t>(m_nMaximumMessageBytes))
+	{
+		emit messageRejected(static_cast<int>(buffer.data.size()),
+			QStringLiteral("DataChannel message is too large"));
+		return;
+	}
 
 	const char *pData = reinterpret_cast<const char *>(buffer.data.data());
 	emit textMessageReceived(

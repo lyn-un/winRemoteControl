@@ -17,6 +17,7 @@
 #include <rtc_base/thread.h>
 
 #include <memory>
+#include <atomic>
 #include <vector>
 
 class KWebRtcVideoSource;
@@ -83,6 +84,11 @@ private:
 	void handleInputChannelMessage(const QString &strMessage);
 	void handleSessionChannelMessage(const QString &strMessage);
 	void handleClipboardChannelMessage(const QString &strMessage);
+	void handleProtocolReject(const QString &strChannel,
+		int nMessageBytes,
+		const QString &strError,
+		std::atomic_int *pInvalidCount);
+	void terminateForProtocolViolation(const QString &strChannel);
 	void handleLocalDescription(webrtc::SessionDescriptionInterface *pDescription);
 	void handleLocalDescriptionFailure(webrtc::RTCError error);
 	void handleRemoteDescriptionSuccess(webrtc::SdpType sdpType);
@@ -113,6 +119,11 @@ private:
 	webrtc::scoped_refptr<webrtc::RtpSenderInterface> m_spVideoSender;
 	webrtc::scoped_refptr<webrtc::VideoTrackInterface> m_spRemoteVideoTrack;
 	KNetworkStatsTracker m_networkStatsTracker;
+	std::atomic_int m_nInvalidSignalingMessages = 0;
+	std::atomic_int m_nInvalidInputMessages = 0;
+	std::atomic_int m_nInvalidSessionMessages = 0;
+	std::atomic_int m_nInvalidClipboardMessages = 0;
+	std::atomic_bool m_bProtocolTerminationPending = false;
 
 	friend class KCreateSessionDescriptionObserver;
 	friend class KStatsCallback;

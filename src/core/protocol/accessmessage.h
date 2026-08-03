@@ -1,6 +1,8 @@
 #ifndef _WINREMOTECONTROL_CORE_PROTOCOL_ACCESSMESSAGE_H_
 #define _WINREMOTECONTROL_CORE_PROTOCOL_ACCESSMESSAGE_H_
 
+#include "core/protocol/protocolconstraints.h"
+
 #include <QtCore/QString>
 
 enum KAccessMessageType
@@ -24,8 +26,8 @@ struct KAccessMessage
 class KAccessMessageCodec
 {
 public:
-	static constexpr int kProtocolVersion = 1;
-	static constexpr int kMaximumMessageBytes = 2048;
+	static constexpr int kProtocolVersion = KProtocolConstraints::kProtocolVersion;
+	static constexpr int kMaximumMessageBytes = KProtocolConstraints::kMaximumAccessMessageBytes;
 
 	static QString encode(const KAccessMessage &message);
 	static bool decode(const QString &strMessage,

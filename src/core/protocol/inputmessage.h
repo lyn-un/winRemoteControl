@@ -37,6 +37,8 @@ struct KInputMessage
 class KInputMessageCodec
 {
 public:
+	static constexpr int kProtocolVersion = 1;
+
 	static QString encode(const KInputMessage &message);
 	static bool decode(const QString &strMessage, KInputMessage *pMessage, QString *pErrorMessage);
 	static QString typeName(KInputMessageType type);

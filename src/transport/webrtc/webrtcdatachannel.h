@@ -12,7 +12,7 @@ class KWebRtcDataChannel final : public QObject, public webrtc::DataChannelObser
 	Q_OBJECT
 
 public:
-	explicit KWebRtcDataChannel(QObject *pParent = nullptr);
+	explicit KWebRtcDataChannel(int nMaximumMessageBytes, QObject *pParent = nullptr);
 	~KWebRtcDataChannel() override;
 
 	KWebRtcDataChannel(const KWebRtcDataChannel &) = delete;
@@ -26,6 +26,7 @@ public:
 signals:
 	void openChanged(bool bOpen);
 	void textMessageReceived(const QString &strMessage);
+	void messageRejected(int nMessageBytes, const QString &strReason);
 
 private:
 	void OnStateChange() override;
@@ -33,6 +34,7 @@ private:
 	void OnBufferedAmountChange(uint64_t nPreviousAmount) override;
 
 	webrtc::scoped_refptr<webrtc::DataChannelInterface> m_spChannel;
+	int m_nMaximumMessageBytes = 0;
 };
 
 #endif // _WINREMOTECONTROL_WEBRTCDATACHANNEL_H_

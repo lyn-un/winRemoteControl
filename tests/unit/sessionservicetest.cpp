@@ -1,6 +1,7 @@
 #include "adapters/signaling/tcpsignalingtransport.h"
 #include "core/input/inputinjectorinterface.h"
 #include "core/protocol/accessmessage.h"
+#include "core/protocol/protocolconstraints.h"
 #include "core/session/deviceinfoprovider.h"
 #include "core/transport/remotepeertransport.h"
 #include "session/sessioncoordinator.h"
@@ -557,6 +558,61 @@ namespace
 		check(!strError.isEmpty() && pPeer->nInitializeCount == 0,
 			QStringLiteral("disabled remote access refuses to start listening"));
 	}
+
+	void testSignalingReceiveBoundaries()
+	{
+		KTcpSignalingTransport transport;
+		QString strStartError;
+		const quint16 nPort = reserveLocalPort();
+		check(transport.startServer(nPort, &strStartError),
+			QStringLiteral("boundary test signaling server starts"));
+		bool bIncomingConnected = false;
+		QString strProtocolError;
+		int nReceivedMessages = 0;
+		QObject::connect(&transport, &KTcpSignalingTransport::incomingConnectionEstablished,
+			[&bIncomingConnected](const QString &, quint16) { bIncomingConnected = true; });
+		QObject::connect(&transport, &KTcpSignalingTransport::signalingError,
+			[&strProtocolError](const QString &strError) { strProtocolError = strError; });
+		QObject::connect(&transport, &KTcpSignalingTransport::messageReceived,
+			[&nReceivedMessages](const QString &) { ++nReceivedMessages; });
+
+		QTcpSocket socket;
+		socket.connectToHost(QHostAddress::LocalHost, nPort);
+		check(socket.waitForConnected(1000)
+			&& waitUntil([&bIncomingConnected]() { return bIncomingConnected; }),
+			QStringLiteral("boundary test peer connects"));
+		socket.write(QByteArrayLiteral("{\"type\":\"fragment"));
+		socket.flush();
+		QCoreApplication::processEvents();
+		check(nReceivedMessages == 0,
+			QStringLiteral("truncated signaling message waits for its delimiter"));
+		socket.write(QByteArrayLiteral("ed\"}\n"));
+		socket.flush();
+		check(waitUntil([&nReceivedMessages]() { return nReceivedMessages == 1; }),
+			QStringLiteral("fragmented signaling message is reassembled"));
+		socket.write(QByteArrayLiteral("not-json\nnot-json\nnot-json\n"));
+		socket.flush();
+		check(waitUntil([&strProtocolError]() { return !strProtocolError.isEmpty(); }),
+			QStringLiteral("three consecutive malformed messages close signaling"));
+		check(strProtocolError.contains(QStringLiteral("Too many invalid")),
+			QStringLiteral("malformed signaling failure is explicit"));
+
+		strProtocolError.clear();
+		bIncomingConnected = false;
+		QTcpSocket oversizedSocket;
+		oversizedSocket.connectToHost(QHostAddress::LocalHost, nPort);
+		check(oversizedSocket.waitForConnected(1000)
+			&& waitUntil([&bIncomingConnected]() { return bIncomingConnected; }),
+			QStringLiteral("oversized signaling peer connects"));
+		oversizedSocket.write(QByteArray(
+			KProtocolConstraints::kMaximumSignalingMessageBytes + 1, 'x'));
+		oversizedSocket.flush();
+		check(waitUntil([&strProtocolError]() { return !strProtocolError.isEmpty(); }),
+			QStringLiteral("unterminated oversized signaling data is rejected"));
+		check(strProtocolError.contains(QStringLiteral("size limit")),
+			QStringLiteral("oversized signaling failure is explicit"));
+		transport.stop();
+	}
 }
 
 int main(int argc, char *argv[])
@@ -567,6 +623,7 @@ int main(int argc, char *argv[])
 	testRecoveryAndSecureRetry();
 	testDenyPolicyRejectsBeforeOffer();
 	testDisabledRemoteAccessCannotListen();
+	testSignalingReceiveBoundaries();
 	if (g_nFailureCount == 0)
 		qInfo() << "All session service tests passed";
 	return g_nFailureCount == 0 ? 0 : 1;

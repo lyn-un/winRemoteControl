@@ -1,5 +1,7 @@
 #include "core/protocol/inputmessage.h"
 
+#include "core/protocol/protocolconstraints.h"
+
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QJsonParseError>
@@ -7,6 +9,7 @@
 namespace
 {
 	constexpr char kType[] = "type";
+	constexpr char kVersion[] = "version";
 	constexpr char kMouseMove[] = "mouseMove";
 	constexpr char kMouseButton[] = "mouseButton";
 	constexpr char kMouseWheel[] = "mouseWheel";
@@ -82,11 +85,28 @@ namespace
 			*pErrorMessage = strError;
 		return false;
 	}
+
+	bool hasSupportedVersion(const QJsonObject &object)
+	{
+		const QJsonValue value = object.value(QString::fromLatin1(kVersion));
+		if (value.isUndefined())
+			return true;
+		return value.isDouble()
+			&& value.toDouble() == static_cast<double>(value.toInt())
+			&& value.toInt() == KInputMessageCodec::kProtocolVersion;
+	}
+
+	bool isValidMousePosition(int nX, int nY)
+	{
+		return nX >= 0 && nX <= KProtocolConstraints::kMaximumMouseCoordinate
+			&& nY >= 0 && nY <= KProtocolConstraints::kMaximumMouseCoordinate;
+	}
 }
 
 QString KInputMessageCodec::encode(const KInputMessage &message)
 {
 	QJsonObject object;
+	object.insert(QString::fromLatin1(kVersion), kProtocolVersion);
 	object.insert(QString::fromLatin1(kType), typeName(message.type));
 	object.insert(QString::fromLatin1(kSeq), QString::number(message.nSequence));
 	if (message.bTrace)
@@ -126,13 +146,18 @@ bool KInputMessageCodec::decode(const QString &strMessage,
 {
 	if (pMessage == nullptr)
 		return failDecode(QStringLiteral("Input message output is null"), pErrorMessage);
+	const QByteArray data = strMessage.toUtf8();
+	if (data.size() > KProtocolConstraints::kMaximumInputMessageBytes)
+		return failDecode(QStringLiteral("Input message is too large"), pErrorMessage);
 
 	QJsonParseError parseError;
-	const QJsonDocument document = QJsonDocument::fromJson(strMessage.toUtf8(), &parseError);
+	const QJsonDocument document = QJsonDocument::fromJson(data, &parseError);
 	if (parseError.error != QJsonParseError::NoError || !document.isObject())
 		return failDecode(QStringLiteral("Input message is not a JSON object"), pErrorMessage);
 
 	const QJsonObject object = document.object();
+	if (!hasSupportedVersion(object))
+		return failDecode(QStringLiteral("Unsupported input protocol version"), pErrorMessage);
 	const QString strType = object.value(QString::fromLatin1(kType)).toString();
 	KInputMessage message;
 	if (strType == QString::fromLatin1(kMouseMove))
@@ -155,7 +180,8 @@ bool KInputMessageCodec::decode(const QString &strMessage,
 	if (message.type == MouseMoveInputMessageType)
 	{
 		if (!readRequiredInt(object, kX, &message.nX)
-			|| !readRequiredInt(object, kY, &message.nY))
+			|| !readRequiredInt(object, kY, &message.nY)
+			|| !isValidMousePosition(message.nX, message.nY))
 		{
 			return failDecode(QStringLiteral("Invalid mouse move message"), pErrorMessage);
 		}
@@ -166,7 +192,8 @@ bool KInputMessageCodec::decode(const QString &strMessage,
 		if (!buttonValue.isString()
 			|| !readRequiredBool(object, kPressed, &message.bPressed)
 			|| !readRequiredInt(object, kX, &message.nX)
-			|| !readRequiredInt(object, kY, &message.nY))
+			|| !readRequiredInt(object, kY, &message.nY)
+			|| !isValidMousePosition(message.nX, message.nY))
 		{
 			return failDecode(QStringLiteral("Invalid mouse button message"), pErrorMessage);
 		}
@@ -183,7 +210,10 @@ bool KInputMessageCodec::decode(const QString &strMessage,
 	{
 		if (!readRequiredInt(object, kX, &message.nX)
 			|| !readRequiredInt(object, kY, &message.nY)
-			|| !readRequiredInt(object, kDelta, &message.nWheelDelta))
+			|| !readRequiredInt(object, kDelta, &message.nWheelDelta)
+			|| !isValidMousePosition(message.nX, message.nY)
+			|| message.nWheelDelta < -KProtocolConstraints::kMaximumWheelDelta
+			|| message.nWheelDelta > KProtocolConstraints::kMaximumWheelDelta)
 		{
 			return failDecode(QStringLiteral("Invalid mouse wheel message"), pErrorMessage);
 		}

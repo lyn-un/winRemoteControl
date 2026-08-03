@@ -36,6 +36,8 @@ struct KSessionMessage
 class KSessionMessageCodec
 {
 public:
+	static constexpr int kProtocolVersion = 1;
+
 	static QString encode(const KSessionMessage &message);
 	static bool decode(const QString &strMessage, KSessionMessage *pMessage, QString *pErrorMessage);
 	static QString typeName(KSessionMessageType type);

@@ -47,10 +47,13 @@ add_library(wrc_protocol STATIC
 	src/core/protocol/clipboardmessage.h
 	src/core/protocol/landiscoverymessage.cpp
 	src/core/protocol/landiscoverymessage.h
+	src/core/protocol/protocolconstraints.h
 	src/core/protocol/inputmessage.cpp
 	src/core/protocol/inputmessage.h
 	src/core/protocol/sessionmessage.cpp
 	src/core/protocol/sessionmessage.h
+	src/core/protocol/webrtcsignalingmessage.cpp
+	src/core/protocol/webrtcsignalingmessage.h
 )
 
 target_include_directories(wrc_protocol PUBLIC

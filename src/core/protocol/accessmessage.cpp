@@ -70,7 +70,10 @@ bool KAccessMessageCodec::decode(const QString &strMessage,
 		object.value(QString::fromLatin1(kType)).toString());
 	if (type == InvalidAccessMessageType)
 		return FailDecode(QStringLiteral("Unknown access message type"), pErrorMessage);
-	if (object.value(QString::fromLatin1(kVersion)).toInt(-1) != kProtocolVersion)
+	const QJsonValue versionValue = object.value(QString::fromLatin1(kVersion));
+	if (!versionValue.isDouble()
+		|| versionValue.toDouble() != static_cast<double>(versionValue.toInt())
+		|| versionValue.toInt() != kProtocolVersion)
 		return FailDecode(QStringLiteral("Unsupported access protocol version"), pErrorMessage);
 
 	const QString strRequestId = object.value(QString::fromLatin1(kRequestId)).toString();
@@ -118,7 +121,7 @@ bool KAccessMessageCodec::decode(const QString &strMessage,
 
 bool KAccessMessageCodec::isAccessMessage(const QString &strMessage)
 {
-	if (strMessage.toUtf8().size() > kMaximumMessageBytes)
+	if (strMessage.toUtf8().size() > KProtocolConstraints::kMaximumSignalingMessageBytes)
 		return false;
 	const QJsonDocument document = QJsonDocument::fromJson(strMessage.toUtf8());
 	return document.isObject()

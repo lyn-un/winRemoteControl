@@ -25,6 +25,7 @@ Q_DECLARE_METATYPE(KClipboardMessage)
 class KClipboardMessageCodec
 {
 public:
+	static constexpr int kProtocolVersion = 1;
 	static constexpr int kMaximumTextBytes = 256000;
 
 	static QString encode(const KClipboardMessage &message);

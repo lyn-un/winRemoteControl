@@ -2,7 +2,9 @@
 #include "core/protocol/clipboardmessage.h"
 #include "core/protocol/inputmessage.h"
 #include "core/protocol/landiscoverymessage.h"
+#include "core/protocol/protocolconstraints.h"
 #include "core/protocol/sessionmessage.h"
+#include "core/protocol/webrtcsignalingmessage.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDebug>
@@ -105,6 +107,18 @@ namespace
 			&message,
 			nullptr),
 			QStringLiteral("unknown mouse button is rejected"));
+		check(!KInputMessageCodec::decode(
+			QStringLiteral("{\"version\":2,\"type\":\"mouseMove\",\"x\":1,\"y\":2}"),
+			&message, nullptr),
+			QStringLiteral("unsupported input version is rejected"));
+		check(!KInputMessageCodec::decode(
+			QStringLiteral("{\"version\":1,\"type\":\"mouseMove\",\"x\":-1,\"y\":2}"),
+			&message, nullptr),
+			QStringLiteral("out-of-range mouse coordinate is rejected"));
+		check(!KInputMessageCodec::decode(
+			QString(KProtocolConstraints::kMaximumInputMessageBytes + 1, QLatin1Char('x')),
+			&message, nullptr),
+			QStringLiteral("oversized input message is rejected"));
 	}
 
 	void testLegacyInputWireCompatibility()
@@ -213,6 +227,25 @@ namespace
 			&message,
 			nullptr),
 			QStringLiteral("invalid screen size is rejected"));
+		check(!KSessionMessageCodec::decode(
+			QStringLiteral("{\"version\":2,\"type\":\"startStreaming\"}"),
+			&message, nullptr),
+			QStringLiteral("unsupported session version is rejected"));
+		check(!KSessionMessageCodec::decode(
+			QStringLiteral("{\"version\":1,\"type\":\"streamConfig\",\"fps\":61,"
+				"\"width\":1280,\"height\":720,\"bitrateKbps\":3000}"),
+			&message, nullptr),
+			QStringLiteral("out-of-range stream config is rejected"));
+		check(!KSessionMessageCodec::decode(
+			QString(KProtocolConstraints::kMaximumSessionMessageBytes + 1, QLatin1Char('x')),
+			&message, nullptr),
+			QStringLiteral("oversized session message is rejected"));
+		check(!KSessionMessageCodec::decode(
+			QStringLiteral("{\"version\":1,\"type\":\"deviceInfo\",\"computerName\":\"pc\","
+				"\"screenWidth\":1920,\"screenHeight\":1080,"
+				"\"wallpaperMime\":\"image/jpeg\",\"wallpaperData\":\"not-base64!\"}"),
+			&message, nullptr),
+			QStringLiteral("malformed wallpaper Base64 is rejected"));
 	}
 
 	void testLegacySessionWireCompatibility()
@@ -348,6 +381,12 @@ namespace
 			QStringLiteral("{\"type\":\"accessRequest\",\"version\":2,\"requestId\":\"bad\"}"),
 			&message, nullptr),
 			QStringLiteral("invalid access version and UUID are rejected"));
+		check(!KAccessMessageCodec::decode(
+			QStringLiteral("{\"type\":\"accessRequest\",\"version\":1.5,"
+				"\"requestId\":\"12345678-1234-1234-1234-1234567890ab\","
+				"\"deviceName\":\"host\"}"),
+			&message, nullptr),
+			QStringLiteral("fractional access version is rejected"));
 		check(!KAccessMessageCodec::decode(QString(KAccessMessageCodec::kMaximumMessageBytes + 1,
 			QLatin1Char('x')), &message, nullptr),
 			QStringLiteral("oversized access message is rejected"));
@@ -426,6 +465,81 @@ namespace
 		check(!KClipboardMessageCodec::decode(
 			KClipboardMessageCodec::encode(oversized), &message, nullptr),
 			QStringLiteral("oversized clipboard text is rejected"));
+		check(!KClipboardMessageCodec::decode(
+			QStringLiteral("{\"version\":2,\"type\":\"clipboardReady\","
+				"\"messageId\":\"12345678-1234-1234-1234-1234567890ab\"}"),
+			&message, nullptr),
+			QStringLiteral("unsupported clipboard version is rejected"));
+		check(!KClipboardMessageCodec::decode(
+			QString(KProtocolConstraints::kMaximumClipboardMessageBytes + 1, QLatin1Char('x')),
+			&message, nullptr),
+			QStringLiteral("oversized clipboard message is rejected"));
+	}
+
+	void testProtocolVersionsAndUnknownFields()
+	{
+		KInputMessage input;
+		input.type = MouseMoveInputMessageType;
+		const QJsonObject inputObject = QJsonDocument::fromJson(
+			KInputMessageCodec::encode(input).toUtf8()).object();
+		check(inputObject.value(QStringLiteral("version")).toInt()
+			== KProtocolConstraints::kProtocolVersion,
+			QStringLiteral("input encoder writes protocol version"));
+
+		KSessionMessage session;
+		session.type = StartStreamingSessionMessageType;
+		const QJsonObject sessionObject = QJsonDocument::fromJson(
+			KSessionMessageCodec::encode(session).toUtf8()).object();
+		check(sessionObject.value(QStringLiteral("version")).toInt()
+			== KProtocolConstraints::kProtocolVersion,
+			QStringLiteral("session encoder writes protocol version"));
+
+		KClipboardMessage clipboard;
+		clipboard.type = ReadyClipboardMessageType;
+		clipboard.strMessageId = QStringLiteral("12345678-1234-1234-1234-1234567890ab");
+		const QJsonObject clipboardObject = QJsonDocument::fromJson(
+			KClipboardMessageCodec::encode(clipboard).toUtf8()).object();
+		check(clipboardObject.value(QStringLiteral("version")).toInt()
+			== KProtocolConstraints::kProtocolVersion,
+			QStringLiteral("clipboard encoder writes protocol version"));
+
+		KInputMessage decoded;
+		check(KInputMessageCodec::decode(
+			QStringLiteral("{\"version\":1,\"type\":\"mouseMove\",\"x\":1,\"y\":2,"
+				"\"futureField\":true}"), &decoded, nullptr),
+			QStringLiteral("unknown fields are ignored for forward compatibility"));
+	}
+
+	void testWebRtcSignalingMessages()
+	{
+		KWebRtcSignalingMessage offer;
+		offer.type = OfferWebRtcSignalingMessageType;
+		offer.strSdp = QStringLiteral("v=0\\r\\n");
+		KWebRtcSignalingMessage decoded;
+		check(KWebRtcSignalingMessageCodec::decode(
+			KWebRtcSignalingMessageCodec::encode(offer), &decoded, nullptr)
+			&& decoded.type == OfferWebRtcSignalingMessageType
+			&& decoded.strSdp == offer.strSdp,
+			QStringLiteral("WebRTC offer round-trips"));
+
+		KWebRtcSignalingMessage candidate;
+		candidate.type = IceCandidateWebRtcSignalingMessageType;
+		candidate.strSdpMid = QStringLiteral("0");
+		candidate.nSdpMLineIndex = 0;
+		candidate.strCandidate = QStringLiteral("candidate:1 1 UDP 1 127.0.0.1 9 typ host");
+		check(KWebRtcSignalingMessageCodec::decode(
+			KWebRtcSignalingMessageCodec::encode(candidate), &decoded, nullptr)
+			&& decoded.type == IceCandidateWebRtcSignalingMessageType,
+			QStringLiteral("WebRTC ICE candidate round-trips"));
+
+		check(!KWebRtcSignalingMessageCodec::decode(
+			QStringLiteral("{\"version\":2,\"messageType\":\"offer\","
+				"\"sdpType\":\"offer\",\"sdp\":\"v=0\"}"), &decoded, nullptr),
+			QStringLiteral("unsupported signaling version is rejected"));
+		check(!KWebRtcSignalingMessageCodec::decode(
+			QString(KProtocolConstraints::kMaximumSignalingMessageBytes + 1, QLatin1Char('x')),
+			&decoded, nullptr),
+			QStringLiteral("oversized signaling message is rejected"));
 	}
 }
 
@@ -449,6 +563,8 @@ int main(int nArgc, char *pArgv[])
 	testInvalidAccessMessages();
 	testClipboardMessages();
 	testInvalidClipboardMessages();
+	testProtocolVersionsAndUnknownFields();
+	testWebRtcSignalingMessages();
 
 	if (g_nFailureCount == 0)
 		qInfo() << "All protocol codec tests passed";

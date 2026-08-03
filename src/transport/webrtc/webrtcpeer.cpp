@@ -2,14 +2,14 @@
 
 #include "common/latencytracelogger.h"
 #include "common/sessiontracelogger.h"
+#include "core/protocol/protocolconstraints.h"
+#include "core/protocol/webrtcsignalingmessage.h"
 #include "transport/webrtc/webrtcdatachannel.h"
 #include "transport/webrtc/webrtch264decoder.h"
 #include "transport/webrtc/webrtch264encoder.h"
 #include "transport/webrtc/webrtclatencyprobe.h"
 #include "transport/webrtc/webrtcremoteframeprocessor.h"
 
-#include <QtCore/QJsonDocument>
-#include <QtCore/QJsonObject>
 #include <QtCore/QMetaObject>
 #include <QtCore/QPointer>
 #include <QtCore/QThread>
@@ -71,15 +71,6 @@ private:
 
 namespace
 {
-	constexpr char kMessageType[] = "messageType";
-	constexpr char kSdpType[] = "sdpType";
-	constexpr char kSdp[] = "sdp";
-	constexpr char kSdpMid[] = "sdpMid";
-	constexpr char kSdpMLineIndex[] = "sdpMLineIndex";
-	constexpr char kCandidate[] = "candidate";
-	constexpr char kOffer[] = "offer";
-	constexpr char kAnswer[] = "answer";
-	constexpr char kIceCandidate[] = "iceCandidate";
 	constexpr char kStreamId[] = "wrc-stream";
 	constexpr char kVideoLabel[] = "wrc-screen";
 	constexpr char kInputChannelLabel[] = "input";
@@ -308,9 +299,12 @@ private:
 
 KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 	: KRemotePeerTransport(pParent)
-	, m_pInputDataChannel(new KWebRtcDataChannel(this))
-	, m_pSessionDataChannel(new KWebRtcDataChannel(this))
-	, m_pClipboardDataChannel(new KWebRtcDataChannel(this))
+	, m_pInputDataChannel(new KWebRtcDataChannel(
+		KProtocolConstraints::kMaximumInputMessageBytes, this))
+	, m_pSessionDataChannel(new KWebRtcDataChannel(
+		KProtocolConstraints::kMaximumSessionMessageBytes, this))
+	, m_pClipboardDataChannel(new KWebRtcDataChannel(
+		KProtocolConstraints::kMaximumClipboardMessageBytes, this))
 	, m_pRemoteFrameProcessor(new KWebRtcRemoteFrameProcessor(this))
 	, m_spLatencyProbe(std::make_unique<KWebRtcLatencyProbe>())
 {
@@ -318,14 +312,32 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 		this, &KWebRtcPeer::handleInputChannelChanged);
 	connect(m_pInputDataChannel, &KWebRtcDataChannel::textMessageReceived,
 		this, &KWebRtcPeer::handleInputChannelMessage);
+	connect(m_pInputDataChannel, &KWebRtcDataChannel::messageRejected,
+		this, [this](int nMessageBytes, const QString &strReason)
+		{
+			handleProtocolReject(QStringLiteral("input"), nMessageBytes,
+				strReason, &m_nInvalidInputMessages);
+		});
 	connect(m_pSessionDataChannel, &KWebRtcDataChannel::openChanged,
 		this, &KWebRtcPeer::handleSessionChannelChanged);
 	connect(m_pSessionDataChannel, &KWebRtcDataChannel::textMessageReceived,
 		this, &KWebRtcPeer::handleSessionChannelMessage);
+	connect(m_pSessionDataChannel, &KWebRtcDataChannel::messageRejected,
+		this, [this](int nMessageBytes, const QString &strReason)
+		{
+			handleProtocolReject(QStringLiteral("session"), nMessageBytes,
+				strReason, &m_nInvalidSessionMessages);
+		});
 	connect(m_pClipboardDataChannel, &KWebRtcDataChannel::openChanged,
 		this, &KWebRtcPeer::handleClipboardChannelChanged);
 	connect(m_pClipboardDataChannel, &KWebRtcDataChannel::textMessageReceived,
 		this, &KWebRtcPeer::handleClipboardChannelMessage);
+	connect(m_pClipboardDataChannel, &KWebRtcDataChannel::messageRejected,
+		this, [this](int nMessageBytes, const QString &strReason)
+		{
+			handleProtocolReject(QStringLiteral("clipboard"), nMessageBytes,
+				strReason, &m_nInvalidClipboardMessages);
+		});
 	connect(m_pRemoteFrameProcessor, &KWebRtcRemoteFrameProcessor::frameReady,
 		this, &KWebRtcPeer::remoteFrameReady);
 	connect(m_pRemoteFrameProcessor, &KWebRtcRemoteFrameProcessor::frameStatsReady,
@@ -340,6 +352,7 @@ KWebRtcPeer::~KWebRtcPeer()
 bool KWebRtcPeer::initialize(KSessionRole role, QString *pErrorMessage)
 {
 	shutdown();
+	m_bProtocolTerminationPending = false;
 	m_role = role;
 	if (!createFactory(pErrorMessage))
 		return false;
@@ -363,6 +376,11 @@ bool KWebRtcPeer::initialize(KSessionRole role, QString *pErrorMessage)
 void KWebRtcPeer::shutdown()
 {
 	stopStatsPolling();
+	m_nInvalidSignalingMessages = 0;
+	m_nInvalidInputMessages = 0;
+	m_nInvalidSessionMessages = 0;
+	m_nInvalidClipboardMessages = 0;
+	m_bProtocolTerminationPending = false;
 	m_pInputDataChannel->clear();
 	m_pSessionDataChannel->clear();
 	m_pClipboardDataChannel->clear();
@@ -408,21 +426,23 @@ void KWebRtcPeer::restartIce()
 
 void KWebRtcPeer::handleSignalingMessage(const QString &strMessage)
 {
-	const QJsonDocument document = QJsonDocument::fromJson(strMessage.toUtf8());
-	if (!document.isObject())
+	KWebRtcSignalingMessage message;
+	QString strError;
+	if (!KWebRtcSignalingMessageCodec::decode(strMessage, &message, &strError))
+	{
+		handleProtocolReject(QStringLiteral("signaling"), strMessage.toUtf8().size(),
+			strError, &m_nInvalidSignalingMessages);
 		return;
-
-	const QJsonObject object = document.object();
-	const QString strMessageType = object.value(QString::fromLatin1(kMessageType)).toString();
-	if (strMessageType == QString::fromLatin1(kOffer) || strMessageType == QString::fromLatin1(kAnswer))
-	{
-		handleSessionDescription(strMessageType, object.value(QString::fromLatin1(kSdp)).toString());
 	}
-	else if (strMessageType == QString::fromLatin1(kIceCandidate))
+	m_nInvalidSignalingMessages = 0;
+	if (message.type == OfferWebRtcSignalingMessageType
+		|| message.type == AnswerWebRtcSignalingMessageType)
 	{
-		handleIceCandidate(object.value(QString::fromLatin1(kSdpMid)).toString(),
-			object.value(QString::fromLatin1(kSdpMLineIndex)).toInt(),
-			object.value(QString::fromLatin1(kCandidate)).toString());
+		handleSessionDescription(KWebRtcSignalingMessageCodec::typeName(message.type), message.strSdp);
+	}
+	else
+	{
+		handleIceCandidate(message.strSdpMid, message.nSdpMLineIndex, message.strCandidate);
 	}
 }
 
@@ -730,12 +750,12 @@ void KWebRtcPeer::OnIceCandidate(const webrtc::IceCandidate *pCandidate)
 	if (pCandidate == nullptr)
 		return;
 
-	QJsonObject object;
-	object.insert(QString::fromLatin1(kMessageType), QString::fromLatin1(kIceCandidate));
-	object.insert(QString::fromLatin1(kSdpMid), QString::fromStdString(pCandidate->sdp_mid()));
-	object.insert(QString::fromLatin1(kSdpMLineIndex), pCandidate->sdp_mline_index());
-	object.insert(QString::fromLatin1(kCandidate), QString::fromStdString(pCandidate->ToString()));
-	emit signalingMessageReady(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+	KWebRtcSignalingMessage message;
+	message.type = IceCandidateWebRtcSignalingMessageType;
+	message.strSdpMid = QString::fromStdString(pCandidate->sdp_mid());
+	message.nSdpMLineIndex = pCandidate->sdp_mline_index();
+	message.strCandidate = QString::fromStdString(pCandidate->ToString());
+	emit signalingMessageReady(KWebRtcSignalingMessageCodec::encode(message));
 }
 
 void KWebRtcPeer::OnIceConnectionReceivingChange(bool)
@@ -779,13 +799,11 @@ void KWebRtcPeer::handleSessionChannelMessage(const QString &strMessage)
 	QString strError;
 	if (!KSessionMessageCodec::decode(strMessage, &message, &strError))
 	{
-		KSessionTraceLogger::write(roleToString(m_role),
-			QStringLiteral("protocol_reject"),
-			QStringLiteral("session"),
-			strMessage.toUtf8().size(),
-			strError);
+		handleProtocolReject(QStringLiteral("session"), strMessage.toUtf8().size(),
+			strError, &m_nInvalidSessionMessages);
 		return;
 	}
+	m_nInvalidSessionMessages = 0;
 	emit sessionMessageReceived(message);
 }
 
@@ -795,13 +813,11 @@ void KWebRtcPeer::handleClipboardChannelMessage(const QString &strMessage)
 	QString strError;
 	if (!KClipboardMessageCodec::decode(strMessage, &message, &strError))
 	{
-		KSessionTraceLogger::write(roleToString(m_role),
-			QStringLiteral("protocol_reject"),
-			QStringLiteral("clipboard"),
-			strMessage.toUtf8().size(),
-			strError);
+		handleProtocolReject(QStringLiteral("clipboard"), strMessage.toUtf8().size(),
+			strError, &m_nInvalidClipboardMessages);
 		return;
 	}
+	m_nInvalidClipboardMessages = 0;
 	emit clipboardMessageReceived(message);
 }
 
@@ -810,6 +826,7 @@ void KWebRtcPeer::handleInputChannelMessage(const QString &strMessage)
 	QString strResponse;
 	if (m_spLatencyProbe->handleMessage(strMessage, m_role, &strResponse))
 	{
+		m_nInvalidInputMessages = 0;
 		if (!strResponse.isEmpty() && m_pInputDataChannel->isOpen())
 			m_pInputDataChannel->sendText(strResponse);
 		return;
@@ -819,14 +836,49 @@ void KWebRtcPeer::handleInputChannelMessage(const QString &strMessage)
 	QString strError;
 	if (!KInputMessageCodec::decode(strMessage, &message, &strError))
 	{
-		KSessionTraceLogger::write(roleToString(m_role),
-			QStringLiteral("protocol_reject"),
-			QStringLiteral("input"),
-			strMessage.toUtf8().size(),
-			strError);
+		handleProtocolReject(QStringLiteral("input"), strMessage.toUtf8().size(),
+			strError, &m_nInvalidInputMessages);
 		return;
 	}
+	m_nInvalidInputMessages = 0;
 	emit inputMessageReceived(message);
+}
+
+void KWebRtcPeer::handleProtocolReject(const QString &strChannel,
+	int nMessageBytes,
+	const QString &strError,
+	std::atomic_int *pInvalidCount)
+{
+	const int nInvalidCount = pInvalidCount != nullptr
+		? pInvalidCount->fetch_add(1) + 1
+		: 1;
+	KSessionTraceLogger::write(roleToString(m_role),
+		QStringLiteral("protocol_reject"),
+		strChannel,
+		nMessageBytes,
+		QStringLiteral("error=%1 consecutive=%2")
+			.arg(strError)
+			.arg(nInvalidCount));
+	if (nInvalidCount >= KProtocolConstraints::kMaximumInvalidMessages)
+		terminateForProtocolViolation(strChannel);
+}
+
+void KWebRtcPeer::terminateForProtocolViolation(const QString &strChannel)
+{
+	if (m_bProtocolTerminationPending.exchange(true))
+		return;
+
+	const QPointer<KWebRtcPeer> pPeer(this);
+	QMetaObject::invokeMethod(this,
+		[pPeer, strChannel]()
+		{
+			if (!pPeer)
+				return;
+			emit pPeer->transportError(QStringLiteral(
+				"Remote peer sent too many invalid %1 messages").arg(strChannel));
+			emit pPeer->connectionTerminated(QStringLiteral("protocol_violation"));
+		},
+		Qt::QueuedConnection);
 }
 
 void KWebRtcPeer::handleLocalDescription(webrtc::SessionDescriptionInterface *pDescription)
@@ -1028,13 +1080,12 @@ void KWebRtcPeer::sendSessionDescription(const webrtc::SessionDescriptionInterfa
 			.arg(stringViewToQString(webrtc::SdpTypeToString(pDescription->GetType())))
 			.arg(strSdp.find(kPlayoutDelayUri) != std::string::npos ? 1 : 0));
 
-	QJsonObject object;
-	object.insert(QString::fromLatin1(kMessageType),
-		stringViewToQString(webrtc::SdpTypeToString(pDescription->GetType())));
-	object.insert(QString::fromLatin1(kSdpType),
-		stringViewToQString(webrtc::SdpTypeToString(pDescription->GetType())));
-	object.insert(QString::fromLatin1(kSdp), QString::fromStdString(strSdp));
-	emit signalingMessageReady(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+	KWebRtcSignalingMessage message;
+	message.type = pDescription->GetType() == webrtc::SdpType::kOffer
+		? OfferWebRtcSignalingMessageType
+		: AnswerWebRtcSignalingMessageType;
+	message.strSdp = QString::fromStdString(strSdp);
+	emit signalingMessageReady(KWebRtcSignalingMessageCodec::encode(message));
 }
 
 void KWebRtcPeer::handleSessionDescription(const QString &strType, const QString &strSdp)
