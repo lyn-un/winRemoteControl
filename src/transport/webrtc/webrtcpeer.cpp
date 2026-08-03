@@ -81,6 +81,10 @@ namespace
 	constexpr int kReceiverMaxFrameRateFps = 60;
 	constexpr double kSecondsToMilliseconds = 1000.0;
 	constexpr quint64 kVideoTraceFrameInterval = 30;
+	constexpr quint64 kInputLowWatermarkBytes = 1024;
+	constexpr quint64 kInputHighWatermarkBytes = 4 * 1024;
+	constexpr quint64 kClipboardLowWatermarkBytes = 128 * 1024;
+	constexpr quint64 kClipboardHighWatermarkBytes = 512 * 1024;
 	constexpr char kPlayoutDelayUri[] = "http://www.webrtc.org/experiments/rtp-hdrext/playout-delay";
 
 	static int secondsToMs(double fSeconds)
@@ -308,6 +312,56 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 	, m_pRemoteFrameProcessor(new KWebRtcRemoteFrameProcessor(this))
 	, m_spLatencyProbe(std::make_unique<KWebRtcLatencyProbe>())
 {
+	const KProtocolRouter::Guard allowMessage =
+		[](const KProtocolEnvelope &, const KProtocolRouteContext &) { return true; };
+	const KProtocolRouter::Guard allowControlledInput =
+		[](const KProtocolEnvelope &, const KProtocolRouteContext &context)
+		{
+			return context.nRole == static_cast<int>(ControlledSessionRole);
+		};
+	const KProtocolRouter::Guard allowControllerMessage =
+		[](const KProtocolEnvelope &, const KProtocolRouteContext &context)
+		{
+			return context.nRole == static_cast<int>(ControllerSessionRole);
+		};
+	for (KInputMessageType type : { MouseMoveInputMessageType, MouseButtonInputMessageType,
+		MouseWheelInputMessageType, KeyInputMessageType })
+	{
+		m_protocolRouter.registerHandler(InputProtocolChannel,
+			KInputMessageCodec::typeName(type), allowControlledInput,
+			[this](const KProtocolEnvelope &envelope) { decodeInputMessage(envelope); });
+	}
+	for (const QString &strType : { QStringLiteral("latencyPing"), QStringLiteral("latencyPong") })
+	{
+		m_protocolRouter.registerHandler(InputProtocolChannel, strType, allowMessage,
+			[this](const KProtocolEnvelope &envelope) { handleLatencyMessage(envelope); });
+	}
+	for (KSessionMessageType type : { DeviceInfoRequestSessionMessageType,
+		StartStreamingSessionMessageType, StopStreamingSessionMessageType,
+		StreamConfigSessionMessageType })
+	{
+		m_protocolRouter.registerHandler(SessionProtocolChannel,
+			KSessionMessageCodec::typeName(type), allowControlledInput,
+			[this](const KProtocolEnvelope &envelope) { decodeSessionMessage(envelope); });
+	}
+	m_protocolRouter.registerHandler(SessionProtocolChannel,
+		KSessionMessageCodec::typeName(DeviceInfoSessionMessageType), allowControllerMessage,
+		[this](const KProtocolEnvelope &envelope) { decodeSessionMessage(envelope); });
+	m_protocolRouter.registerHandler(SessionProtocolChannel,
+		KSessionMessageCodec::typeName(EndSessionMessageType), allowMessage,
+		[this](const KProtocolEnvelope &envelope) { decodeSessionMessage(envelope); });
+	for (KClipboardMessageType type : { ReadyClipboardMessageType,
+		TextClipboardMessageType, SyncStateClipboardMessageType })
+	{
+		m_protocolRouter.registerHandler(ClipboardProtocolChannel,
+			KClipboardMessageCodec::typeName(type), allowMessage,
+			[this](const KProtocolEnvelope &envelope) { decodeClipboardMessage(envelope); });
+	}
+
+	m_pInputDataChannel->setBufferWatermarks(
+		kInputLowWatermarkBytes, kInputHighWatermarkBytes);
+	m_pClipboardDataChannel->setBufferWatermarks(
+		kClipboardLowWatermarkBytes, kClipboardHighWatermarkBytes);
 	connect(m_pInputDataChannel, &KWebRtcDataChannel::openChanged,
 		this, &KWebRtcPeer::handleInputChannelChanged);
 	connect(m_pInputDataChannel, &KWebRtcDataChannel::textMessageReceived,
@@ -318,6 +372,8 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 			handleProtocolReject(QStringLiteral("input"), nMessageBytes,
 				strReason, &m_nInvalidInputMessages);
 		});
+	connect(m_pInputDataChannel, &KWebRtcDataChannel::lowWatermarkReached,
+		this, &KWebRtcPeer::flushInputQueue);
 	connect(m_pSessionDataChannel, &KWebRtcDataChannel::openChanged,
 		this, &KWebRtcPeer::handleSessionChannelChanged);
 	connect(m_pSessionDataChannel, &KWebRtcDataChannel::textMessageReceived,
@@ -338,6 +394,8 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 			handleProtocolReject(QStringLiteral("clipboard"), nMessageBytes,
 				strReason, &m_nInvalidClipboardMessages);
 		});
+	connect(m_pClipboardDataChannel, &KWebRtcDataChannel::lowWatermarkReached,
+		this, &KWebRtcPeer::flushClipboardQueue);
 	connect(m_pRemoteFrameProcessor, &KWebRtcRemoteFrameProcessor::frameReady,
 		this, &KWebRtcPeer::remoteFrameReady);
 	connect(m_pRemoteFrameProcessor, &KWebRtcRemoteFrameProcessor::frameStatsReady,
@@ -376,6 +434,8 @@ bool KWebRtcPeer::initialize(KSessionRole role, QString *pErrorMessage)
 void KWebRtcPeer::shutdown()
 {
 	stopStatsPolling();
+	m_inputSendQueue.clear();
+	m_clipboardSendQueue.clear();
 	m_nInvalidSignalingMessages = 0;
 	m_nInvalidInputMessages = 0;
 	m_nInvalidSessionMessages = 0;
@@ -465,7 +525,15 @@ void KWebRtcPeer::pushVideoFrame(const KVideoFrame &frame)
 
 void KWebRtcPeer::sendInputMessage(const KInputMessage &message)
 {
-	m_pInputDataChannel->sendText(KInputMessageCodec::encode(message));
+	const QString strPayload = KInputMessageCodec::encode(message);
+	const bool bMouseMove = message.type == MouseMoveInputMessageType;
+	if (!m_inputSendQueue.isEmpty() || m_pInputDataChannel->isBackpressured())
+	{
+		enqueueInputMessage(strPayload, bMouseMove);
+		return;
+	}
+	if (!m_pInputDataChannel->sendText(strPayload))
+		enqueueInputMessage(strPayload, bMouseMove);
 }
 
 void KWebRtcPeer::sendLatencyPing()
@@ -475,12 +543,71 @@ void KWebRtcPeer::sendLatencyPing()
 	{
 		return;
 	}
-	m_pInputDataChannel->sendText(m_spLatencyProbe->createPing());
+	if (!m_pInputDataChannel->isBackpressured() && m_inputSendQueue.isEmpty())
+		m_pInputDataChannel->sendText(m_spLatencyProbe->createPing());
 }
 
 void KWebRtcPeer::sendClipboardMessage(const KClipboardMessage &message)
 {
-	m_pClipboardDataChannel->sendText(KClipboardMessageCodec::encode(message));
+	KOutboundMessage queuedMessage;
+	queuedMessage.strPayload = KClipboardMessageCodec::encode(message);
+	queuedMessage.strCoalescingKey = message.type == TextClipboardMessageType
+		? QStringLiteral("clipboardText") : QString();
+	queuedMessage.bReliable = message.type != TextClipboardMessageType;
+	if (!m_clipboardSendQueue.isEmpty() || m_pClipboardDataChannel->isBackpressured())
+	{
+		m_clipboardSendQueue.enqueue(queuedMessage);
+		return;
+	}
+	if (!m_pClipboardDataChannel->sendText(queuedMessage.strPayload))
+		m_clipboardSendQueue.enqueue(queuedMessage);
+}
+
+bool KWebRtcPeer::enqueueInputMessage(const QString &strPayload, bool bMouseMove)
+{
+	KOutboundMessage queuedMessage;
+	queuedMessage.strPayload = strPayload;
+	queuedMessage.strCoalescingKey = bMouseMove ? QStringLiteral("mouseMove") : QString();
+	queuedMessage.bReliable = !bMouseMove;
+	const KOutboundEnqueueResult result = m_inputSendQueue.enqueue(queuedMessage);
+	if (result != OverflowOutboundMessage)
+		return true;
+	emit inputBackpressureOverflow();
+	return false;
+}
+
+void KWebRtcPeer::flushInputQueue()
+{
+	while (m_pInputDataChannel->isOpen()
+		&& !m_pInputDataChannel->isBackpressured()
+		&& !m_inputSendQueue.isEmpty())
+	{
+		KOutboundMessage message;
+		if (!m_inputSendQueue.takeFirst(&message))
+			return;
+		if (!m_pInputDataChannel->sendText(message.strPayload))
+		{
+			m_inputSendQueue.prepend(message);
+			return;
+		}
+	}
+}
+
+void KWebRtcPeer::flushClipboardQueue()
+{
+	while (m_pClipboardDataChannel->isOpen()
+		&& !m_pClipboardDataChannel->isBackpressured()
+		&& !m_clipboardSendQueue.isEmpty())
+	{
+		KOutboundMessage message;
+		if (!m_clipboardSendQueue.takeFirst(&message))
+			return;
+		if (!m_pClipboardDataChannel->sendText(message.strPayload))
+		{
+			m_clipboardSendQueue.prepend(message);
+			return;
+		}
+	}
 }
 
 void KWebRtcPeer::sendSessionMessage(const KSessionMessage &message)
@@ -777,7 +904,14 @@ void KWebRtcPeer::handleInputChannelChanged(bool bOpen)
 {
 	emit inputChannelChanged(bOpen);
 	if (bOpen)
+	{
+		flushInputQueue();
 		startStatsPolling(QStringLiteral("input_channel_open"));
+	}
+	else
+	{
+		m_inputSendQueue.clear();
+	}
 }
 
 void KWebRtcPeer::handleSessionChannelChanged(bool bOpen)
@@ -791,57 +925,101 @@ void KWebRtcPeer::handleSessionChannelChanged(bool bOpen)
 void KWebRtcPeer::handleClipboardChannelChanged(bool bOpen)
 {
 	emit clipboardChannelChanged(bOpen);
+	if (bOpen)
+		flushClipboardQueue();
+	else
+		m_clipboardSendQueue.clear();
 }
 
 void KWebRtcPeer::handleSessionChannelMessage(const QString &strMessage)
 {
+	routeDataMessage(SessionProtocolChannel, strMessage, &m_nInvalidSessionMessages);
+}
+
+void KWebRtcPeer::decodeSessionMessage(const KProtocolEnvelope &envelope)
+{
 	KSessionMessage message;
 	QString strError;
-	if (!KSessionMessageCodec::decode(strMessage, &message, &strError))
+	if (!KSessionMessageCodec::decode(envelope.strRawMessage, &message, &strError))
 	{
-		handleProtocolReject(QStringLiteral("session"), strMessage.toUtf8().size(),
+		m_bRouteHandlerRejected = true;
+		handleProtocolReject(QStringLiteral("session"), envelope.nEncodedBytes,
 			strError, &m_nInvalidSessionMessages);
 		return;
 	}
-	m_nInvalidSessionMessages = 0;
 	emit sessionMessageReceived(message);
 }
 
 void KWebRtcPeer::handleClipboardChannelMessage(const QString &strMessage)
 {
+	routeDataMessage(ClipboardProtocolChannel, strMessage, &m_nInvalidClipboardMessages);
+}
+
+void KWebRtcPeer::decodeClipboardMessage(const KProtocolEnvelope &envelope)
+{
 	KClipboardMessage message;
 	QString strError;
-	if (!KClipboardMessageCodec::decode(strMessage, &message, &strError))
+	if (!KClipboardMessageCodec::decode(envelope.strRawMessage, &message, &strError))
 	{
-		handleProtocolReject(QStringLiteral("clipboard"), strMessage.toUtf8().size(),
+		m_bRouteHandlerRejected = true;
+		handleProtocolReject(QStringLiteral("clipboard"), envelope.nEncodedBytes,
 			strError, &m_nInvalidClipboardMessages);
 		return;
 	}
-	m_nInvalidClipboardMessages = 0;
 	emit clipboardMessageReceived(message);
 }
 
 void KWebRtcPeer::handleInputChannelMessage(const QString &strMessage)
 {
+	routeDataMessage(InputProtocolChannel, strMessage, &m_nInvalidInputMessages);
+}
+
+void KWebRtcPeer::handleLatencyMessage(const KProtocolEnvelope &envelope)
+{
 	QString strResponse;
-	if (m_spLatencyProbe->handleMessage(strMessage, m_role, &strResponse))
+	if (m_spLatencyProbe->handleMessage(envelope.strRawMessage, m_role, &strResponse))
 	{
-		m_nInvalidInputMessages = 0;
 		if (!strResponse.isEmpty() && m_pInputDataChannel->isOpen())
 			m_pInputDataChannel->sendText(strResponse);
-		return;
 	}
+	else
+	{
+		m_bRouteHandlerRejected = true;
+		handleProtocolReject(QStringLiteral("input"), envelope.nEncodedBytes,
+			QStringLiteral("Invalid latency message"), &m_nInvalidInputMessages);
+	}
+}
 
+void KWebRtcPeer::decodeInputMessage(const KProtocolEnvelope &envelope)
+{
 	KInputMessage message;
 	QString strError;
-	if (!KInputMessageCodec::decode(strMessage, &message, &strError))
+	if (!KInputMessageCodec::decode(envelope.strRawMessage, &message, &strError))
 	{
-		handleProtocolReject(QStringLiteral("input"), strMessage.toUtf8().size(),
+		m_bRouteHandlerRejected = true;
+		handleProtocolReject(QStringLiteral("input"), envelope.nEncodedBytes,
 			strError, &m_nInvalidInputMessages);
 		return;
 	}
-	m_nInvalidInputMessages = 0;
 	emit inputMessageReceived(message);
+}
+
+void KWebRtcPeer::routeDataMessage(KProtocolChannel channel,
+	const QString &strMessage,
+	std::atomic_int *pInvalidCount)
+{
+	KProtocolRouteContext context;
+	context.nRole = static_cast<int>(m_role);
+	m_bRouteHandlerRejected = false;
+	const KProtocolRouteResult result = m_protocolRouter.route(channel, strMessage, context);
+	if (result.status == HandledProtocolRouteStatus)
+	{
+		if (!m_bRouteHandlerRejected && pInvalidCount != nullptr)
+			*pInvalidCount = 0;
+		return;
+	}
+	handleProtocolReject(KProtocolEnvelopeCodec::channelName(channel),
+		strMessage.toUtf8().size(), result.strError, pInvalidCount);
 }
 
 void KWebRtcPeer::handleProtocolReject(const QString &strChannel,
@@ -874,9 +1052,8 @@ void KWebRtcPeer::terminateForProtocolViolation(const QString &strChannel)
 		{
 			if (!pPeer)
 				return;
-			emit pPeer->transportError(QStringLiteral(
+			emit pPeer->protocolViolation(strChannel, QStringLiteral(
 				"Remote peer sent too many invalid %1 messages").arg(strChannel));
-			emit pPeer->connectionTerminated(QStringLiteral("protocol_violation"));
 		},
 		Qt::QueuedConnection);
 }

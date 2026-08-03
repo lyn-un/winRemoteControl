@@ -2,6 +2,7 @@
 #define _WINREMOTECONTROL_REMOTEDESKTOPWINDOW_H_
 
 #include "core/media/streamconfig.h"
+#include "core/session/sessionstatemachine.h"
 
 #include <QtCore/QPoint>
 #include <QtCore/QRect>
@@ -28,7 +29,7 @@ public:
 public slots:
 	void setRemoteScreenSize(int nWidth, int nHeight);
 	void handleFrameReady(int nWidth, int nHeight, quint64 nFrameIndex, qint64 nTimestampMs);
-	void handleSessionStateChanged(const QString &strState);
+	void handleSessionStateChanged(KSessionState state);
 
 signals:
 	void desktopCloseRequested();

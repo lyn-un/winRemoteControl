@@ -171,33 +171,44 @@ void KSessionViewModel::handleCaptureStatusChanged(const QString &strStatus)
 void KSessionViewModel::handleWebRtcStateChanged(const QString &strState)
 {
 	emit webRtcStateChanged(strState);
-	if (strState == QStringLiteral("Connected") && m_bEnterDesktopAfterReconnect)
+}
+
+void KSessionViewModel::handleSessionStateChanged(KSessionState state)
+{
+	emit sessionStateChanged(state);
+	const QString strPresentationState = state == IdleSessionState
+		&& m_lastSessionState == StoppingSessionState
+		? QStringLiteral("Disconnected")
+		: KSessionStateMachine::stateName(state);
+	m_lastSessionState = state;
+	emit webRtcStateChanged(strPresentationState);
+	if (state == ConnectedSessionState && m_bEnterDesktopAfterReconnect)
 	{
 		m_bEnterDesktopAfterReconnect = false;
 		enterRemoteDesktop();
 		return;
 	}
-	if (strState == QStringLiteral("Reconnecting"))
+	if (state == ReconnectingSessionState)
 	{
 		m_inputFeedbackTracker.reset();
 		emit suspendRemoteInputRequested();
 	}
-	else if (strState == QStringLiteral("Disconnected")
-		|| strState == QStringLiteral("Listening")
-		|| strState == QStringLiteral("Failed")
-		|| strState == QStringLiteral("Stopped"))
+	else if (state == IdleSessionState || state == ListeningSessionState)
 	{
 		emit clearPreviewRequested();
 	}
 
-	if (strState == QStringLiteral("Disconnected")
-		|| strState == QStringLiteral("Listening")
-		|| strState == QStringLiteral("Failed"))
+	if (state == IdleSessionState || state == ListeningSessionState)
 	{
 		m_bEnterDesktopAfterReconnect = false;
 		m_remoteScreenSize = QSize();
 		m_inputFeedbackTracker.reset();
 	}
+}
+
+void KSessionViewModel::handleSessionError(const KSessionError &error)
+{
+	emit sessionErrorOccurred(error);
 }
 
 void KSessionViewModel::handleRemoteDeviceInfoChanged(const QString &strComputerName,
@@ -228,12 +239,14 @@ void KSessionViewModel::initConnections()
 		this, &KSessionViewModel::signalingChanged);
 	connect(m_pSessionController, &KSessionController::webRtcStateChanged,
 		this, &KSessionViewModel::handleWebRtcStateChanged);
+	connect(m_pSessionController, &KSessionController::sessionStateChanged,
+		this, &KSessionViewModel::handleSessionStateChanged);
 	connect(m_pSessionController, &KSessionController::sessionChannelChanged,
 		this, &KSessionViewModel::sessionChannelChanged);
 	connect(m_pSessionController, &KSessionController::remoteDeviceInfoChanged,
 		this, &KSessionViewModel::handleRemoteDeviceInfoChanged);
-	connect(m_pSessionController, &KSessionController::sessionError,
-		this, &KSessionViewModel::errorOccurred);
+	connect(m_pSessionController, &KSessionController::sessionErrorOccurred,
+		this, &KSessionViewModel::handleSessionError);
 	connect(m_pSessionController, &KSessionController::remoteFrameReady,
 		this, &KSessionViewModel::renderFrameReady);
 	connect(m_pSessionController, &KSessionController::remoteFrameStatsReady,

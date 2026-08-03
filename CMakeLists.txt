@@ -47,7 +47,11 @@ add_library(wrc_protocol STATIC
 	src/core/protocol/clipboardmessage.h
 	src/core/protocol/landiscoverymessage.cpp
 	src/core/protocol/landiscoverymessage.h
+	src/core/protocol/protocolenvelope.cpp
+	src/core/protocol/protocolenvelope.h
 	src/core/protocol/protocolconstraints.h
+	src/core/protocol/protocolrouter.cpp
+	src/core/protocol/protocolrouter.h
 	src/core/protocol/inputmessage.cpp
 	src/core/protocol/inputmessage.h
 	src/core/protocol/sessionmessage.cpp
@@ -74,6 +78,8 @@ add_library(wrc_core STATIC
 	src/core/input/inputinjectorinterface.h
 	src/core/media/capturecontroller.h
 	src/core/session/deviceinfoprovider.h
+	src/core/session/sessionerror.cpp
+	src/core/session/sessionerror.h
 	src/core/session/sessionstatemachine.cpp
 	src/core/session/sessionstatemachine.h
 	src/core/settings/applicationsettings.cpp
@@ -82,6 +88,8 @@ add_library(wrc_core STATIC
 	src/core/transport/signalingtransport.h
 	src/core/transport/networkstatstracker.cpp
 	src/core/transport/networkstatstracker.h
+	src/core/transport/outboundmessagequeue.cpp
+	src/core/transport/outboundmessagequeue.h
 )
 
 target_include_directories(wrc_core PUBLIC
@@ -147,6 +155,8 @@ add_library(wrc_session_application STATIC
 	src/session/sessioncoordinator.cpp
 	src/session/sessioncoordinator.h
 	src/session/sessioncontroller.h
+	src/session/sessionerrorpresenter.cpp
+	src/session/sessionerrorpresenter.h
 )
 
 target_include_directories(wrc_session_application PUBLIC
@@ -584,6 +594,17 @@ if(BUILD_TESTING)
 		Qt6::Core
 	)
 	add_test(NAME wrc_frame_watermark_tests COMMAND wrc_frame_watermark_tests)
+
+	add_executable(wrc_p1_core_tests
+		tests/unit/p1coretest.cpp
+	)
+	target_link_libraries(wrc_p1_core_tests PRIVATE
+		wrc_core
+		wrc_protocol
+		wrc_session_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_p1_core_tests COMMAND wrc_p1_core_tests)
 endif()
 
 set(WEBVIEW2_LOADER "${WEBVIEW2_ROOT}/build/native/x64/WebView2Loader.dll")

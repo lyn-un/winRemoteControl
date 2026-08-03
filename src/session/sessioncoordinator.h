@@ -9,15 +9,18 @@
 #include "core/protocol/clipboardmessage.h"
 #include "core/protocol/accessmessage.h"
 #include "core/protocol/sessionmessage.h"
+#include "core/protocol/protocolrouter.h"
 #include "core/session/sessionstatemachine.h"
 #include "core/transport/remotepeertransport.h"
 #include "session/sessioncontroller.h"
 
 #include <QtCore/QElapsedTimer>
+#include <QtCore/QHash>
 #include <QtCore/QObject>
 #include <QtCore/QString>
 
 #include <memory>
+#include <functional>
 
 class IKDeviceInfoProvider;
 class IKInputInjector;
@@ -61,6 +64,8 @@ public slots:
 private:
 	bool initializePeer(KSessionRole role, QString *pErrorMessage);
 	void wirePeer();
+	void initializeProtocolRoutes();
+	void initializeSessionHandlers();
 	void sendSessionMessage(const KSessionMessage &message);
 	void finishSession(KSessionEndReason reason,
 		const QString &strDetail,
@@ -75,11 +80,21 @@ private:
 	void handleClipboardChannelChanged(bool bOpen);
 	void handleSessionChannelChanged(bool bOpen);
 	void handleSessionMessage(const KSessionMessage &message);
+	void handleDeviceInfoRequestMessage(const KSessionMessage &message);
+	void handleDeviceInfoMessage(const KSessionMessage &message);
+	void handleStartStreamingMessage(const KSessionMessage &message);
+	void handleStopStreamingMessage(const KSessionMessage &message);
+	void handleEndSessionMessage(const KSessionMessage &message);
+	void handleStreamConfigMessage(const KSessionMessage &message);
 	void handleInputInjected(quint64 nSeq, qint64 nInjectedMs);
 	void handleOutgoingConnectionEstablished();
 	void handleOutgoingConnectionFailed(const QString &strMessage);
 	void handleIncomingConnectionEstablished(const QString &strSourceAddress, quint16 nSourcePort);
 	void handleSignalingMessage(const QString &strMessage);
+	void handleAccessEnvelope(const KProtocolEnvelope &envelope);
+	void handleWebRtcSignalingEnvelope(const KProtocolEnvelope &envelope);
+	void handleBusyEnvelope(const KProtocolEnvelope &envelope);
+	void handleInvalidSignalingMessage(KProtocolRouteStatus status, const QString &strError);
 	void handleAccessMessage(const KAccessMessage &message);
 	void handleApprovalTimeout();
 	void acceptIncomingAccess();
@@ -93,8 +108,16 @@ private:
 	void handleReconnectTimeout();
 	void sendDeviceInfoMessage();
 	void updateListeningAvailability(bool bAvailable, quint16 nPort = 0);
+	void publishSessionState();
+	void reportSessionError(KSessionErrorDomain domain,
+		KSessionErrorCode code,
+		KSessionErrorStage stage,
+		bool bRetryable,
+		const QString &strTechnicalMessage);
 
 	KSessionStateMachine m_sessionStateMachine;
+	KProtocolRouter m_protocolRouter;
+	QHash<int, std::function<void(const KSessionMessage &)>> m_sessionHandlers;
 	bool m_bDeviceInfoRequested = false;
 	bool m_bInputChannelOpen = false;
 	bool m_bClipboardChannelOpen = false;
@@ -113,6 +136,8 @@ private:
 	QString m_strAccessDeviceName;
 	QString m_strAccessSourceAddress;
 	quint64 m_nApprovalGeneration = 0;
+	int m_nInvalidSignalingMessages = 0;
+	bool m_bSignalingHandlerRejected = false;
 	std::unique_ptr<IKDeviceInfoProvider> m_spDeviceInfoProvider;
 	std::unique_ptr<KRemotePeerTransport> m_spRemotePeerTransport;
 	std::unique_ptr<KSignalingTransport> m_spSignalingTransport;

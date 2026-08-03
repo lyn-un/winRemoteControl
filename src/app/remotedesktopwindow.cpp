@@ -84,22 +84,9 @@ void KRemoteDesktopWindow::handleFrameReady(int nWidth,
 	adjustInitialWindowSize(nWidth, nHeight);
 }
 
-void KRemoteDesktopWindow::handleSessionStateChanged(const QString &strState)
+void KRemoteDesktopWindow::handleSessionStateChanged(KSessionState state)
 {
-	const bool bAvailable = strState == QStringLiteral("Connected")
-		|| strState == QStringLiteral("Streaming");
-	const bool bUnavailable = strState == QStringLiteral("Reconnecting")
-		|| strState == QStringLiteral("Connecting")
-		|| strState == QStringLiteral("AwaitingApproval")
-		|| strState == QStringLiteral("Negotiating")
-		|| strState == QStringLiteral("Listening")
-		|| strState == QStringLiteral("Idle")
-		|| strState == QStringLiteral("Disconnected")
-		|| strState == QStringLiteral("Failed")
-		|| strState == QStringLiteral("Stopping");
-	if (!bAvailable && !bUnavailable)
-		return;
-
+	const bool bAvailable = state == ConnectedSessionState || state == StreamingSessionState;
 	m_bSessionAvailable = bAvailable;
 	if (!m_bSessionAvailable)
 	{

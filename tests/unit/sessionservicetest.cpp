@@ -181,6 +181,11 @@ namespace
 			emit connectionTerminated(strReason);
 		}
 
+		void overflowInputQueue()
+		{
+			emit inputBackpressureOverflow();
+		}
+
 		KSessionRole initializedRole = ControllerSessionRole;
 		KSessionMessage lastSentSessionMessage;
 		KInputMessage lastSentInputMessage;
@@ -241,10 +246,10 @@ namespace
 			[&nStartCaptureCount]() { ++nStartCaptureCount; });
 		QObject::connect(&service, &KSessionCoordinator::stopCaptureRequested,
 			[&nStopCaptureCount]() { ++nStopCaptureCount; });
-		QObject::connect(&service, &KSessionCoordinator::webRtcStateChanged,
-			[&bNegotiating](const QString &strState)
+		QObject::connect(&service, &KSessionCoordinator::sessionStateChanged,
+			[&bNegotiating](KSessionState state)
 			{
-				if (strState == QStringLiteral("Negotiating"))
+				if (state == NegotiatingSessionState)
 					bNegotiating = true;
 			});
 		QObject::connect(&service, &KSessionCoordinator::listeningAvailabilityChanged,
@@ -396,6 +401,7 @@ namespace
 		QString strSourceAddress;
 		QString strObservedDeviceName;
 		QString strObservedSourceAddress;
+		KSessionError controllerError;
 		QObject::connect(&controlled, &KSessionCoordinator::incomingAccessObserved,
 			[&](const QString &strDeviceName, const QString &strSource)
 			{
@@ -408,6 +414,8 @@ namespace
 				strRequestId = strId;
 				strSourceAddress = strSource;
 			});
+		QObject::connect(&controller, &KSessionCoordinator::sessionErrorOccurred,
+			[&controllerError](const KSessionError &error) { controllerError = error; });
 
 		const quint16 nPort = reserveLocalPort();
 		controlled.startSignalingServer(nPort);
@@ -436,6 +444,11 @@ namespace
 		QCoreApplication::processEvents();
 		check(pControllerPeer->nCreateOfferCount == 1,
 			QStringLiteral("duplicate approval does not create another offer"));
+		pControllerPeer->overflowInputQueue();
+		QCoreApplication::processEvents();
+		check(controllerError.code == InputBackpressureOverflowSessionErrorCode
+			&& !controllerError.bRetryable,
+			QStringLiteral("input backpressure overflow is reported without string matching"));
 
 		controller.disconnectSession();
 		controlled.disconnectSession();
@@ -459,10 +472,10 @@ namespace
 			std::make_unique<KFakeInputInjector>(),
 			std::move(spControllerPeer),
 			std::make_unique<KTcpSignalingTransport>());
-		QString strControllerState;
+		KSessionState controllerState = IdleSessionState;
 		QString strSignalingState;
-		QObject::connect(&controller, &KSessionCoordinator::webRtcStateChanged,
-			[&strControllerState](const QString &strState) { strControllerState = strState; });
+		QObject::connect(&controller, &KSessionCoordinator::sessionStateChanged,
+			[&controllerState](KSessionState state) { controllerState = state; });
 		QObject::connect(&controller, &KSessionCoordinator::signalingChanged,
 			[&strSignalingState](const QString &strState) { strSignalingState = strState; });
 
@@ -477,7 +490,7 @@ namespace
 
 		const int nShutdownCount = pControllerPeer->nShutdownCount;
 		pControllerPeer->interruptConnection();
-		check(strControllerState == QStringLiteral("Reconnecting"),
+		check(controllerState == ReconnectingSessionState,
 			QStringLiteral("ICE interruption enters reconnecting state"));
 		check(pControllerPeer->nRestartIceCount == 1,
 			QStringLiteral("controller requests one ICE restart while signaling is available"));
@@ -485,7 +498,7 @@ namespace
 		check(pControllerPeer->nRestartIceCount == 1,
 			QStringLiteral("duplicate interruption does not request another ICE restart"));
 		pControllerPeer->restoreConnection();
-		check(strControllerState == QStringLiteral("Streaming"),
+		check(controllerState == StreamingSessionState,
 			QStringLiteral("successful recovery restores streaming state"));
 		check(pControllerPeer->nShutdownCount == nShutdownCount,
 			QStringLiteral("successful recovery keeps the existing peer"));
@@ -498,7 +511,7 @@ namespace
 		check(pControllerPeer->nRestartIceCount == 1,
 			QStringLiteral("ICE restart is skipped when signaling is unavailable"));
 		pControllerPeer->terminateConnection(QStringLiteral("ice_failed"));
-		check(strControllerState == QStringLiteral("Disconnected"),
+		check(controllerState == IdleSessionState,
 			QStringLiteral("failed recovery ends the controller session"));
 
 		controlled.startSignalingServer(nPort);
@@ -525,15 +538,18 @@ namespace
 		KApplicationSettings settings;
 		settings.approvalMode = DenyRemoteApprovalMode;
 		controlled.applyApplicationSettings(settings);
-		QString strControllerError;
-		QObject::connect(&controller, &KSessionCoordinator::sessionError,
-			[&strControllerError](const QString &strError) { strControllerError = strError; });
+		KSessionError controllerError;
+		QObject::connect(&controller, &KSessionCoordinator::sessionErrorOccurred,
+			[&controllerError](const KSessionError &error) { controllerError = error; });
 
 		const quint16 nPort = reserveLocalPort();
 		controlled.startSignalingServer(nPort);
 		controller.connectSignaling(QStringLiteral("127.0.0.1"), nPort);
-		check(waitUntil([&strControllerError]() { return !strControllerError.isEmpty(); }),
+		check(waitUntil([&controllerError]() { return controllerError.isValid(); }),
 			QStringLiteral("deny policy reports rejection to controller"));
+		check(controllerError.code == ApprovalRejectedSessionErrorCode
+			&& !controllerError.bRetryable,
+			QStringLiteral("deny policy exposes a non-retryable structured error"));
 		check(pControllerPeer->nCreateOfferCount == 0,
 			QStringLiteral("deny policy never creates a WebRTC offer"));
 		controller.disconnectSession();
@@ -551,11 +567,13 @@ namespace
 		KApplicationSettings settings;
 		settings.bRemoteAccessEnabled = false;
 		controlled.applyApplicationSettings(settings);
-		QString strError;
-		QObject::connect(&controlled, &KSessionCoordinator::sessionError,
-			[&strError](const QString &strMessage) { strError = strMessage; });
+		KSessionError sessionError;
+		QObject::connect(&controlled, &KSessionCoordinator::sessionErrorOccurred,
+			[&sessionError](const KSessionError &error) { sessionError = error; });
 		controlled.startSignalingServer(reserveLocalPort());
-		check(!strError.isEmpty() && pPeer->nInitializeCount == 0,
+		check(sessionError.code == RemoteAccessDisabledSessionErrorCode
+			&& !sessionError.bRetryable
+			&& pPeer->nInitializeCount == 0,
 			QStringLiteral("disabled remote access refuses to start listening"));
 	}
 
@@ -592,10 +610,13 @@ namespace
 			QStringLiteral("fragmented signaling message is reassembled"));
 		socket.write(QByteArrayLiteral("not-json\nnot-json\nnot-json\n"));
 		socket.flush();
-		check(waitUntil([&strProtocolError]() { return !strProtocolError.isEmpty(); }),
-			QStringLiteral("three consecutive malformed messages close signaling"));
-		check(strProtocolError.contains(QStringLiteral("Too many invalid")),
-			QStringLiteral("malformed signaling failure is explicit"));
+		check(waitUntil([&nReceivedMessages]() { return nReceivedMessages == 4; }),
+			QStringLiteral("transport forwards malformed payloads to protocol router"));
+		check(strProtocolError.isEmpty(),
+			QStringLiteral("transport does not interpret malformed protocol payloads"));
+		socket.disconnectFromHost();
+		waitUntil([&socket]() { return socket.state() == QAbstractSocket::UnconnectedState; });
+		transport.disconnectPeer();
 
 		strProtocolError.clear();
 		bIncomingConnected = false;

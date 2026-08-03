@@ -22,11 +22,16 @@ public:
 	void clear();
 	bool isOpen() const;
 	bool sendText(const QString &strMessage);
+	void setBufferWatermarks(quint64 nLowBytes, quint64 nHighBytes);
+	quint64 bufferedAmount() const;
+	bool isBackpressured() const;
 
 signals:
 	void openChanged(bool bOpen);
 	void textMessageReceived(const QString &strMessage);
 	void messageRejected(int nMessageBytes, const QString &strReason);
+	void bufferedAmountChanged(quint64 nBufferedBytes);
+	void lowWatermarkReached();
 
 private:
 	void OnStateChange() override;
@@ -35,6 +40,9 @@ private:
 
 	webrtc::scoped_refptr<webrtc::DataChannelInterface> m_spChannel;
 	int m_nMaximumMessageBytes = 0;
+	quint64 m_nLowWatermarkBytes = 0;
+	quint64 m_nHighWatermarkBytes = 0;
+	bool m_bBackpressured = false;
 };
 
 #endif // _WINREMOTECONTROL_WEBRTCDATACHANNEL_H_

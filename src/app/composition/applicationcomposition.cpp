@@ -149,6 +149,8 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		pWebViewWidget, &KWebViewWidget::sendStatusChanged);
 	connect(m_pSessionViewModel, &KSessionViewModel::errorOccurred,
 		pWebViewWidget, &KWebViewWidget::sendCaptureError);
+	connect(m_pSessionViewModel, &KSessionViewModel::sessionErrorOccurred,
+		pWebViewWidget, &KWebViewWidget::sendSessionError);
 	connect(m_pSessionViewModel, &KSessionViewModel::frameReady,
 		pWebViewWidget, &KWebViewWidget::sendFrameReady);
 	connect(m_pSessionViewModel, &KSessionViewModel::networkStatsReady,
@@ -202,6 +204,8 @@ void KApplicationComposition::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWin
 		pWebViewWidget, &KWebViewWidget::sendStatusChanged);
 	connect(m_pSessionViewModel, &KSessionViewModel::errorOccurred,
 		pWebViewWidget, &KWebViewWidget::sendCaptureError);
+	connect(m_pSessionViewModel, &KSessionViewModel::sessionErrorOccurred,
+		pWebViewWidget, &KWebViewWidget::sendSessionError);
 	connect(m_pSessionViewModel, &KSessionViewModel::frameReady,
 		pWebViewWidget, &KWebViewWidget::sendFrameReady);
 	connect(m_pSessionViewModel, &KSessionViewModel::frameReady,
@@ -212,7 +216,7 @@ void KApplicationComposition::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWin
 		pWebViewWidget, &KWebViewWidget::sendSignalingChanged);
 	connect(m_pSessionViewModel, &KSessionViewModel::webRtcStateChanged,
 		pWebViewWidget, &KWebViewWidget::sendWebRtcStateChanged);
-	connect(m_pSessionViewModel, &KSessionViewModel::webRtcStateChanged,
+	connect(m_pSessionViewModel, &KSessionViewModel::sessionStateChanged,
 		pWindow, &KRemoteDesktopWindow::handleSessionStateChanged);
 	connect(m_pSessionViewModel, &KSessionViewModel::remoteDeviceInfoChanged,
 		pWebViewWidget, &KWebViewWidget::sendDeviceInfoChanged);

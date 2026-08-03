@@ -5,6 +5,8 @@
 #include "core/media/networkstats.h"
 #include "core/media/streamconfig.h"
 #include "core/protocol/inputmessage.h"
+#include "core/session/sessionerror.h"
+#include "core/session/sessionstatemachine.h"
 #include "session/inputfeedbacktracker.h"
 
 #include <QtCore/QObject>
@@ -52,6 +54,8 @@ signals:
 	void statusChanged(const QString &strStatus);
 	void signalingChanged(const QString &strState);
 	void webRtcStateChanged(const QString &strState);
+	void sessionStateChanged(KSessionState state);
+	void sessionErrorOccurred(const KSessionError &error);
 	void sessionChannelChanged(bool bOpen);
 	void remoteDeviceInfoChanged(const QString &strComputerName,
 		const QString &strWallpaperMime,
@@ -68,6 +72,8 @@ signals:
 private slots:
 	void handleCaptureStatusChanged(const QString &strStatus);
 	void handleWebRtcStateChanged(const QString &strState);
+	void handleSessionStateChanged(KSessionState state);
+	void handleSessionError(const KSessionError &error);
 	void handleRemoteDeviceInfoChanged(const QString &strComputerName,
 		const QString &strWallpaperMime,
 		const QString &strWallpaperData,
@@ -82,6 +88,7 @@ private:
 	KSessionController *m_pSessionController = nullptr;
 	quint64 m_nInputSequence = 0;
 	bool m_bEnterDesktopAfterReconnect = false;
+	KSessionState m_lastSessionState = IdleSessionState;
 	QSize m_remoteScreenSize;
 	KInputFeedbackTracker m_inputFeedbackTracker;
 	KStreamConfig m_streamConfig;

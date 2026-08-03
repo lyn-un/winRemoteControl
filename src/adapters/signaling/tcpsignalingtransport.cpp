@@ -4,8 +4,6 @@
 #include "core/protocol/protocolconstraints.h"
 
 #include <QtCore/QTimer>
-#include <QtCore/QJsonDocument>
-#include <QtCore/QJsonObject>
 #include <QtNetwork/QHostAddress>
 #include <QtNetwork/QNetworkProxy>
 #include <QtNetwork/QTcpServer>
@@ -15,8 +13,6 @@ namespace
 {
 	constexpr int kConnectTimeoutMs = 3000;
 	constexpr int kInitialReadTimeoutMs = 5000;
-	constexpr char kMessageType[] = "type";
-	constexpr char kBusy[] = "busy";
 }
 
 KTcpSignalingTransport::KTcpSignalingTransport(QObject *pParent)
@@ -189,31 +185,7 @@ void KTcpSignalingTransport::handleReadyRead()
 			if (line.isEmpty())
 				continue;
 
-			const QJsonDocument document = QJsonDocument::fromJson(line);
-			if (!document.isObject())
-			{
-				++m_nConsecutiveInvalidMessages;
-				if (m_nConsecutiveInvalidMessages
-					>= KProtocolConstraints::kMaximumInvalidMessages)
-				{
-					rejectPeerData(QStringLiteral("Too many invalid signaling messages"));
-					return;
-				}
-				continue;
-			}
-
-			m_nConsecutiveInvalidMessages = 0;
 			m_pReadTimeoutTimer->stop();
-			if (document.object().value(QString::fromLatin1(kMessageType)).toString()
-				== QString::fromLatin1(kBusy))
-			{
-				emit signalingError(QStringLiteral("The controlled host is already in another session"));
-				closeSocket();
-				emit stateChanged(QStringLiteral("ConnectionFailed"));
-				emit connectionLost();
-				return;
-			}
-
 			emit messageReceived(QString::fromUtf8(line));
 		}
 
@@ -286,7 +258,6 @@ void KTcpSignalingTransport::handleReadTimeout()
 void KTcpSignalingTransport::setSocket(QTcpSocket *pSocket)
 {
 	m_readBuffer.clear();
-	m_nConsecutiveInvalidMessages = 0;
 	m_pSocket = pSocket;
 	connect(m_pSocket, &QTcpSocket::readyRead,
 		this, &KTcpSignalingTransport::handleReadyRead);

@@ -548,7 +548,9 @@ export function DesktopPage() {
             {sessionEnded && (
               <div className="desktop-recovery-actions">
                 <button className="outline-button" onClick={() => sendCommand("closeDesktop")}>返回主界面</button>
-                <button className="primary-button" onClick={() => sendCommand("retryLastConnection")}>重新连接</button>
+                {state.sessionError?.retryable !== false && (
+                  <button className="primary-button" onClick={() => sendCommand("retryLastConnection")}>重新连接</button>
+                )}
               </div>
             )}
           </div>

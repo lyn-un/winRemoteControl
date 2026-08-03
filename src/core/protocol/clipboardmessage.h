@@ -32,6 +32,7 @@ public:
 	static bool decode(const QString &strMessage,
 		KClipboardMessage *pMessage,
 		QString *pErrorMessage);
+	static QString typeName(KClipboardMessageType type);
 };
 
 #endif // _WINREMOTECONTROL_CORE_PROTOCOL_CLIPBOARDMESSAGE_H_

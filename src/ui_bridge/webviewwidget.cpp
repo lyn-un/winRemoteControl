@@ -1,5 +1,7 @@
 #include "ui_bridge/webviewwidget.h"
 
+#include "session/sessionerrorpresenter.h"
+
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
 #include <QtCore/QJsonDocument>
@@ -113,6 +115,18 @@ void KWebViewWidget::sendNetworkStatsChanged(const KNetworkStats &stats)
 	object.insert(QStringLiteral("framesDecoded"), stats.nFramesDecoded);
 	object.insert(QStringLiteral("keyFramesDecoded"), stats.nKeyFramesDecoded);
 	object.insert(QStringLiteral("framesDropped"), stats.nFramesDropped);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendSessionError(const KSessionError &error)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("sessionError"));
+	object.insert(QStringLiteral("domain"), KSessionError::domainName(error.domain));
+	object.insert(QStringLiteral("code"), KSessionError::codeName(error.code));
+	object.insert(QStringLiteral("stage"), KSessionError::stageName(error.stage));
+	object.insert(QStringLiteral("retryable"), error.bRetryable);
+	object.insert(QStringLiteral("message"), KSessionErrorPresenter::userMessage(error));
 	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
 }
 

@@ -4,6 +4,8 @@
 #include "common/sessiontracelogger.h"
 #include "core/input/inputinjectorinterface.h"
 #include "core/protocol/accessmessage.h"
+#include "core/protocol/protocolconstraints.h"
+#include "core/protocol/webrtcsignalingmessage.h"
 #include "core/session/deviceinfoprovider.h"
 #include "core/transport/signalingtransport.h"
 #include "input/inputinjector.h"
@@ -41,20 +43,6 @@ namespace
 		return strExtra;
 	}
 
-	static QString AccessRejectionError(const QString &strReason)
-	{
-		if (strReason == QStringLiteral("user_rejected"))
-			return QStringLiteral("对方拒绝了远程控制请求");
-		if (strReason == QStringLiteral("timeout"))
-			return QStringLiteral("对方未在规定时间内确认连接");
-		if (strReason == QStringLiteral("remote_access_disabled"))
-			return QStringLiteral("对方已关闭远程控制");
-		if (strReason == QStringLiteral("busy"))
-			return QStringLiteral("对方正在处理其他连接");
-		if (strReason == QStringLiteral("cancelled"))
-			return QStringLiteral("远程控制请求已取消");
-		return QStringLiteral("对方拒绝了无效的连接请求");
-	}
 }
 
 KSessionCoordinator::KSessionCoordinator(
@@ -74,6 +62,8 @@ KSessionCoordinator::KSessionCoordinator(
 {
 	Q_ASSERT(m_spRemotePeerTransport != nullptr);
 	Q_ASSERT(m_pSignaling != nullptr);
+	initializeProtocolRoutes();
+	initializeSessionHandlers();
 	m_pReconnectTimer->setSingleShot(true);
 	m_pApprovalTimer->setSingleShot(true);
 	connect(m_pReconnectTimer, &QTimer::timeout,
@@ -83,7 +73,12 @@ KSessionCoordinator::KSessionCoordinator(
 	connect(m_pSignaling, &KSignalingTransport::stateChanged,
 		this, &KSessionCoordinator::signalingChanged);
 	connect(m_pSignaling, &KSignalingTransport::signalingError,
-		this, &KSessionCoordinator::sessionError);
+		this, [this](const QString &strMessage)
+		{
+			reportSessionError(SignalingSessionErrorDomain,
+				ConnectionFailedSessionErrorCode, ConnectingSessionErrorStage,
+				true, strMessage);
+		});
 	connect(m_pSignaling, &KSignalingTransport::outgoingConnectionEstablished,
 		this, &KSessionCoordinator::handleOutgoingConnectionEstablished);
 	connect(m_pSignaling, &KSignalingTransport::outgoingConnectionFailed,
@@ -93,13 +88,139 @@ KSessionCoordinator::KSessionCoordinator(
 	connect(m_pSignaling, &KSignalingTransport::connectionLost,
 		this, &KSessionCoordinator::handleSignalingConnectionLost);
 	connect(m_pInputInjector, &KInputInjector::inputError,
-		this, &KSessionCoordinator::sessionError);
+		this, [this](const QString &strMessage)
+		{
+			reportSessionError(InputSessionErrorDomain,
+				SendFailedSessionErrorCode, StreamingSessionErrorStage,
+				false, strMessage);
+		});
 	wirePeer();
 }
 
 KSessionCoordinator::~KSessionCoordinator()
 {
 	disconnectSession();
+}
+
+void KSessionCoordinator::initializeProtocolRoutes()
+{
+	const KProtocolRouter::Guard controllerAwaitingApproval =
+		[](const KProtocolEnvelope &, const KProtocolRouteContext &context)
+		{
+			return context.nRole == static_cast<int>(ControllerSessionRole)
+				&& context.nState == static_cast<int>(AwaitingApprovalSessionState);
+		};
+	const KProtocolRouter::Guard controlledAwaitingApproval =
+		[](const KProtocolEnvelope &, const KProtocolRouteContext &context)
+		{
+			return context.nRole == static_cast<int>(ControlledSessionRole)
+				&& context.nState == static_cast<int>(AwaitingApprovalSessionState);
+		};
+	const KProtocolRouter::Guard eitherAwaitingApproval =
+		[](const KProtocolEnvelope &, const KProtocolRouteContext &context)
+		{
+			return context.nState == static_cast<int>(AwaitingApprovalSessionState);
+		};
+	const auto acceptsWebRtcSignalingState = [](const KProtocolRouteContext &context)
+	{
+		return context.nState == static_cast<int>(NegotiatingSessionState)
+			|| context.nState == static_cast<int>(ConnectedSessionState)
+			|| context.nState == static_cast<int>(StreamingSessionState)
+			|| context.nState == static_cast<int>(ReconnectingSessionState);
+	};
+	const KProtocolRouter::Guard controlledAcceptsOffer =
+		[acceptsWebRtcSignalingState](const KProtocolEnvelope &,
+			const KProtocolRouteContext &context)
+		{
+			return context.nRole == static_cast<int>(ControlledSessionRole)
+				&& acceptsWebRtcSignalingState(context);
+		};
+	const KProtocolRouter::Guard controllerAcceptsAnswer =
+		[acceptsWebRtcSignalingState](const KProtocolEnvelope &,
+			const KProtocolRouteContext &context)
+		{
+			return context.nRole == static_cast<int>(ControllerSessionRole)
+				&& acceptsWebRtcSignalingState(context);
+		};
+	const KProtocolRouter::Guard acceptsIce =
+		[acceptsWebRtcSignalingState](const KProtocolEnvelope &,
+			const KProtocolRouteContext &context)
+		{
+			return acceptsWebRtcSignalingState(context);
+		};
+	const KProtocolRouter::Handler accessHandler =
+		[this](const KProtocolEnvelope &envelope) { handleAccessEnvelope(envelope); };
+	m_protocolRouter.registerHandler(SignalingProtocolChannel,
+		KAccessMessageCodec::typeName(RequestAccessMessageType),
+		controlledAwaitingApproval, accessHandler);
+	for (KAccessMessageType type : { PendingAccessMessageType, AcceptedAccessMessageType })
+	{
+		m_protocolRouter.registerHandler(SignalingProtocolChannel,
+			KAccessMessageCodec::typeName(type), controllerAwaitingApproval, accessHandler);
+	}
+	m_protocolRouter.registerHandler(SignalingProtocolChannel,
+		KAccessMessageCodec::typeName(RejectedAccessMessageType),
+		eitherAwaitingApproval, accessHandler);
+	m_protocolRouter.registerHandler(SignalingProtocolChannel, QStringLiteral("busy"),
+		controllerAwaitingApproval,
+		[this](const KProtocolEnvelope &envelope) { handleBusyEnvelope(envelope); });
+	const KProtocolRouter::Handler signalingHandler =
+		[this](const KProtocolEnvelope &envelope)
+		{
+			handleWebRtcSignalingEnvelope(envelope);
+		};
+	m_protocolRouter.registerHandler(SignalingProtocolChannel,
+		KWebRtcSignalingMessageCodec::typeName(OfferWebRtcSignalingMessageType),
+		controlledAcceptsOffer, signalingHandler);
+	m_protocolRouter.registerHandler(SignalingProtocolChannel,
+		KWebRtcSignalingMessageCodec::typeName(AnswerWebRtcSignalingMessageType),
+		controllerAcceptsAnswer, signalingHandler);
+	m_protocolRouter.registerHandler(SignalingProtocolChannel,
+		KWebRtcSignalingMessageCodec::typeName(IceCandidateWebRtcSignalingMessageType),
+		acceptsIce, signalingHandler);
+}
+
+void KSessionCoordinator::initializeSessionHandlers()
+{
+	m_sessionHandlers.insert(DeviceInfoRequestSessionMessageType,
+		[this](const KSessionMessage &message) { handleDeviceInfoRequestMessage(message); });
+	m_sessionHandlers.insert(DeviceInfoSessionMessageType,
+		[this](const KSessionMessage &message) { handleDeviceInfoMessage(message); });
+	m_sessionHandlers.insert(StartStreamingSessionMessageType,
+		[this](const KSessionMessage &message) { handleStartStreamingMessage(message); });
+	m_sessionHandlers.insert(StopStreamingSessionMessageType,
+		[this](const KSessionMessage &message) { handleStopStreamingMessage(message); });
+	m_sessionHandlers.insert(EndSessionMessageType,
+		[this](const KSessionMessage &message) { handleEndSessionMessage(message); });
+	m_sessionHandlers.insert(StreamConfigSessionMessageType,
+		[this](const KSessionMessage &message) { handleStreamConfigMessage(message); });
+}
+
+void KSessionCoordinator::publishSessionState()
+{
+	const KSessionState state = m_sessionStateMachine.state();
+	emit sessionStateChanged(state);
+}
+
+void KSessionCoordinator::reportSessionError(KSessionErrorDomain domain,
+	KSessionErrorCode code,
+	KSessionErrorStage stage,
+	bool bRetryable,
+	const QString &strTechnicalMessage)
+{
+	KSessionError error;
+	error.domain = domain;
+	error.code = code;
+	error.stage = stage;
+	error.bRetryable = bRetryable;
+	error.strTechnicalMessage = strTechnicalMessage;
+	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
+		QStringLiteral("session_error"), KSessionError::codeName(code), -1,
+		QStringLiteral("domain=%1 stage=%2 retryable=%3 technical=%4")
+			.arg(KSessionError::domainName(domain), KSessionError::stageName(stage))
+			.arg(bRetryable ? 1 : 0)
+			.arg(strTechnicalMessage));
+	emit sessionErrorOccurred(error);
 }
 
 void KSessionCoordinator::setRole(const QString &strRole)
@@ -129,7 +250,9 @@ void KSessionCoordinator::startSignalingServer(quint16 nPort)
 	m_bSignalingConnected = false;
 	if (!m_applicationSettings.bRemoteAccessEnabled)
 	{
-		emit sessionError(QStringLiteral("远程控制已在设置中关闭"));
+		reportSessionError(ConfigurationSessionErrorDomain,
+			RemoteAccessDisabledSessionErrorCode, ListeningSessionErrorStage,
+			false, QStringLiteral("Remote access is disabled"));
 		return;
 	}
 	if (m_sessionStateMachine.state() != IdleSessionState)
@@ -137,20 +260,24 @@ void KSessionCoordinator::startSignalingServer(quint16 nPort)
 	QString strError;
 	if (!initializePeer(ControlledSessionRole, &strError))
 	{
-		emit sessionError(strError);
+		reportSessionError(WebRtcSessionErrorDomain,
+			InitializationFailedSessionErrorCode, StartupSessionErrorStage,
+			false, strError);
 		return;
 	}
 
 	if (!m_pSignaling->startServer(nPort, &strError))
 	{
 		updateListeningAvailability(false);
-		emit sessionError(strError);
+		reportSessionError(SignalingSessionErrorDomain,
+			ConnectionFailedSessionErrorCode, ListeningSessionErrorStage,
+			true, strError);
 		return;
 	}
 
 	m_sessionStateMachine.beginListening();
 	updateListeningAvailability(true, nPort);
-	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
+	publishSessionState();
 }
 
 void KSessionCoordinator::connectSignaling(const QString &strHost, quint16 nPort)
@@ -158,7 +285,9 @@ void KSessionCoordinator::connectSignaling(const QString &strHost, quint16 nPort
 	const QString strTargetHost = strHost;
 	if (strTargetHost.isEmpty() || nPort == 0)
 	{
-		emit sessionError(QStringLiteral("无效的被控端地址或端口"));
+		reportSessionError(ConfigurationSessionErrorDomain,
+			InvalidArgumentSessionErrorCode, ConnectingSessionErrorStage,
+			false, QStringLiteral("Invalid controlled endpoint"));
 		return;
 	}
 	m_strLastConnectionHost = strTargetHost;
@@ -170,12 +299,14 @@ void KSessionCoordinator::connectSignaling(const QString &strHost, quint16 nPort
 	QString strError;
 	if (!initializePeer(ControllerSessionRole, &strError))
 	{
-		emit sessionError(strError);
+		reportSessionError(WebRtcSessionErrorDomain,
+			InitializationFailedSessionErrorCode, StartupSessionErrorStage,
+			false, strError);
 		return;
 	}
 
 	m_sessionStateMachine.beginConnecting();
-	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
+	publishSessionState();
 	m_pSignaling->connectToHost(strTargetHost, nPort);
 }
 
@@ -186,7 +317,9 @@ void KSessionCoordinator::retryLastConnection()
 		|| m_strLastConnectionHost.isEmpty()
 		|| m_nLastConnectionPort == 0)
 	{
-		emit sessionError(QStringLiteral("没有可用于重新连接的被控端地址"));
+		reportSessionError(ConfigurationSessionErrorDomain,
+			InvalidArgumentSessionErrorCode, ConnectingSessionErrorStage,
+			false, QStringLiteral("No last connection endpoint"));
 		return;
 	}
 
@@ -267,7 +400,7 @@ void KSessionCoordinator::enterRemoteDesktop(const KStreamConfig &config)
 	message.type = StartStreamingSessionMessageType;
 	sendSessionMessage(message);
 	m_sessionStateMachine.beginStreaming();
-	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
+	publishSessionState();
 }
 
 void KSessionCoordinator::leaveRemoteDesktop()
@@ -279,14 +412,16 @@ void KSessionCoordinator::leaveRemoteDesktop()
 	sendSessionMessage(message);
 	m_sessionStateMachine.stopStreaming();
 	emit stopCaptureRequested();
-	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
+	publishSessionState();
 }
 
 void KSessionCoordinator::startStreaming()
 {
 	if (m_sessionStateMachine.role() != ControlledSessionRole)
 	{
-		emit sessionError(QStringLiteral("只有被控端可以开始推流"));
+		reportSessionError(ConfigurationSessionErrorDomain,
+			InvalidStateSessionErrorCode, StreamingSessionErrorStage,
+			false, QStringLiteral("Only the controlled role can start streaming"));
 		return;
 	}
 	if (!m_bSessionChannelOpen || !m_sessionStateMachine.canStartControlledStreaming())
@@ -294,7 +429,7 @@ void KSessionCoordinator::startStreaming()
 
 	emit startCaptureRequested();
 	m_sessionStateMachine.beginStreaming();
-	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
+	publishSessionState();
 }
 
 void KSessionCoordinator::stopStreaming()
@@ -410,7 +545,7 @@ void KSessionCoordinator::finishSession(KSessionEndReason reason,
 	const QString strReason = KSessionStateMachine::endReasonName(reason, strDetail);
 	const KSessionRole role = m_sessionStateMachine.role();
 	const quint64 nGeneration = m_sessionStateMachine.generation();
-	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
+	publishSessionState();
 	KSessionTraceLogger::write(roleToString(role),
 		QStringLiteral("session_end"),
 		strReason,
@@ -444,6 +579,8 @@ void KSessionCoordinator::finishSession(KSessionEndReason reason,
 	m_bSignalingConnected = false;
 	clearApprovalState(strReason);
 	m_bDeviceInfoRequested = false;
+	m_nInvalidSignalingMessages = 0;
+	m_bSignalingHandlerRejected = false;
 	m_bInputChannelOpen = false;
 	m_bClipboardChannelOpen = false;
 	m_bSessionChannelOpen = false;
@@ -464,26 +601,32 @@ void KSessionCoordinator::finishSession(KSessionEndReason reason,
 			bListening = true;
 			m_sessionStateMachine.finish(true);
 			updateListeningAvailability(true, m_nListeningPort);
-			emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
+			publishSessionState();
 		}
 		else
 		{
 			m_pSignaling->stop();
 			m_sessionStateMachine.finish(false);
-			emit webRtcStateChanged(QStringLiteral("Failed"));
-			emit sessionError(strError);
+			publishSessionState();
+			reportSessionError(WebRtcSessionErrorDomain,
+				InitializationFailedSessionErrorCode, ShutdownSessionErrorStage,
+				false, strError);
 		}
 	}
 	else
 	{
 		m_pSignaling->stop();
 		m_sessionStateMachine.finish(false);
-		emit webRtcStateChanged(QStringLiteral("Disconnected"));
+		publishSessionState();
 	}
 
 	if (bReportError)
 	{
-		emit sessionError(QStringLiteral("Remote session ended: %1").arg(strReason));
+		reportSessionError(WebRtcSessionErrorDomain,
+			bRecovering
+				? RecoveryFailedSessionErrorCode : ConnectionLostSessionErrorCode,
+			bRecovering ? RecoverySessionErrorStage : ConnectedSessionErrorStage,
+			true, QStringLiteral("Remote session ended: %1").arg(strReason));
 	}
 	else if (bListening)
 	{
@@ -515,9 +658,20 @@ void KSessionCoordinator::wirePeer()
 	connect(m_pSignaling, &KSignalingTransport::messageReceived,
 		this, &KSessionCoordinator::handleSignalingMessage);
 	connect(pTransport, &KRemotePeerTransport::stateChanged,
-		this, &KSessionCoordinator::webRtcStateChanged);
+		this, [this](const QString &strState)
+		{
+			KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
+				QStringLiteral("webrtc_state"), strState);
+		});
 	connect(pTransport, &KRemotePeerTransport::transportError,
-		this, &KSessionCoordinator::sessionError);
+		this, [this](const QString &strMessage)
+		{
+			reportSessionError(WebRtcSessionErrorDomain,
+				SendFailedSessionErrorCode,
+				m_sessionStateMachine.isReconnecting()
+					? RecoverySessionErrorStage : NegotiationSessionErrorStage,
+				true, strMessage);
+		});
 	connect(pTransport, &KRemotePeerTransport::remoteFrameReady,
 		this, &KSessionCoordinator::handleRemoteFrame, Qt::DirectConnection);
 	connect(pTransport, &KRemotePeerTransport::networkStatsReady,
@@ -544,6 +698,31 @@ void KSessionCoordinator::wirePeer()
 		this, &KSessionCoordinator::handlePeerConnectionRestored);
 	connect(pTransport, &KRemotePeerTransport::connectionTerminated,
 		this, &KSessionCoordinator::handlePeerConnectionTerminated);
+	connect(pTransport, &KRemotePeerTransport::inputBackpressureOverflow,
+		this, [this]()
+		{
+			if (!m_sessionStateMachine.canHandlePeerTermination())
+				return;
+			finishSession(PeerTerminatedSessionEndReason,
+				QStringLiteral("input_backpressure_overflow"),
+				m_sessionStateMachine.shouldKeepListening(), false, false);
+			reportSessionError(InputSessionErrorDomain,
+				InputBackpressureOverflowSessionErrorCode,
+				StreamingSessionErrorStage, false,
+				QStringLiteral("Reliable input queue overflow"));
+		});
+	connect(pTransport, &KRemotePeerTransport::protocolViolation,
+		this, [this](const QString &, const QString &strTechnicalMessage)
+		{
+			if (!m_sessionStateMachine.canHandlePeerTermination())
+				return;
+			finishSession(ConnectFailedSessionEndReason,
+				QStringLiteral("protocol_violation"),
+				m_sessionStateMachine.shouldKeepListening(), false, false);
+			reportSessionError(ProtocolSessionErrorDomain,
+				ProtocolViolationSessionErrorCode,
+				ConnectedSessionErrorStage, false, strTechnicalMessage);
+		});
 }
 
 void KSessionCoordinator::handleRemoteFrame(const KDecodedVideoFrame &frame)
@@ -655,7 +834,7 @@ void KSessionCoordinator::handleSessionChannelChanged(bool bOpen)
 	}
 	if (!m_sessionStateMachine.markConnected())
 		return;
-	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
+	publishSessionState();
 	if (m_sessionStateMachine.role() == ControllerSessionRole)
 	{
 		if (m_bDeviceInfoRequested)
@@ -686,65 +865,68 @@ void KSessionCoordinator::handleSessionMessage(const KSessionMessage &message)
 		QStringLiteral("handle"),
 		strType,
 		strMessage.toUtf8().size());
-	if (message.type == DeviceInfoRequestSessionMessageType
-		&& m_sessionStateMachine.role() == ControlledSessionRole)
-	{
+	const auto iterator = m_sessionHandlers.constFind(static_cast<int>(message.type));
+	if (iterator != m_sessionHandlers.constEnd())
+		iterator.value()(message);
+}
+
+void KSessionCoordinator::handleDeviceInfoRequestMessage(const KSessionMessage &)
+{
+	if (m_sessionStateMachine.role() == ControlledSessionRole)
 		sendDeviceInfoMessage();
+}
+
+void KSessionCoordinator::handleDeviceInfoMessage(const KSessionMessage &message)
+{
+	if (m_sessionStateMachine.role() != ControllerSessionRole)
+		return;
+	emit remoteDeviceInfoChanged(message.deviceInfo.strComputerName,
+		message.deviceInfo.strWallpaperMime,
+		message.deviceInfo.strWallpaperData,
+		message.deviceInfo.nScreenWidth,
+		message.deviceInfo.nScreenHeight);
+}
+
+void KSessionCoordinator::handleStartStreamingMessage(const KSessionMessage &)
+{
+	if (!m_sessionStateMachine.canStartControlledStreaming())
+		return;
+	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
+		QStringLiteral("emit"), QStringLiteral("startCaptureRequested"));
+	emit startCaptureRequested();
+	m_sessionStateMachine.beginStreaming();
+	publishSessionState();
+}
+
+void KSessionCoordinator::handleStopStreamingMessage(const KSessionMessage &)
+{
+	if (m_sessionStateMachine.role() != ControlledSessionRole
+		|| m_sessionStateMachine.state() != StreamingSessionState)
+	{
 		return;
 	}
+	m_sessionStateMachine.stopStreaming();
+	m_pInputInjector->releaseAllInputs();
+	resetInputTraceState();
+	emit stopCaptureRequested();
+	publishSessionState();
+}
 
-	if (message.type == DeviceInfoSessionMessageType
-		&& m_sessionStateMachine.role() == ControllerSessionRole)
-	{
-		emit remoteDeviceInfoChanged(message.deviceInfo.strComputerName,
-			message.deviceInfo.strWallpaperMime,
-			message.deviceInfo.strWallpaperData,
-			message.deviceInfo.nScreenWidth,
-			message.deviceInfo.nScreenHeight);
+void KSessionCoordinator::handleEndSessionMessage(const KSessionMessage &message)
+{
+	finishSession(RemoteStopSessionEndReason,
+		message.strReason,
+		m_sessionStateMachine.shouldKeepListening(),
+		false,
+		m_sessionStateMachine.role() == ControllerSessionRole);
+}
+
+void KSessionCoordinator::handleStreamConfigMessage(const KSessionMessage &message)
+{
+	if (m_sessionStateMachine.role() != ControlledSessionRole)
 		return;
-	}
-
-	if (message.type == StartStreamingSessionMessageType
-		&& m_sessionStateMachine.canStartControlledStreaming())
-	{
-		KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
-			QStringLiteral("emit"),
-			QStringLiteral("startCaptureRequested"));
-		emit startCaptureRequested();
-		m_sessionStateMachine.beginStreaming();
-		emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
-		return;
-	}
-
-	if (message.type == StopStreamingSessionMessageType
-		&& m_sessionStateMachine.role() == ControlledSessionRole
-		&& m_sessionStateMachine.state() == StreamingSessionState)
-	{
-		m_sessionStateMachine.stopStreaming();
-		m_pInputInjector->releaseAllInputs();
-		resetInputTraceState();
-		emit stopCaptureRequested();
-		emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
-		return;
-	}
-
-	if (message.type == EndSessionMessageType)
-	{
-		const QString strRemoteReason = message.strReason;
-		finishSession(RemoteStopSessionEndReason,
-			strRemoteReason,
-			m_sessionStateMachine.shouldKeepListening(),
-			false,
-			m_sessionStateMachine.role() == ControllerSessionRole);
-		return;
-	}
-
-	if (message.type == StreamConfigSessionMessageType
-		&& m_sessionStateMachine.role() == ControlledSessionRole)
-	{
-		m_spRemotePeerTransport->setStreamConfig(message.streamConfig);
-		emit streamConfigChanged(message.streamConfig);
-	}
+	m_spRemotePeerTransport->setStreamConfig(message.streamConfig);
+	emit streamConfigChanged(message.streamConfig);
 }
 
 void KSessionCoordinator::handleInputInjected(quint64 nSeq, qint64 nInjectedMs)
@@ -773,7 +955,7 @@ void KSessionCoordinator::handleOutgoingConnectionEstablished()
 		: QStringLiteral("Windows device");
 	sendAccessMessage(message);
 	m_pApprovalTimer->start(kInitialApprovalResponseTimeoutMs);
-	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
+	publishSessionState();
 	KSessionTraceLogger::write(QStringLiteral("controller"),
 		QStringLiteral("access"),
 		QStringLiteral("request_sent"),
@@ -790,7 +972,9 @@ void KSessionCoordinator::handleOutgoingConnectionFailed(const QString &strMessa
 		return;
 
 	finishSession(ConnectFailedSessionEndReason, QString(), false, false, false);
-	emit sessionError(strMessage);
+	reportSessionError(SignalingSessionErrorDomain,
+		ConnectionFailedSessionErrorCode, ConnectingSessionErrorStage,
+		true, strMessage);
 }
 
 void KSessionCoordinator::handleIncomingConnectionEstablished(
@@ -808,7 +992,7 @@ void KSessionCoordinator::handleIncomingConnectionEstablished(
 	m_nApprovalGeneration = m_sessionStateMachine.generation();
 	m_pApprovalTimer->start(kInitialApprovalResponseTimeoutMs);
 	updateListeningAvailability(false);
-	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
+	publishSessionState();
 	KSessionTraceLogger::write(QStringLiteral("controlled"),
 		QStringLiteral("access"),
 		QStringLiteral("connection_received"),
@@ -821,46 +1005,92 @@ void KSessionCoordinator::handleIncomingConnectionEstablished(
 
 void KSessionCoordinator::handleSignalingMessage(const QString &strMessage)
 {
-	if (KAccessMessageCodec::isAccessMessage(strMessage))
+	KProtocolRouteContext context;
+	context.nRole = static_cast<int>(m_sessionStateMachine.role());
+	context.nState = static_cast<int>(m_sessionStateMachine.state());
+	context.nGeneration = m_sessionStateMachine.generation();
+	m_bSignalingHandlerRejected = false;
+	const KProtocolRouteResult result = m_protocolRouter.route(
+		SignalingProtocolChannel, strMessage, context);
+	if (result.status == HandledProtocolRouteStatus && !m_bSignalingHandlerRejected)
 	{
-		KAccessMessage message;
-		QString strError;
-		if (!KAccessMessageCodec::decode(strMessage, &message, &strError))
-		{
-			if (m_sessionStateMachine.role() == ControlledSessionRole
-				&& m_sessionStateMachine.isAwaitingApproval())
-			{
-				rejectIncomingAccess(QStringLiteral("invalid_request"), false);
-			}
-			else
-			{
-				finishSession(ConnectFailedSessionEndReason, QString(), false, false, false);
-			}
-			emit sessionError(strError);
-			return;
-		}
-		handleAccessMessage(message);
+		m_nInvalidSignalingMessages = 0;
 		return;
 	}
+	if (result.status != HandledProtocolRouteStatus)
+		handleInvalidSignalingMessage(result.status, result.strError);
+}
 
-	if (m_sessionStateMachine.state() == NegotiatingSessionState
-		|| m_sessionStateMachine.state() == ConnectedSessionState
-		|| m_sessionStateMachine.state() == StreamingSessionState
-		|| m_sessionStateMachine.state() == ReconnectingSessionState)
+void KSessionCoordinator::handleAccessEnvelope(const KProtocolEnvelope &envelope)
+{
+	KAccessMessage message;
+	QString strError;
+	if (!KAccessMessageCodec::decode(envelope.strRawMessage, &message, &strError))
 	{
-		m_spRemotePeerTransport->handleSignalingMessage(strMessage);
+		m_bSignalingHandlerRejected = true;
+		handleInvalidSignalingMessage(MalformedProtocolRouteStatus, strError);
 		return;
 	}
+	handleAccessMessage(message);
+}
 
-	if (m_sessionStateMachine.isAwaitingApproval())
+void KSessionCoordinator::handleWebRtcSignalingEnvelope(const KProtocolEnvelope &envelope)
+{
+	m_spRemotePeerTransport->handleSignalingMessage(envelope.strRawMessage);
+}
+
+void KSessionCoordinator::handleBusyEnvelope(const KProtocolEnvelope &)
+{
+	if (m_sessionStateMachine.role() != ControllerSessionRole)
+		return;
+	finishSession(ConnectFailedSessionEndReason, QStringLiteral("busy"),
+		false, false, false);
+	reportSessionError(AccessSessionErrorDomain,
+		RemoteBusySessionErrorCode, ApprovalSessionErrorStage,
+		true, QStringLiteral("Remote peer is busy"));
+}
+
+void KSessionCoordinator::handleInvalidSignalingMessage(KProtocolRouteStatus status,
+	const QString &strError)
+{
+	const bool bWasAwaitingApproval = m_sessionStateMachine.isAwaitingApproval();
+	++m_nInvalidSignalingMessages;
+	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
+		QStringLiteral("protocol_reject"), QStringLiteral("signaling"), -1,
+		QStringLiteral("status=%1 consecutive=%2 error=%3")
+			.arg(static_cast<int>(status))
+			.arg(m_nInvalidSignalingMessages)
+			.arg(strError));
+	if (m_sessionStateMachine.role() == ControlledSessionRole
+		&& bWasAwaitingApproval)
 	{
-		const bool bControlled = m_sessionStateMachine.role() == ControlledSessionRole;
-		if (bControlled)
-			rejectIncomingAccess(QStringLiteral("invalid_request"), false);
-		else
-			finishSession(ConnectFailedSessionEndReason, QString(), false, false, false);
-		emit sessionError(QStringLiteral("对方版本不支持连接审批协议，请升级两端程序"));
+		rejectIncomingAccess(QStringLiteral("invalid_request"), false);
 	}
+	else if (bWasAwaitingApproval)
+	{
+		finishSession(ConnectFailedSessionEndReason, QString(), false, false, false);
+	}
+	else if (status == UnsupportedVersionProtocolRouteStatus
+		|| m_nInvalidSignalingMessages >= KProtocolConstraints::kMaximumInvalidMessages)
+	{
+		finishSession(ConnectFailedSessionEndReason, QStringLiteral("protocol_violation"),
+			m_sessionStateMachine.shouldKeepListening(), false, false);
+	}
+	else
+	{
+		return;
+	}
+	KSessionErrorCode code = ProtocolViolationSessionErrorCode;
+	if (status == UnsupportedVersionProtocolRouteStatus)
+		code = IncompatibleProtocolSessionErrorCode;
+	else if (status == MalformedProtocolRouteStatus)
+		code = MalformedMessageSessionErrorCode;
+	reportSessionError(ProtocolSessionErrorDomain,
+		code,
+		bWasAwaitingApproval
+			? ApprovalSessionErrorStage : NegotiationSessionErrorStage,
+		false, strError.isEmpty()
+			? QStringLiteral("Unsupported or invalid signaling message") : strError);
 }
 
 void KSessionCoordinator::handleAccessMessage(const KAccessMessage &message)
@@ -939,7 +1169,7 @@ void KSessionCoordinator::handleAccessMessage(const KAccessMessage &message)
 		if (!m_sessionStateMachine.approveConnection())
 			return;
 		clearApprovalState(QStringLiteral("accepted"));
-		emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
+		publishSessionState();
 		m_spRemotePeerTransport->createOffer();
 		KSessionTraceLogger::write(QStringLiteral("controller"),
 			QStringLiteral("access"), QStringLiteral("accepted"));
@@ -953,7 +1183,25 @@ void KSessionCoordinator::handleAccessMessage(const KAccessMessage &message)
 			QStringLiteral("requestId=%1 reason=%2")
 				.arg(message.strRequestId, strReason));
 		finishSession(ConnectFailedSessionEndReason, strReason, false, false, false);
-		emit sessionError(AccessRejectionError(strReason));
+		KSessionErrorCode code = ApprovalRejectedSessionErrorCode;
+		bool bRetryable = false;
+		if (strReason == QStringLiteral("busy"))
+		{
+			code = RemoteBusySessionErrorCode;
+			bRetryable = true;
+		}
+		else if (strReason == QStringLiteral("timeout"))
+		{
+			code = ApprovalTimeoutSessionErrorCode;
+			bRetryable = true;
+		}
+		else if (strReason == QStringLiteral("remote_access_disabled"))
+		{
+			code = RemoteAccessDisabledSessionErrorCode;
+		}
+		reportSessionError(AccessSessionErrorDomain, code,
+			ApprovalSessionErrorStage, bRetryable,
+			QStringLiteral("Access rejected: %1").arg(strReason));
 	}
 }
 
@@ -978,7 +1226,9 @@ void KSessionCoordinator::handleApprovalTimeout()
 
 	finishSession(ConnectFailedSessionEndReason, QStringLiteral("approval_timeout"),
 		false, false, false);
-	emit sessionError(QStringLiteral("等待连接确认超时，或对方版本不兼容"));
+	reportSessionError(AccessSessionErrorDomain,
+		ApprovalTimeoutSessionErrorCode, ApprovalSessionErrorStage,
+		true, QStringLiteral("Approval response timed out"));
 }
 
 void KSessionCoordinator::acceptIncomingAccess()
@@ -1000,7 +1250,7 @@ void KSessionCoordinator::acceptIncomingAccess()
 		QStringLiteral("requestId=%1 source=%2")
 			.arg(m_strAccessRequestId, m_strAccessSourceAddress));
 	clearApprovalState(QStringLiteral("accepted"));
-	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
+	publishSessionState();
 }
 
 void KSessionCoordinator::rejectIncomingAccess(const QString &strReason, bool bNotifyRemote)
@@ -1028,7 +1278,7 @@ void KSessionCoordinator::rejectIncomingAccess(const QString &strReason, bool bN
 	m_sessionStateMachine.rejectConnection();
 	m_pSignaling->disconnectPeer();
 	updateListeningAvailability(true, m_nListeningPort);
-	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
+	publishSessionState();
 }
 
 void KSessionCoordinator::clearApprovalState(const QString &strReason)
@@ -1083,7 +1333,7 @@ void KSessionCoordinator::handlePeerConnectionInterrupted()
 		return;
 
 	m_pInputInjector->releaseAllInputs();
-	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
+	publishSessionState();
 	m_nReconnectGeneration = m_sessionStateMachine.generation();
 	m_reconnectElapsedTimer.start();
 	m_pReconnectTimer->start(kReconnectTimeoutMs);
@@ -1130,7 +1380,7 @@ void KSessionCoordinator::handlePeerConnectionRestored()
 		QStringLiteral("restored"),
 		-1,
 		QStringLiteral("costMs=%1").arg(nCostMs));
-	emit webRtcStateChanged(KSessionStateMachine::stateName(m_sessionStateMachine.state()));
+	publishSessionState();
 }
 
 void KSessionCoordinator::handlePeerConnectionTerminated(const QString &strReason)

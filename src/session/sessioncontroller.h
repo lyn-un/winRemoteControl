@@ -8,6 +8,8 @@
 #include "core/protocol/inputmessage.h"
 #include "core/protocol/clipboardmessage.h"
 #include "core/settings/applicationsettings.h"
+#include "core/session/sessionerror.h"
+#include "core/session/sessionstatemachine.h"
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
@@ -49,7 +51,8 @@ signals:
 	void listeningAvailabilityChanged(bool bAvailable, quint16 nPort);
 	void signalingChanged(const QString &strState);
 	void webRtcStateChanged(const QString &strState);
-	void sessionError(const QString &strMessage);
+	void sessionStateChanged(KSessionState state);
+	void sessionErrorOccurred(const KSessionError &error);
 	void remoteDeviceInfoChanged(const QString &strComputerName,
 		const QString &strWallpaperMime,
 		const QString &strWallpaperData,

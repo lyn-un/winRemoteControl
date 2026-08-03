@@ -2,6 +2,7 @@
 #define _WINREMOTECONTROL_CLIPBOARD_CLIPBOARDSYNCSERVICE_H_
 
 #include "core/protocol/clipboardmessage.h"
+#include "core/session/sessionstatemachine.h"
 
 #include <QtCore/QObject>
 #include <QtCore/QQueue>
@@ -43,7 +44,7 @@ private:
 	void handleLocalTextChanged(const QString &strText);
 	void handleRemoteMessage(const KClipboardMessage &message);
 	void handleChannelChanged(bool bOpen);
-	void handleSessionStateChanged(const QString &strState);
+	void handleSessionStateChanged(KSessionState state);
 	void retryPendingApply();
 	void applyRemoteMessage(const KClipboardMessage &message, int nAttempt);
 	void rememberMessageId(const QString &strMessageId);
@@ -60,7 +61,7 @@ private:
 	bool m_bPeerReady = false;
 	bool m_bReadySent = false;
 	bool m_bSessionEstablished = false;
-	QString m_strSessionState;
+	KSessionState m_sessionState = IdleSessionState;
 	KClipboardMessage m_pendingMessage;
 	int m_nPendingAttempt = 0;
 	QQueue<QString> m_recentMessageIds;

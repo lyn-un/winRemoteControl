@@ -29,6 +29,7 @@ export function useNativeState() {
   const [frame, setFrame] = useState(null);
   const [networkStats, setNetworkStats] = useState(emptyNetworkStats);
   const [error, setError] = useState("");
+  const [sessionError, setSessionError] = useState(null);
   const [lanDiscoveryError, setLanDiscoveryError] = useState("");
   const [recentDeviceError, setRecentDeviceError] = useState("");
   const [applicationSettings, setApplicationSettings] = useState(null);
@@ -53,6 +54,7 @@ export function useNativeState() {
 
     const clearErrorState = () => {
       setError("");
+      setSessionError(null);
       setCaptureStatus((status) => (status === "Error" ? "Idle" : status));
     };
 
@@ -122,6 +124,17 @@ export function useNativeState() {
       if (message.type === "captureError") {
         setError(message.message);
         setCaptureStatus("Error");
+        return;
+      }
+
+      if (message.type === "sessionError") {
+        setSessionError({
+          domain: message.domain || "unknown",
+          code: message.code || "unknown",
+          stage: message.stage || "unknown",
+          retryable: Boolean(message.retryable),
+        });
+        setError(message.message || "远程会话发生错误");
         return;
       }
 
@@ -263,6 +276,7 @@ export function useNativeState() {
     frame,
     networkStats,
     error,
+    sessionError,
     lanDiscoveryError,
     recentDeviceError,
     applicationSettings,

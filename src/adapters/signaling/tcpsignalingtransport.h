@@ -55,7 +55,6 @@ private:
 	QElapsedTimer m_connectElapsedTimer;
 	bool m_bOutgoingConnectionPending = false;
 	bool m_bPeerBusy = false;
-	int m_nConsecutiveInvalidMessages = 0;
 };
 
 #endif // _WINREMOTECONTROL_TCPSIGNALINGTRANSPORT_H_

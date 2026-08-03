@@ -6,6 +6,7 @@
 #include "core/discovery/discovereddevice.h"
 #include "core/devices/recentdevice.h"
 #include "core/settings/applicationsettings.h"
+#include "core/session/sessionerror.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QPoint>
@@ -45,6 +46,7 @@ public slots:
 		int nScreenWidth,
 		int nScreenHeight);
 	void sendCaptureError(const QString &strMessage);
+	void sendSessionError(const KSessionError &error);
 	void sendFrameReady(int nWidth, int nHeight, quint64 nFrameIndex, qint64 nTimestampMs);
 	void sendNetworkStatsChanged(const KNetworkStats &stats);
 	void sendLanDevicesChanged(const QVector<KDiscoveredDevice> &devices);

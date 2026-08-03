@@ -13,27 +13,9 @@ namespace
 	constexpr int kMaximumApplyAttempts = 3;
 	constexpr int kApplyRetryIntervalMs = 100;
 
-	bool IsTerminalSessionState(const QString &strState)
+	bool IsTerminalSessionState(KSessionState state)
 	{
-		return strState == QStringLiteral("Idle")
-			|| strState == QStringLiteral("Listening")
-			|| strState == QStringLiteral("Disconnected")
-			|| strState == QStringLiteral("Failed");
-	}
-
-	bool IsBusinessSessionState(const QString &strState)
-	{
-		return strState == QStringLiteral("Idle")
-			|| strState == QStringLiteral("Listening")
-			|| strState == QStringLiteral("Connecting")
-			|| strState == QStringLiteral("AwaitingApproval")
-			|| strState == QStringLiteral("Negotiating")
-			|| strState == QStringLiteral("Connected")
-			|| strState == QStringLiteral("Streaming")
-			|| strState == QStringLiteral("Reconnecting")
-			|| strState == QStringLiteral("Stopping")
-			|| strState == QStringLiteral("Disconnected")
-			|| strState == QStringLiteral("Failed");
+		return state == IdleSessionState || state == ListeningSessionState;
 	}
 }
 
@@ -55,7 +37,7 @@ KClipboardSyncService::KClipboardSyncService(
 		this, &KClipboardSyncService::handleRemoteMessage);
 	connect(m_pSessionController, &KSessionController::clipboardChannelChanged,
 		this, &KClipboardSyncService::handleChannelChanged);
-	connect(m_pSessionController, &KSessionController::webRtcStateChanged,
+	connect(m_pSessionController, &KSessionController::sessionStateChanged,
 		this, &KClipboardSyncService::handleSessionStateChanged);
 }
 
@@ -78,7 +60,7 @@ void KClipboardSyncService::setEnabled(bool bEnabled)
 	KSessionTraceLogger::write(QStringLiteral("local"),
 		QStringLiteral("clipboard_sync"),
 		m_bEnabled ? QStringLiteral("enabled") : QStringLiteral("disabled"));
-	if (m_bPeerReady && m_strSessionState == QStringLiteral("Streaming"))
+	if (m_bPeerReady && m_sessionState == StreamingSessionState)
 	{
 		KClipboardMessage message;
 		message.type = SyncStateClipboardMessageType;
@@ -187,26 +169,24 @@ void KClipboardSyncService::handleChannelChanged(bool bOpen)
 	emitState();
 }
 
-void KClipboardSyncService::handleSessionStateChanged(const QString &strState)
+void KClipboardSyncService::handleSessionStateChanged(KSessionState state)
 {
-	if (!IsBusinessSessionState(strState))
-		return;
-	m_strSessionState = strState;
-	if (strState != QStringLiteral("Streaming"))
+	m_sessionState = state;
+	if (state != StreamingSessionState)
 	{
 		m_pRetryTimer->stop();
 		m_pendingMessage = KClipboardMessage();
 		m_nPendingAttempt = 0;
 	}
-	if (strState == QStringLiteral("Connected") && !m_bSessionEstablished)
+	if (state == ConnectedSessionState && !m_bSessionEstablished)
 	{
 		m_bSessionEstablished = true;
 		m_bEnabled = true;
 	}
-	else if (IsTerminalSessionState(strState))
+	else if (IsTerminalSessionState(state))
 	{
 		resetSession();
-		m_strSessionState = strState;
+		m_sessionState = state;
 	}
 	sendReadyIfNeeded();
 	emitState();
@@ -297,7 +277,7 @@ void KClipboardSyncService::emitState()
 	QString strStatus = QStringLiteral("unavailable");
 	if (!m_bEnabled)
 		strStatus = QStringLiteral("disabled");
-	else if (m_strSessionState == QStringLiteral("Reconnecting"))
+	else if (m_sessionState == ReconnectingSessionState)
 		strStatus = QStringLiteral("paused");
 	else if (bActive)
 		strStatus = QStringLiteral("active");
@@ -310,7 +290,7 @@ void KClipboardSyncService::sendReadyIfNeeded()
 {
 	if (m_bReadySent
 		|| !m_bChannelOpen
-		|| m_strSessionState != QStringLiteral("Streaming"))
+		|| m_sessionState != StreamingSessionState)
 	{
 		return;
 	}
@@ -326,5 +306,5 @@ bool KClipboardSyncService::isActive() const
 {
 	return m_bEnabled
 		&& m_bPeerReady
-		&& m_strSessionState == QStringLiteral("Streaming");
+		&& m_sessionState == StreamingSessionState;
 }

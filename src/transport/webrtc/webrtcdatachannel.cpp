@@ -34,6 +34,7 @@ void KWebRtcDataChannel::clear()
 	if (m_spChannel != nullptr)
 		m_spChannel->UnregisterObserver();
 	m_spChannel = nullptr;
+	m_bBackpressured = false;
 	if (bWasOpen)
 		emit openChanged(false);
 }
@@ -54,7 +55,28 @@ bool KWebRtcDataChannel::sendText(const QString &strMessage)
 		return false;
 	webrtc::DataBuffer buffer(std::string(utf8Message.constData(),
 		static_cast<size_t>(utf8Message.size())));
-	return m_spChannel->Send(buffer);
+	const bool bSent = m_spChannel->Send(buffer);
+	const quint64 nBufferedBytes = bufferedAmount();
+	if (m_nHighWatermarkBytes > 0 && nBufferedBytes >= m_nHighWatermarkBytes)
+		m_bBackpressured = true;
+	emit bufferedAmountChanged(nBufferedBytes);
+	return bSent;
+}
+
+void KWebRtcDataChannel::setBufferWatermarks(quint64 nLowBytes, quint64 nHighBytes)
+{
+	m_nLowWatermarkBytes = nLowBytes;
+	m_nHighWatermarkBytes = qMax(nLowBytes, nHighBytes);
+}
+
+quint64 KWebRtcDataChannel::bufferedAmount() const
+{
+	return m_spChannel != nullptr ? m_spChannel->buffered_amount() : 0;
+}
+
+bool KWebRtcDataChannel::isBackpressured() const
+{
+	return m_bBackpressured;
 }
 
 void KWebRtcDataChannel::OnStateChange()
@@ -84,4 +106,15 @@ void KWebRtcDataChannel::OnMessage(const webrtc::DataBuffer &buffer)
 
 void KWebRtcDataChannel::OnBufferedAmountChange(uint64_t)
 {
+	const quint64 nBufferedBytes = bufferedAmount();
+	const bool bReachedLowWatermark = m_bBackpressured
+		&& nBufferedBytes <= m_nLowWatermarkBytes;
+	if (m_nHighWatermarkBytes > 0 && nBufferedBytes >= m_nHighWatermarkBytes)
+		m_bBackpressured = true;
+	else if (bReachedLowWatermark)
+		m_bBackpressured = false;
+
+	emit bufferedAmountChanged(nBufferedBytes);
+	if (bReachedLowWatermark)
+		emit lowWatermarkReached();
 }

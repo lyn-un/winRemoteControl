@@ -59,6 +59,17 @@ QString KClipboardMessageCodec::encode(const KClipboardMessage &message)
 	return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
 }
 
+QString KClipboardMessageCodec::typeName(KClipboardMessageType type)
+{
+	if (type == ReadyClipboardMessageType)
+		return QString::fromLatin1(kClipboardReady);
+	if (type == TextClipboardMessageType)
+		return QString::fromLatin1(kClipboardText);
+	if (type == SyncStateClipboardMessageType)
+		return QString::fromLatin1(kClipboardSyncState);
+	return QStringLiteral("invalid");
+}
+
 bool KClipboardMessageCodec::decode(const QString &strMessage,
 	KClipboardMessage *pMessage,
 	QString *pErrorMessage)

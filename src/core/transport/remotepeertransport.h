@@ -55,6 +55,8 @@ signals:
 	void connectionInterrupted();
 	void connectionRestored();
 	void connectionTerminated(const QString &strReason);
+	void inputBackpressureOverflow();
+	void protocolViolation(const QString &strChannel, const QString &strTechnicalMessage);
 };
 
 #endif // _WINREMOTECONTROL_REMOTEPEERTRANSPORT_H_

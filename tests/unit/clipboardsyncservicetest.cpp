@@ -73,7 +73,16 @@ namespace
 
 		void changeState(const QString &strState)
 		{
-			emit webRtcStateChanged(strState);
+			if (strState == QStringLiteral("Connected"))
+				emit sessionStateChanged(ConnectedSessionState);
+			else if (strState == QStringLiteral("Streaming"))
+				emit sessionStateChanged(StreamingSessionState);
+			else if (strState == QStringLiteral("Reconnecting"))
+				emit sessionStateChanged(ReconnectingSessionState);
+			else if (strState == QStringLiteral("Disconnected"))
+				emit sessionStateChanged(IdleSessionState);
+			else
+				emit webRtcStateChanged(strState);
 		}
 
 		void changeClipboardChannel(bool bOpen)

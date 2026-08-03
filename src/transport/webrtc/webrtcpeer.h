@@ -3,6 +3,8 @@
 
 #include "core/transport/remotepeertransport.h"
 #include "core/transport/networkstatstracker.h"
+#include "core/transport/outboundmessagequeue.h"
+#include "core/protocol/protocolrouter.h"
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
@@ -84,6 +86,13 @@ private:
 	void handleInputChannelMessage(const QString &strMessage);
 	void handleSessionChannelMessage(const QString &strMessage);
 	void handleClipboardChannelMessage(const QString &strMessage);
+	void decodeInputMessage(const KProtocolEnvelope &envelope);
+	void decodeSessionMessage(const KProtocolEnvelope &envelope);
+	void decodeClipboardMessage(const KProtocolEnvelope &envelope);
+	void handleLatencyMessage(const KProtocolEnvelope &envelope);
+	void routeDataMessage(KProtocolChannel channel,
+		const QString &strMessage,
+		std::atomic_int *pInvalidCount);
 	void handleProtocolReject(const QString &strChannel,
 		int nMessageBytes,
 		const QString &strError,
@@ -101,6 +110,9 @@ private:
 	void requestStats();
 	void resetStatsHistory();
 	void sendLatencyPing();
+	void flushInputQueue();
+	void flushClipboardQueue();
+	bool enqueueInputMessage(const QString &strPayload, bool bMouseMove);
 	static QString rtcErrorMessage(const QString &strPrefix, const webrtc::RTCError &error);
 
 	KSessionRole m_role = ControllerSessionRole;
@@ -124,6 +136,10 @@ private:
 	std::atomic_int m_nInvalidSessionMessages = 0;
 	std::atomic_int m_nInvalidClipboardMessages = 0;
 	std::atomic_bool m_bProtocolTerminationPending = false;
+	bool m_bRouteHandlerRejected = false;
+	KOutboundMessageQueue m_inputSendQueue { 256, 64 * 1024 };
+	KOutboundMessageQueue m_clipboardSendQueue { 8, 1024 * 1024 };
+	KProtocolRouter m_protocolRouter;
 
 	friend class KCreateSessionDescriptionObserver;
 	friend class KStatsCallback;
