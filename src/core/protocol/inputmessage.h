@@ -10,14 +10,18 @@ enum KInputMessageType
 	MouseMoveInputMessageType,
 	MouseButtonInputMessageType,
 	MouseWheelInputMessageType,
-	KeyInputMessageType
+	KeyInputMessageType,
+	TextInputMessageType
 };
 
 enum KRemoteMouseButton
 {
 	NoRemoteMouseButton,
 	LeftRemoteMouseButton,
-	RightRemoteMouseButton
+	RightRemoteMouseButton,
+	MiddleRemoteMouseButton,
+	X1RemoteMouseButton,
+	X2RemoteMouseButton
 };
 
 struct KInputMessage
@@ -28,8 +32,11 @@ struct KInputMessage
 	int nY = 0;
 	int nWheelDelta = 0;
 	int nVirtualKey = 0;
+	int nScanCode = 0;
+	QString strText;
 	bool bPressed = false;
 	bool bExtended = false;
+	bool bAutoRepeat = false;
 	bool bTrace = false;
 	quint64 nSequence = 0;
 };

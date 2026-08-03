@@ -14,9 +14,13 @@ namespace
 	constexpr char kMouseButton[] = "mouseButton";
 	constexpr char kMouseWheel[] = "mouseWheel";
 	constexpr char kKey[] = "key";
+	constexpr char kText[] = "text";
 	constexpr char kButton[] = "button";
 	constexpr char kLeft[] = "left";
 	constexpr char kRight[] = "right";
+	constexpr char kMiddle[] = "middle";
+	constexpr char kX1[] = "x1";
+	constexpr char kX2[] = "x2";
 	constexpr char kPressed[] = "pressed";
 	constexpr char kX[] = "x";
 	constexpr char kY[] = "y";
@@ -25,6 +29,9 @@ namespace
 	constexpr char kTrace[] = "trace";
 	constexpr char kVirtualKey[] = "vk";
 	constexpr char kExtended[] = "extended";
+	constexpr char kScanCode[] = "scanCode";
+	constexpr char kAutoRepeat[] = "autoRepeat";
+	constexpr char kValue[] = "value";
 
 	bool readRequiredInt(const QJsonObject &object, const char *pName, int *pValue)
 	{
@@ -60,6 +67,13 @@ namespace
 
 		*pValue = value.toBool();
 		return true;
+	}
+
+	bool readOptionalInt(const QJsonObject &object, const char *pName, int *pValue)
+	{
+		if (object.value(QString::fromLatin1(pName)).isUndefined())
+			return true;
+		return readRequiredInt(object, pName, pValue);
 	}
 
 	bool readSequence(const QJsonObject &object, quint64 *pSequence)
@@ -135,6 +149,12 @@ QString KInputMessageCodec::encode(const KInputMessage &message)
 		object.insert(QString::fromLatin1(kVirtualKey), message.nVirtualKey);
 		object.insert(QString::fromLatin1(kPressed), message.bPressed);
 		object.insert(QString::fromLatin1(kExtended), message.bExtended);
+		object.insert(QString::fromLatin1(kScanCode), message.nScanCode);
+		object.insert(QString::fromLatin1(kAutoRepeat), message.bAutoRepeat);
+	}
+	else if (message.type == TextInputMessageType)
+	{
+		object.insert(QString::fromLatin1(kValue), message.strText);
 	}
 
 	return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
@@ -168,6 +188,8 @@ bool KInputMessageCodec::decode(const QString &strMessage,
 		message.type = MouseWheelInputMessageType;
 	else if (strType == QString::fromLatin1(kKey))
 		message.type = KeyInputMessageType;
+	else if (strType == QString::fromLatin1(kText))
+		message.type = TextInputMessageType;
 	else
 		return failDecode(QStringLiteral("Unknown input message type"), pErrorMessage);
 
@@ -203,6 +225,12 @@ bool KInputMessageCodec::decode(const QString &strMessage,
 			message.mouseButton = LeftRemoteMouseButton;
 		else if (strButton == QString::fromLatin1(kRight))
 			message.mouseButton = RightRemoteMouseButton;
+		else if (strButton == QString::fromLatin1(kMiddle))
+			message.mouseButton = MiddleRemoteMouseButton;
+		else if (strButton == QString::fromLatin1(kX1))
+			message.mouseButton = X1RemoteMouseButton;
+		else if (strButton == QString::fromLatin1(kX2))
+			message.mouseButton = X2RemoteMouseButton;
 		else
 			return failDecode(QStringLiteral("Unknown remote mouse button"), pErrorMessage);
 	}
@@ -221,13 +249,26 @@ bool KInputMessageCodec::decode(const QString &strMessage,
 	else if (message.type == KeyInputMessageType)
 	{
 		if (!readRequiredInt(object, kVirtualKey, &message.nVirtualKey)
+			|| !readOptionalInt(object, kScanCode, &message.nScanCode)
 			|| !readRequiredBool(object, kPressed, &message.bPressed)
 			|| !readOptionalBool(object, kExtended, &message.bExtended)
+			|| !readOptionalBool(object, kAutoRepeat, &message.bAutoRepeat)
 			|| message.nVirtualKey <= 0
-			|| message.nVirtualKey > 0xFF)
+			|| message.nVirtualKey > 0xFF
+			|| message.nScanCode < 0 || message.nScanCode > 0x1FF)
 		{
 			return failDecode(QStringLiteral("Invalid remote key message"), pErrorMessage);
 		}
+	}
+	else if (message.type == TextInputMessageType)
+	{
+		const QJsonValue textValue = object.value(QString::fromLatin1(kValue));
+		if (!textValue.isString() || textValue.toString().isEmpty()
+			|| textValue.toString().toUtf8().size() > KProtocolConstraints::kMaximumTextInputBytes)
+		{
+			return failDecode(QStringLiteral("Invalid remote text message"), pErrorMessage);
+		}
+		message.strText = textValue.toString();
 	}
 
 	*pMessage = message;
@@ -246,6 +287,8 @@ QString KInputMessageCodec::typeName(KInputMessageType type)
 		return QString::fromLatin1(kMouseWheel);
 	if (type == KeyInputMessageType)
 		return QString::fromLatin1(kKey);
+	if (type == TextInputMessageType)
+		return QString::fromLatin1(kText);
 	return QStringLiteral("invalid");
 }
 
@@ -255,5 +298,11 @@ QString KInputMessageCodec::mouseButtonName(KRemoteMouseButton button)
 		return QString::fromLatin1(kLeft);
 	if (button == RightRemoteMouseButton)
 		return QString::fromLatin1(kRight);
+	if (button == MiddleRemoteMouseButton)
+		return QString::fromLatin1(kMiddle);
+	if (button == X1RemoteMouseButton)
+		return QString::fromLatin1(kX1);
+	if (button == X2RemoteMouseButton)
+		return QString::fromLatin1(kX2);
 	return QStringLiteral("invalid");
 }

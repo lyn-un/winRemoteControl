@@ -325,7 +325,7 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 			return context.nRole == static_cast<int>(ControllerSessionRole);
 		};
 	for (KInputMessageType type : { MouseMoveInputMessageType, MouseButtonInputMessageType,
-		MouseWheelInputMessageType, KeyInputMessageType })
+		MouseWheelInputMessageType, KeyInputMessageType, TextInputMessageType })
 	{
 		m_protocolRouter.registerHandler(InputProtocolChannel,
 			KInputMessageCodec::typeName(type), allowControlledInput,

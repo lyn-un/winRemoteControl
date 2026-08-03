@@ -42,8 +42,13 @@ KInputInjector::~KInputInjector()
 
 void KInputInjector::handleInputMessage(const KInputMessage &message)
 {
+	if (message.nSequence > 0 && message.nSequence <= m_nLastSequence)
+		return;
+	if (message.nSequence > 0)
+		m_nLastSequence = message.nSequence;
 	const bool bTrace = message.bTrace
-		|| (message.type == KeyInputMessageType && KLatencyTraceLogger::isEnabled());
+		|| ((message.type == KeyInputMessageType || message.type == TextInputMessageType)
+			&& KLatencyTraceLogger::isEnabled());
 	QElapsedTimer timer;
 	if (bTrace)
 	{
@@ -84,6 +89,7 @@ void KInputInjector::releaseAllKeys()
 
 void KInputInjector::releaseAllInputs()
 {
+	m_nLastSequence = 0;
 	if (m_spInputInjector == nullptr)
 		return;
 

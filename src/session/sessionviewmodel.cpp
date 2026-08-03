@@ -2,12 +2,16 @@
 
 #include "common/latencytracelogger.h"
 #include "core/media/capturecontroller.h"
+#include "core/protocol/protocolconstraints.h"
 #include "session/sessioncontroller.h"
 
 namespace
 {
 	constexpr int kRemoteMouseButtonLeft = 1;
 	constexpr int kRemoteMouseButtonRight = 2;
+	constexpr int kRemoteMouseButtonMiddle = 3;
+	constexpr int kRemoteMouseButtonX1 = 4;
+	constexpr int kRemoteMouseButtonX2 = 5;
 	bool isSameStreamConfig(const KStreamConfig &lhs, const KStreamConfig &rhs)
 	{
 		return lhs.nFps == rhs.nFps
@@ -117,6 +121,12 @@ void KSessionViewModel::sendRemoteMouseButton(int nX, int nY, int nButton, bool 
 		mouseButton = LeftRemoteMouseButton;
 	else if (nButton == kRemoteMouseButtonRight)
 		mouseButton = RightRemoteMouseButton;
+	else if (nButton == kRemoteMouseButtonMiddle)
+		mouseButton = MiddleRemoteMouseButton;
+	else if (nButton == kRemoteMouseButtonX1)
+		mouseButton = X1RemoteMouseButton;
+	else if (nButton == kRemoteMouseButtonX2)
+		mouseButton = X2RemoteMouseButton;
 	else
 		return;
 
@@ -139,7 +149,11 @@ void KSessionViewModel::sendRemoteMouseWheel(int nX, int nY, int nDelta)
 	sendInputMessage(message, true);
 }
 
-void KSessionViewModel::sendRemoteKey(int nVirtualKey, bool bPressed, bool bExtended)
+void KSessionViewModel::sendRemoteKey(int nVirtualKey,
+	int nScanCode,
+	bool bPressed,
+	bool bExtended,
+	bool bAutoRepeat)
 {
 	if (nVirtualKey <= 0 || nVirtualKey > 0xFF)
 		return;
@@ -147,8 +161,25 @@ void KSessionViewModel::sendRemoteKey(int nVirtualKey, bool bPressed, bool bExte
 	KInputMessage message;
 	message.type = KeyInputMessageType;
 	message.nVirtualKey = nVirtualKey;
+	message.nScanCode = nScanCode;
 	message.bPressed = bPressed;
 	message.bExtended = bExtended;
+	message.bAutoRepeat = bAutoRepeat;
+	sendInputMessage(message, false);
+}
+
+void KSessionViewModel::sendRemoteText(const QString &strText)
+{
+	if (strText.isEmpty())
+		return;
+	if (strText.toUtf8().size() > KProtocolConstraints::kMaximumTextInputBytes)
+	{
+		emit errorOccurred(QStringLiteral("Committed text is too large to send"));
+		return;
+	}
+	KInputMessage message;
+	message.type = TextInputMessageType;
+	message.strText = strText;
 	sendInputMessage(message, false);
 }
 

@@ -17,6 +17,7 @@ public:
 	static constexpr int kMaximumScreenDimension = 32768;
 	static constexpr int kMaximumMouseCoordinate = 32767;
 	static constexpr int kMaximumWheelDelta = 12000;
+	static constexpr int kMaximumTextInputBytes = 2048;
 	static constexpr int kMinimumStreamFps = 1;
 	static constexpr int kMaximumStreamFps = 60;
 	static constexpr int kMaximumStreamWidth = 7680;

@@ -4,7 +4,8 @@
 
 namespace
 {
-	constexpr quint32 kExtendedKeyMask = 0x10000;
+	constexpr quint32 kScanCodeShift = 8;
+	constexpr quint32 kExtendedKeyMask = 0x20000;
 }
 
 KWindowsInputInjector::~KWindowsInputInjector()
@@ -30,10 +31,14 @@ bool KWindowsInputInjector::inject(const KInputMessage &message, QString *pError
 	if (message.type == KeyInputMessageType)
 	{
 		return sendKey(message.nVirtualKey,
+			message.nScanCode,
 			message.bPressed,
 			message.bExtended,
+			message.bAutoRepeat,
 			pErrorMessage);
 	}
+	if (message.type == TextInputMessageType)
+		return sendText(message.strText, pErrorMessage);
 
 	if (pErrorMessage != nullptr)
 		*pErrorMessage = QStringLiteral("Invalid remote input message type");
@@ -47,8 +52,10 @@ void KWindowsInputInjector::releaseAllKeys(QStringList *pErrorMessages)
 	{
 		QString strError;
 		if (!sendKey(static_cast<int>(nKeyId & 0xFF),
+				static_cast<int>((nKeyId >> kScanCodeShift) & 0x1FF),
 				false,
 				(nKeyId & kExtendedKeyMask) != 0,
+				false,
 				&strError)
 			&& pErrorMessages != nullptr
 			&& !strError.isEmpty())
@@ -102,17 +109,29 @@ bool KWindowsInputInjector::sendMouseButton(int nX,
 	if (!sendMouseMove(nX, nY, pErrorMessage))
 		return false;
 
+	const int nButtonId = static_cast<int>(button);
+	if (bPressed == m_pressedMouseButtons.contains(nButtonId))
+		return true;
 	DWORD dwFlags = 0;
+	DWORD dwMouseData = 0;
 	if (button == LeftRemoteMouseButton)
 		dwFlags = bPressed ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
 	else if (button == RightRemoteMouseButton)
 		dwFlags = bPressed ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP;
+	else if (button == MiddleRemoteMouseButton)
+		dwFlags = bPressed ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_MIDDLEUP;
+	else if (button == X1RemoteMouseButton || button == X2RemoteMouseButton)
+	{
+		dwFlags = bPressed ? MOUSEEVENTF_XDOWN : MOUSEEVENTF_XUP;
+		dwMouseData = button == X1RemoteMouseButton ? XBUTTON1 : XBUTTON2;
+	}
 	else
 		return false;
 
 	INPUT input = {};
 	input.type = INPUT_MOUSE;
 	input.mi.dwFlags = dwFlags;
+	input.mi.mouseData = dwMouseData;
 	if (SendInput(1, &input, sizeof(INPUT)) != 1)
 	{
 		if (pErrorMessage != nullptr)
@@ -149,14 +168,29 @@ bool KWindowsInputInjector::sendMouseWheel(int nX,
 }
 
 bool KWindowsInputInjector::sendKey(int nVirtualKey,
+	int nScanCode,
 	bool bPressed,
 	bool bExtended,
+	bool bAutoRepeat,
 	QString *pErrorMessage)
 {
+	const quint32 nKeyId = static_cast<quint32>(nVirtualKey)
+		| (static_cast<quint32>(nScanCode & 0x1FF) << kScanCodeShift)
+		| (bExtended ? kExtendedKeyMask : 0);
+	const bool bAlreadyPressed = m_pressedKeys.contains(nKeyId);
+	if ((bPressed && bAlreadyPressed && !bAutoRepeat) || (!bPressed && !bAlreadyPressed))
+		return true;
+
 	INPUT input = {};
 	input.type = INPUT_KEYBOARD;
-	input.ki.wVk = static_cast<WORD>(nVirtualKey);
-	input.ki.dwFlags = (bPressed ? 0 : KEYEVENTF_KEYUP)
+	if (nScanCode > 0)
+	{
+		input.ki.wScan = static_cast<WORD>(nScanCode & 0xFF);
+		input.ki.dwFlags = KEYEVENTF_SCANCODE;
+	}
+	else
+		input.ki.wVk = static_cast<WORD>(nVirtualKey);
+	input.ki.dwFlags |= (bPressed ? 0 : KEYEVENTF_KEYUP)
 		| (bExtended ? KEYEVENTF_EXTENDEDKEY : 0);
 	if (SendInput(1, &input, sizeof(INPUT)) != 1)
 	{
@@ -165,12 +199,30 @@ bool KWindowsInputInjector::sendKey(int nVirtualKey,
 		return false;
 	}
 
-	const quint32 nKeyId = static_cast<quint32>(nVirtualKey)
-		| (bExtended ? kExtendedKeyMask : 0);
 	if (bPressed)
 		m_pressedKeys.insert(nKeyId);
 	else
 		m_pressedKeys.remove(nKeyId);
+	return true;
+}
+
+bool KWindowsInputInjector::sendText(const QString &strText, QString *pErrorMessage)
+{
+	for (const QChar character : strText)
+	{
+		INPUT inputs[2] = {};
+		inputs[0].type = INPUT_KEYBOARD;
+		inputs[0].ki.wScan = character.unicode();
+		inputs[0].ki.dwFlags = KEYEVENTF_UNICODE;
+		inputs[1] = inputs[0];
+		inputs[1].ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+		if (SendInput(2, inputs, sizeof(INPUT)) != 2)
+		{
+			if (pErrorMessage != nullptr)
+				*pErrorMessage = lastWin32ErrorMessage(QStringLiteral("Send Unicode text failed"));
+			return false;
+		}
+	}
 	return true;
 }
 
@@ -185,12 +237,23 @@ void KWindowsInputInjector::releaseAllMouseButtons(QStringList *pErrorMessages)
 			dwFlags = MOUSEEVENTF_LEFTUP;
 		else if (nButton == static_cast<int>(RightRemoteMouseButton))
 			dwFlags = MOUSEEVENTF_RIGHTUP;
+		else if (nButton == static_cast<int>(MiddleRemoteMouseButton))
+			dwFlags = MOUSEEVENTF_MIDDLEUP;
+		else if (nButton == static_cast<int>(X1RemoteMouseButton)
+			|| nButton == static_cast<int>(X2RemoteMouseButton))
+			dwFlags = MOUSEEVENTF_XUP;
 		else
 			continue;
 
 		INPUT input = {};
 		input.type = INPUT_MOUSE;
 		input.mi.dwFlags = dwFlags;
+		if (nButton == static_cast<int>(X1RemoteMouseButton)
+			|| nButton == static_cast<int>(X2RemoteMouseButton))
+		{
+			input.mi.mouseData = nButton == static_cast<int>(X1RemoteMouseButton)
+				? XBUTTON1 : XBUTTON2;
+		}
 		if (SendInput(1, &input, sizeof(INPUT)) != 1 && pErrorMessages != nullptr)
 		{
 			pErrorMessages->append(

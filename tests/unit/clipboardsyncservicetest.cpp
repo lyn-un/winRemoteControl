@@ -65,6 +65,8 @@ namespace
 		void handleCaptureFailure() override {}
 		void applyApplicationSettings(const KApplicationSettings &) override {}
 		void respondIncomingAccessRequest(const QString &, bool) override {}
+		quint64 sessionGeneration() const override { return 1; }
+		bool isIdle() const override { return false; }
 
 		void sendClipboardMessage(const KClipboardMessage &message) override
 		{

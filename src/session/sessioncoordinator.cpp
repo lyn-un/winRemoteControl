@@ -31,7 +31,8 @@ namespace
 	static bool shouldTraceInputMessage(const KInputMessage &message)
 	{
 		return message.bTrace
-			|| (message.type == KeyInputMessageType && KLatencyTraceLogger::isEnabled());
+			|| ((message.type == KeyInputMessageType || message.type == TextInputMessageType)
+				&& KLatencyTraceLogger::isEnabled());
 	}
 
 	static QString inputTraceExtra(const KInputMessage &message)
@@ -41,6 +42,8 @@ namespace
 			.arg(KInputMessageCodec::typeName(message.type));
 		if (message.type == KeyInputMessageType)
 			strExtra += QStringLiteral(" pressed=%1").arg(message.bPressed ? 1 : 0);
+		else if (message.type == TextInputMessageType)
+			strExtra += QStringLiteral(" bytes=%1").arg(message.strText.toUtf8().size());
 		return strExtra;
 	}
 

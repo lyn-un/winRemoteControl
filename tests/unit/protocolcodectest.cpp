@@ -81,6 +81,8 @@ namespace
 		source.nVirtualKey = 0x25;
 		source.bPressed = false;
 		source.bExtended = true;
+		source.nScanCode = 0x14D;
+		source.bAutoRepeat = true;
 		source.nSequence = 99;
 
 		KInputMessage decoded;
@@ -88,7 +90,9 @@ namespace
 			QStringLiteral("key input decodes"));
 		check(decoded.nVirtualKey == source.nVirtualKey
 			&& !decoded.bPressed
-			&& decoded.bExtended,
+			&& decoded.bExtended
+			&& decoded.nScanCode == source.nScanCode
+			&& decoded.bAutoRepeat,
 			QStringLiteral("key payload round-trips"));
 	}
 
@@ -103,7 +107,7 @@ namespace
 			QStringLiteral("{\"type\":\"key\",\"vk\":0,\"pressed\":true}"), &message, nullptr),
 			QStringLiteral("out-of-range key is rejected"));
 		check(!KInputMessageCodec::decode(
-			QStringLiteral("{\"type\":\"mouseButton\",\"button\":\"middle\",\"pressed\":true,\"x\":1,\"y\":2}"),
+			QStringLiteral("{\"type\":\"mouseButton\",\"button\":\"unknown\",\"pressed\":true,\"x\":1,\"y\":2}"),
 			&message,
 			nullptr),
 			QStringLiteral("unknown mouse button is rejected"));
@@ -119,6 +123,35 @@ namespace
 			QString(KProtocolConstraints::kMaximumInputMessageBytes + 1, QLatin1Char('x')),
 			&message, nullptr),
 			QStringLiteral("oversized input message is rejected"));
+	}
+
+	void testExtendedInputRoundTrip()
+	{
+		for (KRemoteMouseButton button : { MiddleRemoteMouseButton,
+			X1RemoteMouseButton, X2RemoteMouseButton })
+		{
+			KInputMessage source;
+			source.type = MouseButtonInputMessageType;
+			source.mouseButton = button;
+			source.bPressed = true;
+			source.nX = 100;
+			source.nY = 200;
+			KInputMessage decoded;
+			check(KInputMessageCodec::decode(KInputMessageCodec::encode(source),
+					&decoded, nullptr) && decoded.mouseButton == button,
+				QStringLiteral("extended mouse button round-trips"));
+		}
+
+		KInputMessage text;
+		text.type = TextInputMessageType;
+		text.strText = QString::fromUtf8("中文🙂");
+		KInputMessage decoded;
+		check(KInputMessageCodec::decode(KInputMessageCodec::encode(text), &decoded, nullptr)
+			&& decoded.strText == text.strText,
+			QStringLiteral("Unicode text input round-trips"));
+		text.strText = QString(KProtocolConstraints::kMaximumTextInputBytes + 1, QLatin1Char('x'));
+		check(!KInputMessageCodec::decode(KInputMessageCodec::encode(text), &decoded, nullptr),
+			QStringLiteral("oversized Unicode input is rejected"));
 	}
 
 	void testLegacyInputWireCompatibility()
@@ -594,6 +627,7 @@ int main(int nArgc, char *pArgv[])
 	testMouseWheelRoundTrip();
 	testKeyRoundTrip();
 	testInvalidInputMessages();
+	testExtendedInputRoundTrip();
 	testLegacyInputWireCompatibility();
 	testSessionControlRoundTrip();
 	testDeviceInfoRoundTrip();

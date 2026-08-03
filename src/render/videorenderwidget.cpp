@@ -7,6 +7,7 @@
 #include <QtCore/QString>
 #include <QtGui/QFocusEvent>
 #include <QtGui/QHideEvent>
+#include <QtGui/QInputMethodEvent>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QPaintEngine>
@@ -23,9 +24,13 @@ namespace
 	constexpr float kClearColor[4] = { 0.97f, 0.98f, 0.99f, 1.0f };
 	constexpr int kRemoteMouseButtonLeft = 1;
 	constexpr int kRemoteMouseButtonRight = 2;
+	constexpr int kRemoteMouseButtonMiddle = 3;
+	constexpr int kRemoteMouseButtonX1 = 4;
+	constexpr int kRemoteMouseButtonX2 = 5;
 	constexpr qint64 kMouseMoveThrottleMs = 16;
 	constexpr quint64 kVideoTraceFrameInterval = 30;
-	constexpr quint32 kExtendedKeyMask = 0x10000;
+	constexpr quint32 kScanCodeShift = 8;
+	constexpr quint32 kExtendedKeyMask = 0x20000;
 
 	const char *kVertexShaderSource =
 		"struct VSInput { float2 position : POSITION; float2 texcoord : TEXCOORD0; };"
@@ -63,6 +68,7 @@ KVideoRenderWidget::KVideoRenderWidget(QWidget *pParent)
 
 KVideoRenderWidget::~KVideoRenderWidget()
 {
+	setAttribute(Qt::WA_InputMethodEnabled, true);
 	cancelPendingMouseMove();
 	releaseAll();
 }
@@ -306,6 +312,16 @@ void KVideoRenderWidget::keyReleaseEvent(QKeyEvent *pEvent)
 	handleRemoteKeyEvent(pEvent, false);
 }
 
+void KVideoRenderWidget::inputMethodEvent(QInputMethodEvent *pEvent)
+{
+	if (pEvent == nullptr)
+		return;
+	m_bImeComposing = !pEvent->preeditString().isEmpty();
+	if (!pEvent->commitString().isEmpty())
+		emit remoteTextRequested(pEvent->commitString());
+	pEvent->accept();
+}
+
 QPaintEngine *KVideoRenderWidget::paintEngine() const
 {
 	return nullptr;
@@ -433,8 +449,21 @@ void KVideoRenderWidget::handleRemoteKeyEvent(QKeyEvent *pEvent, bool bPressed)
 {
 	if (pEvent == nullptr)
 		return;
+	if (!bPressed && pEvent->isAutoRepeat())
+	{
+		pEvent->accept();
+		return;
+	}
 
-	const int nVirtualKey = static_cast<int>(pEvent->nativeVirtualKey());
+	if (m_bImeComposing && !pEvent->text().isEmpty())
+	{
+		pEvent->accept();
+		return;
+	}
+
+	const quint32 nNativeScanCode = pEvent->nativeScanCode();
+	const int nVirtualKey = normalizeVirtualKey(
+		static_cast<int>(pEvent->nativeVirtualKey()), nNativeScanCode);
 	if (nVirtualKey <= 0 || nVirtualKey > 0xFF)
 	{
 		if (bPressed)
@@ -444,15 +473,17 @@ void KVideoRenderWidget::handleRemoteKeyEvent(QKeyEvent *pEvent, bool bPressed)
 		return;
 	}
 
-	const bool bExtended = isExtendedVirtualKey(nVirtualKey, pEvent->nativeScanCode());
+	const bool bExtended = isExtendedVirtualKey(nVirtualKey, nNativeScanCode);
+	const int nScanCode = static_cast<int>(nNativeScanCode & 0x1FF);
 	const quint32 nKeyId = static_cast<quint32>(nVirtualKey)
+		| (static_cast<quint32>(nScanCode) << kScanCodeShift)
 		| (bExtended ? kExtendedKeyMask : 0);
 	if (bPressed)
 		m_pressedRemoteKeys.insert(nKeyId);
 	else
 		m_pressedRemoteKeys.remove(nKeyId);
 
-	emit remoteKeyRequested(nVirtualKey, bPressed, bExtended);
+	emit remoteKeyRequested(nVirtualKey, nScanCode, bPressed, bExtended, pEvent->isAutoRepeat());
 	pEvent->accept();
 }
 
@@ -463,9 +494,25 @@ void KVideoRenderWidget::releaseRemoteKeys()
 	for (const quint32 nKeyId : pressedKeys)
 	{
 		emit remoteKeyRequested(static_cast<int>(nKeyId & 0xFF),
+			static_cast<int>((nKeyId >> kScanCodeShift) & 0x1FF),
 			false,
-			(nKeyId & kExtendedKeyMask) != 0);
+			(nKeyId & kExtendedKeyMask) != 0,
+			false);
 	}
+}
+
+int KVideoRenderWidget::normalizeVirtualKey(int nVirtualKey, quint32 nNativeScanCode)
+{
+	if (nVirtualKey == VK_SHIFT)
+	{
+		const UINT nMapped = MapVirtualKeyW(nNativeScanCode & 0xFF, MAPVK_VSC_TO_VK_EX);
+		return nMapped == VK_RSHIFT ? VK_RSHIFT : VK_LSHIFT;
+	}
+	if (nVirtualKey == VK_CONTROL)
+		return (nNativeScanCode & 0x100) != 0 ? VK_RCONTROL : VK_LCONTROL;
+	if (nVirtualKey == VK_MENU)
+		return (nNativeScanCode & 0x100) != 0 ? VK_RMENU : VK_LMENU;
+	return nVirtualKey;
 }
 
 bool KVideoRenderWidget::isExtendedVirtualKey(int nVirtualKey, quint32 nNativeScanCode)
@@ -878,6 +925,12 @@ int KVideoRenderWidget::qtMouseButtonToRemoteButton(Qt::MouseButton button)
 		return kRemoteMouseButtonLeft;
 	if (button == Qt::RightButton)
 		return kRemoteMouseButtonRight;
+	if (button == Qt::MiddleButton)
+		return kRemoteMouseButtonMiddle;
+	if (button == Qt::BackButton)
+		return kRemoteMouseButtonX1;
+	if (button == Qt::ForwardButton)
+		return kRemoteMouseButtonX2;
 	return 0;
 }
 

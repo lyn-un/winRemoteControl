@@ -22,7 +22,13 @@ private:
 		bool bPressed,
 		QString *pErrorMessage);
 	bool sendMouseWheel(int nX, int nY, int nDelta, QString *pErrorMessage);
-	bool sendKey(int nVirtualKey, bool bPressed, bool bExtended, QString *pErrorMessage);
+	bool sendKey(int nVirtualKey,
+		int nScanCode,
+		bool bPressed,
+		bool bExtended,
+		bool bAutoRepeat,
+		QString *pErrorMessage);
+	bool sendText(const QString &strText, QString *pErrorMessage);
 	void releaseAllMouseButtons(QStringList *pErrorMessages);
 	static int clampToRange(int nValue, int nMinValue, int nMaxValue);
 	static QString lastWin32ErrorMessage(const QString &strPrefix);

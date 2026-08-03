@@ -39,7 +39,12 @@ signals:
 	void remoteMouseMoveRequested(int nX, int nY);
 	void remoteMouseButtonRequested(int nX, int nY, int nButton, bool bPressed);
 	void remoteMouseWheelRequested(int nX, int nY, int nDelta);
-	void remoteKeyRequested(int nVirtualKey, bool bPressed, bool bExtended);
+	void remoteKeyRequested(int nVirtualKey,
+		int nScanCode,
+		bool bPressed,
+		bool bExtended,
+		bool bAutoRepeat);
+	void remoteTextRequested(const QString &strText);
 	void inputFeedbackRendered(quint64 nSeq);
 
 protected:
@@ -50,6 +55,7 @@ protected:
 	void focusOutEvent(QFocusEvent *pEvent) override;
 	void keyPressEvent(QKeyEvent *pEvent) override;
 	void keyReleaseEvent(QKeyEvent *pEvent) override;
+	void inputMethodEvent(QInputMethodEvent *pEvent) override;
 	void mouseMoveEvent(QMouseEvent *pEvent) override;
 	void mousePressEvent(QMouseEvent *pEvent) override;
 	void mouseReleaseEvent(QMouseEvent *pEvent) override;
@@ -85,6 +91,7 @@ private:
 	bool mapToRemotePoint(const QPointF &localPoint, QPoint *pRemotePoint) const;
 	bool mapEdgeClampedRemotePoint(const QPointF &localPoint, QPoint *pRemotePoint) const;
 	static bool isExtendedVirtualKey(int nVirtualKey, quint32 nNativeScanCode);
+	static int normalizeVirtualKey(int nVirtualKey, quint32 nNativeScanCode);
 	static int qtMouseButtonToRemoteButton(Qt::MouseButton button);
 	static QString hresultMessage(const QString &strPrefix, HRESULT hr);
 
@@ -98,6 +105,7 @@ private:
 	bool m_bPresentQueued = false;
 	bool m_bInitialized = false;
 	bool m_bHasPendingMouseMove = false;
+	bool m_bImeComposing = false;
 	quint64 m_nLastRenderedInputSeq = 0;
 	int m_nFrameWidth = 0;
 	int m_nFrameHeight = 0;

@@ -248,6 +248,8 @@ void KApplicationComposition::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWin
 		m_pSessionViewModel, &KSessionViewModel::sendRemoteMouseWheel);
 	connect(pVideoRenderWidget, &KVideoRenderWidget::remoteKeyRequested,
 		m_pSessionViewModel, &KSessionViewModel::sendRemoteKey);
+	connect(pVideoRenderWidget, &KVideoRenderWidget::remoteTextRequested,
+		m_pSessionViewModel, &KSessionViewModel::sendRemoteText);
 	connect(pVideoRenderWidget, &KVideoRenderWidget::inputFeedbackRendered,
 		m_pSessionViewModel, &KSessionViewModel::handleInputFeedbackRendered);
 }

@@ -514,6 +514,15 @@ target_link_libraries(winRemoteControl PRIVATE
 )
 
 if(BUILD_TESTING)
+	add_executable(wrc_input_injector_tests
+		tests/unit/inputinjectortest.cpp
+	)
+	target_link_libraries(wrc_input_injector_tests PRIVATE
+		wrc_session_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_input_injector_tests COMMAND wrc_input_injector_tests)
+
 	add_executable(wrc_capture_pipeline_tests
 		tests/unit/capturepipelinetest.cpp
 	)

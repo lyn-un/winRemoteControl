@@ -35,6 +35,7 @@ private:
 	void emitInputErrors(const QStringList &errorMessages);
 
 	std::unique_ptr<IKInputInjector> m_spInputInjector;
+	quint64 m_nLastSequence = 0;
 };
 
 #endif // _WINREMOTECONTROL_INPUTINJECTOR_H_
