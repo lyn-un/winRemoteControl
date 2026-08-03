@@ -12,6 +12,7 @@
 # Frontend generated/dependency files
 /frontend/node_modules/
 /frontend/dist/
+/demo_ui/
 
 # Third-party SDKs and local dependency checkouts are kept outside git history.
 # They are large, machine-specific, and already live in the workspace.
