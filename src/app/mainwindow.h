@@ -32,6 +32,8 @@ private:
 	KApplicationComposition *m_pComposition = nullptr;
 	KWebViewWidget *m_pWebViewWidget = nullptr;
 	KRemoteDesktopWindow *m_pRemoteDesktopWindow = nullptr;
+	bool m_bClosePending = false;
+	bool m_bShutdownComplete = false;
 };
 
 #endif // _WINREMOTECONTROL_MAINWINDOW_H_

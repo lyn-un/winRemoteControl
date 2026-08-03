@@ -17,6 +17,12 @@ KMainWindow::KMainWindow(QWidget *pParent)
 	setCentralWidget(m_pWebViewWidget);
 
 	initConnections();
+	connect(m_pComposition, &KApplicationComposition::shutdownFinished,
+		this, [this]()
+		{
+			m_bShutdownComplete = true;
+			close();
+		});
 
 	m_strFrontendPath = QDir(QCoreApplication::applicationDirPath())
 		.filePath(QStringLiteral("frontend/index.html"));
@@ -30,8 +36,18 @@ KMainWindow::~KMainWindow()
 
 void KMainWindow::closeEvent(QCloseEvent *pEvent)
 {
+	if (!m_bShutdownComplete)
+	{
+		pEvent->ignore();
+		if (!m_bClosePending)
+		{
+			m_bClosePending = true;
+			closeRemoteDesktopWindow();
+			m_pComposition->shutdown();
+		}
+		return;
+	}
 	closeRemoteDesktopWindow();
-	m_pComposition->disconnectSession();
 	QMainWindow::closeEvent(pEvent);
 }
 

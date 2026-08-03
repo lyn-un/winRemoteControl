@@ -16,6 +16,8 @@ class KClipboardSyncService;
 
 class KApplicationComposition : public QObject
 {
+	Q_OBJECT
+
 public:
 	explicit KApplicationComposition(QObject *pParent = nullptr);
 	~KApplicationComposition() override;
@@ -31,8 +33,12 @@ public:
 	void disconnectSession();
 	void shutdown();
 
+signals:
+	void shutdownFinished();
+
 private:
 	void wireServices();
+	void tryFinishShutdown();
 
 	KCaptureService *m_pCaptureService = nullptr;
 	KSessionCoordinator *m_pSessionService = nullptr;
@@ -43,6 +49,8 @@ private:
 	KApplicationSettingsService *m_pApplicationSettingsService = nullptr;
 	KClipboardSyncService *m_pClipboardSyncService = nullptr;
 	bool m_bShutdown = false;
+	bool m_bSessionShutdownPending = false;
+	bool m_bCaptureShutdownPending = false;
 };
 
 #endif // _WINREMOTECONTROL_APPLICATIONCOMPOSITION_H_

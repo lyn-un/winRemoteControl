@@ -47,6 +47,10 @@ public slots:
 	virtual void applyApplicationSettings(const KApplicationSettings &settings) = 0;
 	virtual void respondIncomingAccessRequest(const QString &strRequestId, bool bAccepted) = 0;
 
+public:
+	virtual quint64 sessionGeneration() const = 0;
+	virtual bool isIdle() const = 0;
+
 signals:
 	void listeningAvailabilityChanged(bool bAvailable, quint16 nPort);
 	void signalingChanged(const QString &strState);
@@ -61,8 +65,8 @@ signals:
 	void remoteFrameReady(const KDecodedVideoFrame &frame);
 	void remoteFrameStatsReady(int nWidth, int nHeight, quint64 nFrameIndex, qint64 nTimestampMs);
 	void networkStatsReady(const KNetworkStats &stats);
-	void startCaptureRequested();
-	void stopCaptureRequested();
+	void startCaptureRequested(quint64 nGeneration);
+	void stopCaptureRequested(quint64 nGeneration);
 	void streamConfigChanged(const KStreamConfig &config);
 	void inputChannelChanged(bool bOpen);
 	void clipboardMessageReceived(const KClipboardMessage &message);
@@ -76,6 +80,7 @@ signals:
 		const QString &strSourceAddress,
 		qint64 nExpiresAtMs);
 	void incomingAccessRequestCleared(const QString &strRequestId, const QString &strReason);
+	void captureShutdownFinished(quint64 nGeneration);
 };
 
 #endif // _WINREMOTECONTROL_SESSIONCONTROLLER_H_

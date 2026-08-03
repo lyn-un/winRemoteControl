@@ -269,25 +269,60 @@ void KApplicationComposition::shutdown()
 		return;
 
 	m_bShutdown = true;
+	m_bSessionShutdownPending = !m_pSessionService->isIdle();
+	m_bCaptureShutdownPending = true;
 	m_pClipboardSyncService->shutdown();
 	m_pDiscoveryService->stop();
 	m_pSessionService->disconnectSession();
 	m_pCaptureService->stopCapture();
+	tryFinishShutdown();
+}
+
+void KApplicationComposition::tryFinishShutdown()
+{
+	if (!m_bShutdown || m_bSessionShutdownPending || m_bCaptureShutdownPending)
+		return;
+	emit shutdownFinished();
 }
 
 void KApplicationComposition::wireServices()
 {
+	connect(m_pSessionService, &KSessionCoordinator::sessionStateChanged,
+		this, [this](KSessionState state)
+		{
+			if (m_bShutdown && state == IdleSessionState)
+			{
+				m_bSessionShutdownPending = false;
+				tryFinishShutdown();
+			}
+		});
+	connect(m_pCaptureService, &KCaptureService::captureShutdownFinished,
+		this, [this](quint64)
+		{
+			if (m_bShutdown)
+			{
+				m_bCaptureShutdownPending = false;
+				tryFinishShutdown();
+			}
+		});
 	connect(m_pApplicationSettingsService, &KApplicationSettingsService::settingsChanged,
 		m_pSessionService, &KSessionCoordinator::applyApplicationSettings);
 	connect(m_pCaptureService, &KCaptureService::webRtcFrameReady,
-		m_pSessionService, &KSessionCoordinator::pushVideoFrame);
+		m_pSessionService,
+		[m_pSessionService = m_pSessionService](quint64 nGeneration, const KVideoFrame &frame)
+		{
+			if (m_pSessionService->sessionGeneration() == nGeneration)
+				m_pSessionService->pushVideoFrame(frame);
+		});
 	connect(m_pCaptureService, &KCaptureService::captureError,
 		m_pSessionService, &KSessionCoordinator::handleCaptureFailure);
 
 	connect(m_pSessionService, &KSessionCoordinator::startCaptureRequested,
 		m_pCaptureService, &KCaptureService::startWebRtcCapture);
 	connect(m_pSessionService, &KSessionCoordinator::stopCaptureRequested,
-		m_pCaptureService, &KCaptureService::stopCapture);
+		m_pCaptureService, &KCaptureService::requestStopCapture);
+	connect(m_pCaptureService, &KCaptureService::captureShutdownFinished,
+		m_pSessionService, &KSessionCoordinator::captureShutdownFinished);
 	connect(m_pSessionService, &KSessionCoordinator::streamConfigChanged,
 		m_pCaptureService, &KCaptureService::setStreamConfig);
 	connect(m_pSessionService, &KSessionCoordinator::inputTraceUpdated,

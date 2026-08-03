@@ -397,19 +397,29 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 	connect(m_pClipboardDataChannel, &KWebRtcDataChannel::lowWatermarkReached,
 		this, &KWebRtcPeer::flushClipboardQueue);
 	connect(m_pRemoteFrameProcessor, &KWebRtcRemoteFrameProcessor::frameReady,
-		this, &KWebRtcPeer::remoteFrameReady);
+		this, [this](const KDecodedVideoFrame &frame)
+		{ emit remoteFrameReady(m_nGeneration.load(), frame); });
 	connect(m_pRemoteFrameProcessor, &KWebRtcRemoteFrameProcessor::frameStatsReady,
-		this, &KWebRtcPeer::remoteFrameStatsReady);
+		this, [this](int nWidth, int nHeight, quint64 nFrameIndex, qint64 nTimestampMs)
+		{ emit remoteFrameStatsReady(m_nGeneration.load(), nWidth, nHeight, nFrameIndex, nTimestampMs); });
 }
 
 KWebRtcPeer::~KWebRtcPeer()
 {
-	shutdown();
+	requestShutdown(m_nGeneration.load());
+	if (m_pTeardownThread != nullptr)
+		m_pTeardownThread->wait();
 }
 
-bool KWebRtcPeer::initialize(KSessionRole role, QString *pErrorMessage)
+bool KWebRtcPeer::initialize(KSessionRole role, quint64 nGeneration, QString *pErrorMessage)
 {
-	shutdown();
+	if (m_bShutdownPending || m_spPeerConnection || m_spFactory)
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("WebRTC peer is still shutting down");
+		return false;
+	}
+	m_nGeneration = nGeneration;
 	m_bProtocolTerminationPending = false;
 	m_role = role;
 	if (!createFactory(pErrorMessage))
@@ -427,12 +437,20 @@ bool KWebRtcPeer::initialize(KSessionRole role, QString *pErrorMessage)
 	if (m_role == ControllerSessionRole && !addRemoteVideoReceiver(pErrorMessage))
 		return false;
 
-	emit stateChanged(QStringLiteral("PeerReady"));
+	emit stateChanged(m_nGeneration.load(), QStringLiteral("PeerReady"));
 	return true;
 }
 
-void KWebRtcPeer::shutdown()
+quint64 KWebRtcPeer::generation() const
 {
+	return m_nGeneration.load();
+}
+
+void KWebRtcPeer::requestShutdown(quint64 nGeneration)
+{
+	if (m_bShutdownPending.exchange(true))
+		return;
+
 	stopStatsPolling();
 	m_inputSendQueue.clear();
 	m_clipboardSendQueue.clear();
@@ -447,23 +465,58 @@ void KWebRtcPeer::shutdown()
 
 	if (m_spRemoteVideoTrack)
 		m_spRemoteVideoTrack->RemoveSink(this);
-	m_spRemoteVideoTrack = nullptr;
+	webrtc::scoped_refptr<webrtc::VideoTrackInterface> spRemoteVideoTrack = std::move(m_spRemoteVideoTrack);
 	m_pRemoteFrameProcessor->clear();
-	m_spVideoSender = nullptr;
-	m_spPeerConnection = nullptr;
-	m_spVideoSource = nullptr;
-	m_spFactory = nullptr;
-
-	if (m_spSignalingThread)
-		m_spSignalingThread->Stop();
-	if (m_spWorkerThread)
-		m_spWorkerThread->Stop();
-	if (m_spNetworkThread)
-		m_spNetworkThread->Stop();
-	m_spSignalingThread.reset();
-	m_spWorkerThread.reset();
-	m_spNetworkThread.reset();
+	auto spVideoSender = std::move(m_spVideoSender);
+	auto spPeerConnection = std::move(m_spPeerConnection);
+	auto spVideoSource = std::move(m_spVideoSource);
+	auto spFactory = std::move(m_spFactory);
+	auto upSignalingThread = std::move(m_spSignalingThread);
+	auto upWorkerThread = std::move(m_spWorkerThread);
+	auto upNetworkThread = std::move(m_spNetworkThread);
 	resetStatsHistory();
+
+	if (!spRemoteVideoTrack && !spVideoSender && !spPeerConnection && !spVideoSource
+		&& !spFactory && !upSignalingThread && !upWorkerThread && !upNetworkThread)
+	{
+		m_bShutdownPending = false;
+		emit shutdownFinished(nGeneration);
+		return;
+	}
+
+	m_pTeardownThread = QThread::create(
+		[spRemoteVideoTrack = std::move(spRemoteVideoTrack),
+			spVideoSender = std::move(spVideoSender),
+			spPeerConnection = std::move(spPeerConnection),
+			spVideoSource = std::move(spVideoSource),
+			spFactory = std::move(spFactory),
+			upSignalingThread = std::move(upSignalingThread),
+			upWorkerThread = std::move(upWorkerThread),
+			upNetworkThread = std::move(upNetworkThread)]() mutable
+		{
+			spRemoteVideoTrack = nullptr;
+			spVideoSender = nullptr;
+			spPeerConnection = nullptr;
+			spVideoSource = nullptr;
+			spFactory = nullptr;
+			if (upSignalingThread)
+				upSignalingThread->Stop();
+			if (upWorkerThread)
+				upWorkerThread->Stop();
+			if (upNetworkThread)
+				upNetworkThread->Stop();
+		});
+	connect(m_pTeardownThread, &QThread::finished, this,
+		[this, nGeneration]()
+		{
+			QThread *pFinishedThread = m_pTeardownThread;
+			m_pTeardownThread = nullptr;
+			m_bShutdownPending = false;
+			if (pFinishedThread != nullptr)
+				pFinishedThread->deleteLater();
+			emit shutdownFinished(nGeneration);
+		});
+	m_pTeardownThread->start();
 }
 
 void KWebRtcPeer::createOffer()
@@ -572,7 +625,7 @@ bool KWebRtcPeer::enqueueInputMessage(const QString &strPayload, bool bMouseMove
 	const KOutboundEnqueueResult result = m_inputSendQueue.enqueue(queuedMessage);
 	if (result != OverflowOutboundMessage)
 		return true;
-	emit inputBackpressureOverflow();
+	emit inputBackpressureOverflow(m_nGeneration.load());
 	return false;
 }
 
@@ -633,7 +686,7 @@ void KWebRtcPeer::setStreamConfig(const KStreamConfig &config)
 	const webrtc::RTCError result = m_spVideoSender->SetParameters(parameters);
 	if (!result.ok())
 	{
-		emit transportError(rtcErrorMessage(QStringLiteral("Set video stream parameters failed"), result));
+		emit transportError(m_nGeneration.load(), rtcErrorMessage(QStringLiteral("Set video stream parameters failed"), result));
 		return;
 	}
 
@@ -697,7 +750,7 @@ void KWebRtcPeer::stopStatsPolling()
 
 	resetStatsHistory();
 	KNetworkStats stats;
-	emit networkStatsReady(stats);
+	emit networkStatsReady(m_nGeneration.load(), stats);
 }
 
 void KWebRtcPeer::requestStats()
@@ -793,7 +846,7 @@ void KWebRtcPeer::handleStatsReport(webrtc::scoped_refptr<const webrtc::RTCStats
 				.arg(stats.nKeyFramesDecoded)
 				.arg(stats.nFramesDropped));
 	}
-	emit networkStatsReady(stats);
+	emit networkStatsReady(m_nGeneration.load(), stats);
 }
 
 void KWebRtcPeer::OnSignalingChange(webrtc::PeerConnectionInterface::SignalingState)
@@ -814,7 +867,7 @@ void KWebRtcPeer::OnAddTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterface>
 	wants.black_frames = false;
 	wants.max_framerate_fps = kReceiverMaxFrameRateFps;
 	m_spRemoteVideoTrack->AddOrUpdateSink(this, wants);
-	emit stateChanged(QStringLiteral("RemoteVideoTrack"));
+	emit stateChanged(m_nGeneration.load(), QStringLiteral("RemoteVideoTrack"));
 	startStatsPolling(QStringLiteral("remote_video_track"));
 }
 
@@ -844,24 +897,24 @@ void KWebRtcPeer::OnRenegotiationNeeded()
 
 void KWebRtcPeer::OnIceConnectionChange(webrtc::PeerConnectionInterface::IceConnectionState new_state)
 {
-	emit stateChanged(stringViewToQString(webrtc::PeerConnectionInterface::AsString(new_state)));
+	emit stateChanged(m_nGeneration.load(), stringViewToQString(webrtc::PeerConnectionInterface::AsString(new_state)));
 	if (new_state == webrtc::PeerConnectionInterface::kIceConnectionConnected
 		|| new_state == webrtc::PeerConnectionInterface::kIceConnectionCompleted)
 	{
 		if (m_role == ControllerSessionRole)
 			startStatsPolling(QStringLiteral("ice_connected"));
-		emit connectionRestored();
+		emit connectionRestored(m_nGeneration.load());
 	}
 	else if (new_state == webrtc::PeerConnectionInterface::kIceConnectionDisconnected)
 	{
 		stopStatsPolling();
-		emit connectionInterrupted();
+		emit connectionInterrupted(m_nGeneration.load());
 	}
 	else if (new_state == webrtc::PeerConnectionInterface::kIceConnectionFailed
 		|| new_state == webrtc::PeerConnectionInterface::kIceConnectionClosed)
 	{
 		stopStatsPolling();
-		emit connectionTerminated(
+		emit connectionTerminated(m_nGeneration.load(),
 			new_state == webrtc::PeerConnectionInterface::kIceConnectionFailed
 				? QStringLiteral("ice_failed")
 				: QStringLiteral("ice_closed"));
@@ -882,7 +935,7 @@ void KWebRtcPeer::OnIceCandidate(const webrtc::IceCandidate *pCandidate)
 	message.strSdpMid = QString::fromStdString(pCandidate->sdp_mid());
 	message.nSdpMLineIndex = pCandidate->sdp_mline_index();
 	message.strCandidate = QString::fromStdString(pCandidate->ToString());
-	emit signalingMessageReady(KWebRtcSignalingMessageCodec::encode(message));
+	emit signalingMessageReady(m_nGeneration.load(), KWebRtcSignalingMessageCodec::encode(message));
 }
 
 void KWebRtcPeer::OnIceConnectionReceivingChange(bool)
@@ -902,7 +955,7 @@ void KWebRtcPeer::OnTrack(webrtc::scoped_refptr<webrtc::RtpTransceiverInterface>
 
 void KWebRtcPeer::handleInputChannelChanged(bool bOpen)
 {
-	emit inputChannelChanged(bOpen);
+	emit inputChannelChanged(m_nGeneration.load(), bOpen);
 	if (bOpen)
 	{
 		flushInputQueue();
@@ -916,15 +969,15 @@ void KWebRtcPeer::handleInputChannelChanged(bool bOpen)
 
 void KWebRtcPeer::handleSessionChannelChanged(bool bOpen)
 {
-	emit sessionChannelChanged(bOpen);
-	emit stateChanged(bOpen
+	emit sessionChannelChanged(m_nGeneration.load(), bOpen);
+	emit stateChanged(m_nGeneration.load(), bOpen
 		? QStringLiteral("SessionChannelOpen")
 		: QStringLiteral("SessionChannelClosed"));
 }
 
 void KWebRtcPeer::handleClipboardChannelChanged(bool bOpen)
 {
-	emit clipboardChannelChanged(bOpen);
+	emit clipboardChannelChanged(m_nGeneration.load(), bOpen);
 	if (bOpen)
 		flushClipboardQueue();
 	else
@@ -947,7 +1000,7 @@ void KWebRtcPeer::decodeSessionMessage(const KProtocolEnvelope &envelope)
 			strError, &m_nInvalidSessionMessages);
 		return;
 	}
-	emit sessionMessageReceived(message);
+	emit sessionMessageReceived(m_nGeneration.load(), message);
 }
 
 void KWebRtcPeer::handleClipboardChannelMessage(const QString &strMessage)
@@ -966,7 +1019,7 @@ void KWebRtcPeer::decodeClipboardMessage(const KProtocolEnvelope &envelope)
 			strError, &m_nInvalidClipboardMessages);
 		return;
 	}
-	emit clipboardMessageReceived(message);
+	emit clipboardMessageReceived(m_nGeneration.load(), message);
 }
 
 void KWebRtcPeer::handleInputChannelMessage(const QString &strMessage)
@@ -1001,7 +1054,7 @@ void KWebRtcPeer::decodeInputMessage(const KProtocolEnvelope &envelope)
 			strError, &m_nInvalidInputMessages);
 		return;
 	}
-	emit inputMessageReceived(message);
+	emit inputMessageReceived(m_nGeneration.load(), message);
 }
 
 void KWebRtcPeer::routeDataMessage(KProtocolChannel channel,
@@ -1052,7 +1105,7 @@ void KWebRtcPeer::terminateForProtocolViolation(const QString &strChannel)
 		{
 			if (!pPeer)
 				return;
-			emit pPeer->protocolViolation(strChannel, QStringLiteral(
+			emit pPeer->protocolViolation(pPeer->m_nGeneration.load(), strChannel, QStringLiteral(
 				"Remote peer sent too many invalid %1 messages").arg(strChannel));
 		},
 		Qt::QueuedConnection);
@@ -1067,7 +1120,7 @@ void KWebRtcPeer::handleLocalDescription(webrtc::SessionDescriptionInterface *pD
 	m_spPeerConnection->SetLocalDescription(KSetDescriptionObserver::create(
 			[this]()
 			{
-				emit stateChanged(QStringLiteral("LocalDescriptionSet"));
+				emit stateChanged(m_nGeneration.load(), QStringLiteral("LocalDescriptionSet"));
 			},
 			[this](webrtc::RTCError error)
 			{
@@ -1079,12 +1132,12 @@ void KWebRtcPeer::handleLocalDescription(webrtc::SessionDescriptionInterface *pD
 
 void KWebRtcPeer::handleLocalDescriptionFailure(webrtc::RTCError error)
 {
-	emit transportError(rtcErrorMessage(QStringLiteral("Create SDP failed"), error));
+	emit transportError(m_nGeneration.load(), rtcErrorMessage(QStringLiteral("Create SDP failed"), error));
 }
 
 void KWebRtcPeer::handleRemoteDescriptionSuccess(webrtc::SdpType sdpType)
 {
-	emit stateChanged(QStringLiteral("RemoteDescriptionSet"));
+	emit stateChanged(m_nGeneration.load(), QStringLiteral("RemoteDescriptionSet"));
 	if (sdpType == webrtc::SdpType::kOffer && m_spPeerConnection)
 	{
 		m_spPeerConnection->CreateAnswer(KCreateSessionDescriptionObserver::create(this).get(),
@@ -1094,7 +1147,7 @@ void KWebRtcPeer::handleRemoteDescriptionSuccess(webrtc::SdpType sdpType)
 
 void KWebRtcPeer::handleRemoteDescriptionFailure(webrtc::RTCError error)
 {
-	emit transportError(rtcErrorMessage(QStringLiteral("Set remote SDP failed"), error));
+	emit transportError(m_nGeneration.load(), rtcErrorMessage(QStringLiteral("Set remote SDP failed"), error));
 }
 
 void KWebRtcPeer::OnFrame(const webrtc::VideoFrame &frame)
@@ -1262,7 +1315,7 @@ void KWebRtcPeer::sendSessionDescription(const webrtc::SessionDescriptionInterfa
 		? OfferWebRtcSignalingMessageType
 		: AnswerWebRtcSignalingMessageType;
 	message.strSdp = QString::fromStdString(strSdp);
-	emit signalingMessageReady(KWebRtcSignalingMessageCodec::encode(message));
+	emit signalingMessageReady(m_nGeneration.load(), KWebRtcSignalingMessageCodec::encode(message));
 }
 
 void KWebRtcPeer::handleSessionDescription(const QString &strType, const QString &strSdp)
@@ -1276,7 +1329,7 @@ void KWebRtcPeer::handleSessionDescription(const QString &strType, const QString
 	std::optional<webrtc::SdpType> sdpType = webrtc::SdpTypeFromString(strType.toStdString());
 	if (!sdpType.has_value())
 	{
-		emit transportError(QStringLiteral("Unknown SDP type"));
+		emit transportError(m_nGeneration.load(), QStringLiteral("Unknown SDP type"));
 		return;
 	}
 
@@ -1285,7 +1338,7 @@ void KWebRtcPeer::handleSessionDescription(const QString &strType, const QString
 		webrtc::CreateSessionDescription(sdpType.value(), strSdp.toStdString(), &parseError);
 	if (!spDescription)
 	{
-		emit transportError(QString::fromStdString(parseError.description));
+		emit transportError(m_nGeneration.load(), QString::fromStdString(parseError.description));
 		return;
 	}
 
@@ -1314,12 +1367,12 @@ void KWebRtcPeer::handleIceCandidate(const QString &strSdpMid,
 		&parseError));
 	if (!spCandidate)
 	{
-		emit transportError(QString::fromStdString(parseError.description));
+		emit transportError(m_nGeneration.load(), QString::fromStdString(parseError.description));
 		return;
 	}
 
 	if (!m_spPeerConnection->AddIceCandidate(spCandidate.get()))
-		emit transportError(QStringLiteral("Add ICE candidate failed"));
+		emit transportError(m_nGeneration.load(), QStringLiteral("Add ICE candidate failed"));
 }
 
 QString KWebRtcPeer::rtcErrorMessage(const QString &strPrefix, const webrtc::RTCError &error)

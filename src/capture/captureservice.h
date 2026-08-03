@@ -27,14 +27,16 @@ public:
 
 public slots:
 	void startCapture() override;
-	void startWebRtcCapture();
+	void startWebRtcCapture(quint64 nGeneration);
 	void stopCapture() override;
+	void requestStopCapture(quint64 nGeneration);
 	void setStreamConfig(const KStreamConfig &config);
 	void setInputTraceState(quint64 nSeq, qint64 nInjectedMs);
 	void requestImmediateFrame();
 
 signals:
-	void webRtcFrameReady(const KVideoFrame &frame);
+	void webRtcFrameReady(quint64 nGeneration, const KVideoFrame &frame);
+	void captureShutdownFinished(quint64 nGeneration);
 
 private:
 	void startCaptureWithMode(KCaptureWorker::WorkMode mode);
@@ -53,6 +55,10 @@ private:
 	bool m_bHasPendingWebRtcFrame = false;
 	bool m_bWebRtcFrameFlushQueued = false;
 	bool m_bAcceptWebRtcFrames = false;
+	quint64 m_nGeneration = 0;
+	quint64 m_nStoppingGeneration = 0;
+	bool m_bStartPending = false;
+	KCaptureWorker::WorkMode m_pendingMode = KCaptureWorker::LocalPreviewWorkMode;
 	quint64 m_nDroppedWebRtcSourceFrames = 0;
 };
 

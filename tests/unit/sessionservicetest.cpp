@@ -79,17 +79,21 @@ namespace
 	class KFakeRemotePeerTransport final : public KRemotePeerTransport
 	{
 	public:
-		bool initialize(KSessionRole role, QString *) override
+		bool initialize(KSessionRole role, quint64 nGeneration, QString *) override
 		{
 			initializedRole = role;
+			m_nGeneration = nGeneration;
 			++nInitializeCount;
 			return true;
 		}
 
-		void shutdown() override
+		void requestShutdown(quint64 nGeneration) override
 		{
 			++nShutdownCount;
+			emit shutdownFinished(nGeneration);
 		}
+
+		quint64 generation() const override { return m_nGeneration; }
 
 		void createOffer() override
 		{
@@ -138,52 +142,52 @@ namespace
 
 		void openSessionChannel()
 		{
-			emit sessionChannelChanged(true);
+			emit sessionChannelChanged(m_nGeneration, true);
 		}
 
 		void openInputChannel()
 		{
-			emit inputChannelChanged(true);
+			emit inputChannelChanged(m_nGeneration, true);
 		}
 
 		void openClipboardChannel()
 		{
-			emit clipboardChannelChanged(true);
+			emit clipboardChannelChanged(m_nGeneration, true);
 		}
 
 		void deliverClipboardMessage(const KClipboardMessage &message)
 		{
-			emit clipboardMessageReceived(message);
+			emit clipboardMessageReceived(m_nGeneration, message);
 		}
 
 		void deliverSessionMessage(const KSessionMessage &message)
 		{
-			emit sessionMessageReceived(message);
+			emit sessionMessageReceived(m_nGeneration, message);
 		}
 
 		void deliverInputMessage(const KInputMessage &message)
 		{
-			emit inputMessageReceived(message);
+			emit inputMessageReceived(m_nGeneration, message);
 		}
 
 		void interruptConnection()
 		{
-			emit connectionInterrupted();
+			emit connectionInterrupted(m_nGeneration);
 		}
 
 		void restoreConnection()
 		{
-			emit connectionRestored();
+			emit connectionRestored(m_nGeneration);
 		}
 
 		void terminateConnection(const QString &strReason)
 		{
-			emit connectionTerminated(strReason);
+			emit connectionTerminated(m_nGeneration, strReason);
 		}
 
 		void overflowInputQueue()
 		{
-			emit inputBackpressureOverflow();
+			emit inputBackpressureOverflow(m_nGeneration);
 		}
 
 		KSessionRole initializedRole = ControllerSessionRole;
@@ -195,6 +199,7 @@ namespace
 		QString strLastSignalingMessage;
 		int nInitializeCount = 0;
 		int nShutdownCount = 0;
+		quint64 m_nGeneration = 0;
 		int nCreateOfferCount = 0;
 		int nRestartIceCount = 0;
 		int nVideoFrameCount = 0;
@@ -243,9 +248,13 @@ namespace
 		QVector<QPair<bool, quint16>> listeningAvailability;
 		bool bNegotiating = false;
 		QObject::connect(&service, &KSessionCoordinator::startCaptureRequested,
-			[&nStartCaptureCount]() { ++nStartCaptureCount; });
+			[&nStartCaptureCount](quint64) { ++nStartCaptureCount; });
 		QObject::connect(&service, &KSessionCoordinator::stopCaptureRequested,
-			[&nStopCaptureCount]() { ++nStopCaptureCount; });
+			[&service, &nStopCaptureCount](quint64 nGeneration)
+			{
+				++nStopCaptureCount;
+				service.captureShutdownFinished(nGeneration);
+			});
 		QObject::connect(&service, &KSessionCoordinator::sessionStateChanged,
 			[&bNegotiating](KSessionState state)
 			{

@@ -45,8 +45,9 @@ public:
 	KWebRtcPeer(const KWebRtcPeer &) = delete;
 	KWebRtcPeer &operator=(const KWebRtcPeer &) = delete;
 
-	bool initialize(KSessionRole role, QString *pErrorMessage) override;
-	void shutdown() override;
+	bool initialize(KSessionRole role, quint64 nGeneration, QString *pErrorMessage) override;
+	void requestShutdown(quint64 nGeneration) override;
+	quint64 generation() const override;
 	void createOffer() override;
 	void restartIce() override;
 	void handleSignalingMessage(const QString &strMessage) override;
@@ -114,8 +115,12 @@ private:
 	void flushClipboardQueue();
 	bool enqueueInputMessage(const QString &strPayload, bool bMouseMove);
 	static QString rtcErrorMessage(const QString &strPrefix, const webrtc::RTCError &error);
+	void clearPeerObjects();
 
 	KSessionRole m_role = ControllerSessionRole;
+	std::atomic<quint64> m_nGeneration = 0;
+	std::atomic_bool m_bShutdownPending = false;
+	class QThread *m_pTeardownThread = nullptr;
 	class QTimer *m_pStatsTimer = nullptr;
 	std::unique_ptr<webrtc::Thread> m_spNetworkThread;
 	std::unique_ptr<webrtc::Thread> m_spWorkerThread;

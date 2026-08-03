@@ -23,18 +23,27 @@ KCaptureService::~KCaptureService()
 
 void KCaptureService::startCapture()
 {
+	m_nGeneration = 0;
 	startCaptureWithMode(KCaptureWorker::LocalPreviewWorkMode);
 }
 
-void KCaptureService::startWebRtcCapture()
+void KCaptureService::startWebRtcCapture(quint64 nGeneration)
 {
+	m_nGeneration = nGeneration;
 	startCaptureWithMode(KCaptureWorker::RemoteVideoWorkMode);
 }
 
 void KCaptureService::startCaptureWithMode(KCaptureWorker::WorkMode mode)
 {
 	if (m_pCaptureThread != nullptr)
+	{
+		if (!m_bAcceptWebRtcFrames)
+		{
+			m_bStartPending = true;
+			m_pendingMode = mode;
+		}
 		return;
+	}
 
 	clearPendingWebRtcFrame();
 	m_bAcceptWebRtcFrames = (mode == KCaptureWorker::RemoteVideoWorkMode);
@@ -70,17 +79,22 @@ void KCaptureService::startCaptureWithMode(KCaptureWorker::WorkMode mode)
 
 void KCaptureService::stopCapture()
 {
-	if (m_pCaptureThread == nullptr || m_pCaptureWorker == nullptr)
-		return;
+	requestStopCapture(m_nGeneration);
+}
 
+void KCaptureService::requestStopCapture(quint64 nGeneration)
+{
+	if (m_pCaptureThread == nullptr || m_pCaptureWorker == nullptr)
+	{
+		emit captureShutdownFinished(nGeneration);
+		return;
+	}
+
+	m_nStoppingGeneration = nGeneration;
+	m_bStartPending = false;
 	m_bAcceptWebRtcFrames = false;
 	clearPendingWebRtcFrame();
 	m_pCaptureWorker->stopWork();
-	m_pCaptureThread->quit();
-	m_pCaptureThread->wait();
-	clearPendingWebRtcFrame();
-	clearWorker();
-	emit statusChanged(QStringLiteral("Stopped"));
 }
 
 void KCaptureService::setStreamConfig(const KStreamConfig &config)
@@ -106,10 +120,19 @@ void KCaptureService::requestImmediateFrame()
 
 void KCaptureService::clearWorker()
 {
+	const quint64 nFinishedGeneration = m_nStoppingGeneration;
+	const bool bRestart = m_bStartPending;
+	const KCaptureWorker::WorkMode pendingMode = m_pendingMode;
 	m_bAcceptWebRtcFrames = false;
 	clearPendingWebRtcFrame();
 	m_pCaptureThread = nullptr;
 	m_pCaptureWorker = nullptr;
+	m_nStoppingGeneration = 0;
+	m_bStartPending = false;
+	emit statusChanged(QStringLiteral("Stopped"));
+	emit captureShutdownFinished(nFinishedGeneration);
+	if (bRestart)
+		startCaptureWithMode(pendingMode);
 }
 
 void KCaptureService::enqueueWebRtcFrame(const KVideoFrame &frame)
@@ -175,7 +198,7 @@ void KCaptureService::flushLatestWebRtcFrame()
 		m_bHasPendingWebRtcFrame = false;
 	}
 
-	emit webRtcFrameReady(frame);
+	emit webRtcFrameReady(m_nGeneration, frame);
 
 	bool bNeedQueue = false;
 	{

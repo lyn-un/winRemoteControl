@@ -39,6 +39,8 @@ public:
 		std::unique_ptr<KSignalingTransport> spSignalingTransport,
 		QObject *pParent = nullptr);
 	~KSessionCoordinator() override;
+	quint64 sessionGeneration() const override;
+	bool isIdle() const override;
 
 	KSessionCoordinator(const KSessionCoordinator &) = delete;
 	KSessionCoordinator &operator=(const KSessionCoordinator &) = delete;
@@ -62,6 +64,13 @@ public slots:
 	void respondIncomingAccessRequest(const QString &strRequestId, bool bAccepted) override;
 
 private:
+	enum PendingRequestType
+	{
+		NoPendingRequest,
+		ListenPendingRequest,
+		ConnectPendingRequest,
+		RolePendingRequest
+	};
 	bool initializePeer(KSessionRole role, QString *pErrorMessage);
 	void wirePeer();
 	void initializeProtocolRoutes();
@@ -72,6 +81,12 @@ private:
 		bool bKeepListening,
 		bool bNotifyRemote,
 		bool bReportError);
+	void handleCaptureShutdownFinished(quint64 nGeneration);
+	void handlePeerShutdownFinished(quint64 nGeneration);
+	void tryFinishStopping();
+	void finishStopping();
+	void handleStopWatchdog();
+	void executePendingRequest();
 	void resetInputTraceState();
 	void handleRemoteFrame(const KDecodedVideoFrame &frame);
 	void handleInputMessage(const KInputMessage &message);
@@ -122,8 +137,10 @@ private:
 	bool m_bInputChannelOpen = false;
 	bool m_bClipboardChannelOpen = false;
 	bool m_bSessionChannelOpen = false;
+	bool m_bCaptureActive = false;
 	quint64 m_nLastInjectedInputSeq = 0;
 	quint64 m_nReconnectGeneration = 0;
+	quint64 m_nActivePeerGeneration = 0;
 	qint64 m_nLastInjectedInputMs = -1;
 	bool m_bSignalingConnected = false;
 	bool m_bListeningAvailable = false;
@@ -145,6 +162,19 @@ private:
 	KInputInjector *m_pInputInjector = nullptr;
 	QTimer *m_pReconnectTimer = nullptr;
 	QTimer *m_pApprovalTimer = nullptr;
+	QTimer *m_pStopWatchdogTimer = nullptr;
+	bool m_bCaptureShutdownPending = false;
+	bool m_bPeerShutdownPending = false;
+	bool m_bStopKeepListening = false;
+	bool m_bStopReportError = false;
+	bool m_bStopRecovering = false;
+	KSessionRole m_stopRole = ControllerSessionRole;
+	QString m_strStopReason;
+	quint64 m_nStoppingGeneration = 0;
+	PendingRequestType m_pendingRequestType = NoPendingRequest;
+	QString m_strPendingHost;
+	quint16 m_nPendingPort = 0;
+	KSessionRole m_pendingRole = ControllerSessionRole;
 };
 
 #endif // _WINREMOTECONTROL_SESSIONCOORDINATOR_H_
