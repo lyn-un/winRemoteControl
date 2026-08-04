@@ -27,9 +27,9 @@ namespace
 		Check(filter.evaluate(10, true, QStringLiteral("remote text"), false)
 			== SelfWriteClipboardChangeDecision,
 			QStringLiteral("first self-write notification is ignored"));
-		Check(filter.evaluate(10, true, QStringLiteral("remote text"), false)
-			== SelfWriteClipboardChangeDecision,
-			QStringLiteral("repeated self-write notifications remain ignored"));
+		Check(filter.evaluate(10, false, QStringLiteral("remote text"), false)
+			== DuplicateSequenceClipboardChangeDecision,
+			QStringLiteral("repeated self-write sequence remains ignored without ownership"));
 		Check(filter.evaluate(11, false, QStringLiteral("remote text"), false)
 			== ForwardClipboardChangeDecision,
 			QStringLiteral("same text copied later by another application is forwarded"));

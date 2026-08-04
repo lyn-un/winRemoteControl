@@ -59,10 +59,18 @@ KClipboardChangeDecision KClipboardChangeFilter::evaluate(quint32 nSequence,
 		cancelSelfWrite();
 		return FileClipboardChangeDecision;
 	}
-	if (m_bHasSelfWrite && bOwnsClipboard && strText == m_strSelfWrittenText)
+	// Qt can report that it no longer owns the clipboard by the time the
+	// delayed dataChanged handler runs. A valid Windows sequence plus the exact
+	// prepared text is enough to identify the first notification from setText().
+	if (m_bHasSelfWrite
+		&& strText == m_strSelfWrittenText
+		&& (nSequence != 0 || bOwnsClipboard))
 	{
 		if (nSequence != 0)
+		{
 			m_nLastSequence = nSequence;
+			cancelSelfWrite();
+		}
 		return SelfWriteClipboardChangeDecision;
 	}
 	if (nSequence != 0 && nSequence == m_nLastSequence)

@@ -218,7 +218,11 @@ void KClipboardSyncService::retryPendingApply()
 		m_nPendingAttempt = 0;
 		return;
 	}
-	applyRemoteMessage(m_pendingMessage, m_nPendingAttempt + 1);
+	// applyRemoteMessage() clears the pending slot before writing. Keep a value
+	// copy so the argument cannot alias that slot and become an empty message.
+	const KClipboardMessage message = m_pendingMessage;
+	const int nAttempt = m_nPendingAttempt + 1;
+	applyRemoteMessage(message, nAttempt);
 }
 
 void KClipboardSyncService::applyRemoteMessage(const KClipboardMessage &message, int nAttempt)

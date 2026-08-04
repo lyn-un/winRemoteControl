@@ -5,6 +5,8 @@
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDebug>
+#include <QtCore/QElapsedTimer>
+#include <QtCore/QThread>
 
 #include <iostream>
 #include <memory>
@@ -32,8 +34,14 @@ namespace
 
 		bool setText(const QString &strValue, QString *) override
 		{
-			strText = strValue;
 			++nSetCount;
+			vecSetValues.append(strValue);
+			if (nFailuresRemaining > 0)
+			{
+				--nFailuresRemaining;
+				return false;
+			}
+			strText = strValue;
 			return true;
 		}
 
@@ -45,7 +53,21 @@ namespace
 
 		QString strText;
 		int nSetCount = 0;
+		int nFailuresRemaining = 0;
+		QVector<QString> vecSetValues;
 	};
+
+	void ProcessEventsFor(int nMilliseconds)
+	{
+		QElapsedTimer timer;
+		timer.start();
+		while (timer.elapsed() < nMilliseconds)
+		{
+			QCoreApplication::processEvents();
+			QThread::msleep(5);
+		}
+		QCoreApplication::processEvents();
+	}
 
 	class KFakeSessionController final : public KSessionController
 	{
@@ -160,6 +182,19 @@ namespace
 			QStringLiteral("87654321-4321-4321-4321-ba0987654321"), QString()));
 		Check(pAdapter->nSetCount == 1,
 			QStringLiteral("empty remote clipboard text is not applied"));
+
+		pAdapter->nFailuresRemaining = 1;
+		const QString strRetryId = QStringLiteral("11111111-2222-3333-4444-555555555555");
+		controller.deliver(TextMessage(strRetryId, QStringLiteral("retry text")));
+		ProcessEventsFor(150);
+		Check(pAdapter->nSetCount == 3,
+			QStringLiteral("a failed clipboard write is retried once"));
+		Check(pAdapter->vecSetValues.size() >= 3
+			&& pAdapter->vecSetValues.at(1) == QStringLiteral("retry text")
+			&& pAdapter->vecSetValues.at(2) == QStringLiteral("retry text"),
+			QStringLiteral("clipboard retry preserves the original non-empty text"));
+		Check(pAdapter->strText == QStringLiteral("retry text"),
+			QStringLiteral("clipboard retry applies the original text"));
 
 		QCoreApplication::processEvents();
 		pAdapter->copyText(QStringLiteral("remote text"));
