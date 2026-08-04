@@ -5,6 +5,7 @@
 #include "core/clipboard/clipboardadapter.h"
 
 class QClipboard;
+class QTimer;
 
 class KQtClipboardAdapter final : public KClipboardAdapter
 {
@@ -18,10 +19,13 @@ public:
 
 private:
 	void handleClipboardChanged();
+	void processPendingClipboardChange();
 	void logIgnoredChange(const QString &strReason, quint32 nSequence) const;
 
 	QClipboard *m_pClipboard = nullptr;
+	QTimer *m_pReadTimer = nullptr;
 	KClipboardChangeFilter m_changeFilter;
+	int m_nReadRetryCount = 0;
 };
 
 #endif // _WINREMOTECONTROL_ADAPTERS_CLIPBOARD_QTCLIPBOARDADAPTER_H_

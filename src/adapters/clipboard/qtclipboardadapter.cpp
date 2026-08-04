@@ -3,6 +3,7 @@
 #include <QtGui/QClipboard>
 #include <QtGui/QGuiApplication>
 #include <QtCore/QMimeData>
+#include <QtCore/QTimer>
 
 #include <Windows.h>
 
@@ -10,16 +11,28 @@
 
 namespace
 {
+	constexpr int kClipboardReadDelayMs = 50;
+	constexpr int kMaximumClipboardReadRetries = 3;
+
 	quint32 ClipboardSequence()
 	{
 		return static_cast<quint32>(::GetClipboardSequenceNumber());
+	}
+
+	bool IsClipboardBusy()
+	{
+		return ::GetOpenClipboardWindow() != nullptr;
 	}
 }
 
 KQtClipboardAdapter::KQtClipboardAdapter(QObject *pParent)
 	: KClipboardAdapter(pParent)
 	, m_pClipboard(QGuiApplication::clipboard())
+	, m_pReadTimer(new QTimer(this))
 {
+	m_pReadTimer->setSingleShot(true);
+	connect(m_pReadTimer, &QTimer::timeout,
+		this, &KQtClipboardAdapter::processPendingClipboardChange);
 	connect(m_pClipboard, &QClipboard::dataChanged,
 		this, &KQtClipboardAdapter::handleClipboardChanged);
 }
@@ -34,17 +47,17 @@ QString KQtClipboardAdapter::text() const
 
 bool KQtClipboardAdapter::setText(const QString &strText, QString *pErrorMessage)
 {
-	m_changeFilter.prepareSelfWrite(strText);
-	m_pClipboard->setText(strText, QClipboard::Clipboard);
-	m_changeFilter.confirmSelfWrite(ClipboardSequence());
-	if (text() != strText)
+	if (IsClipboardBusy())
 	{
-		m_changeFilter.cancelSelfWrite();
+		logIgnoredChange(QStringLiteral("busy"), ClipboardSequence());
 		if (pErrorMessage != nullptr)
-			*pErrorMessage = QStringLiteral("无法写入系统剪贴板");
+			*pErrorMessage = QStringLiteral("系统剪贴板正被占用");
 		return false;
 	}
 
+	m_changeFilter.prepareSelfWrite(strText);
+	m_pClipboard->setText(strText, QClipboard::Clipboard);
+	m_changeFilter.confirmSelfWrite(ClipboardSequence());
 	if (pErrorMessage != nullptr)
 		pErrorMessage->clear();
 	return true;
@@ -52,6 +65,24 @@ bool KQtClipboardAdapter::setText(const QString &strText, QString *pErrorMessage
 
 void KQtClipboardAdapter::handleClipboardChanged()
 {
+	m_nReadRetryCount = 0;
+	m_pReadTimer->start(kClipboardReadDelayMs);
+}
+
+void KQtClipboardAdapter::processPendingClipboardChange()
+{
+	if (IsClipboardBusy())
+	{
+		if (m_nReadRetryCount < kMaximumClipboardReadRetries)
+		{
+			++m_nReadRetryCount;
+			m_pReadTimer->start(kClipboardReadDelayMs);
+			return;
+		}
+		logIgnoredChange(QStringLiteral("busy"), ClipboardSequence());
+		return;
+	}
+
 	const QMimeData *pMimeData = m_pClipboard->mimeData(QClipboard::Clipboard);
 	if (pMimeData == nullptr)
 		return;

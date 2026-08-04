@@ -140,6 +140,9 @@ namespace
 		Check(controller.vecSentMessages.size() == 1
 			&& controller.vecSentMessages.constLast().type == TextClipboardMessageType,
 			QStringLiteral("new local text is sent while streaming"));
+		pAdapter->copyText(QString());
+		Check(controller.vecSentMessages.size() == 1,
+			QStringLiteral("empty local clipboard text is not sent"));
 		controller.changeState(QStringLiteral("connected"));
 		pAdapter->copyText(QStringLiteral("after raw state"));
 		Check(controller.vecSentMessages.size() == 2,
@@ -153,6 +156,10 @@ namespace
 			QStringLiteral("remote clipboard write is not echoed"));
 		controller.deliver(TextMessage(strRemoteId, QStringLiteral("duplicate")));
 		Check(pAdapter->nSetCount == 1, QStringLiteral("duplicate message ID is ignored"));
+		controller.deliver(TextMessage(
+			QStringLiteral("87654321-4321-4321-4321-ba0987654321"), QString()));
+		Check(pAdapter->nSetCount == 1,
+			QStringLiteral("empty remote clipboard text is not applied"));
 
 		QCoreApplication::processEvents();
 		pAdapter->copyText(QStringLiteral("remote text"));

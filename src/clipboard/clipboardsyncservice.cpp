@@ -86,6 +86,14 @@ void KClipboardSyncService::handleLocalTextChanged(const QString &strText)
 {
 	if (!isActive())
 		return;
+	if (strText.isEmpty())
+	{
+		KSessionTraceLogger::write(QStringLiteral("local"),
+			QStringLiteral("clipboard_drop"),
+			QStringLiteral("empty_text"),
+			0);
+		return;
+	}
 
 	const int nTextBytes = strText.toUtf8().size();
 	if (nTextBytes > KClipboardMessageCodec::kMaximumTextBytes)
@@ -150,6 +158,16 @@ void KClipboardSyncService::handleRemoteMessage(const KClipboardMessage &message
 			QStringLiteral("messageId=%1").arg(message.strMessageId));
 		return;
 	}
+	if (message.strText.isEmpty())
+	{
+		rememberMessageId(message.strMessageId);
+		KSessionTraceLogger::write(QStringLiteral("local"),
+			QStringLiteral("clipboard_drop"),
+			QStringLiteral("empty_text"),
+			0,
+			QStringLiteral("messageId=%1").arg(message.strMessageId));
+		return;
+	}
 
 	applyRemoteMessage(message, 1);
 }
@@ -207,11 +225,13 @@ void KClipboardSyncService::applyRemoteMessage(const KClipboardMessage &message,
 {
 	m_pendingMessage = KClipboardMessage();
 	m_nPendingAttempt = 0;
-	if (m_spClipboardAdapter->text() == message.strText)
-	{
-		rememberMessageId(message.strMessageId);
-		return;
-	}
+	KSessionTraceLogger::write(QStringLiteral("local"),
+		QStringLiteral("clipboard_apply"),
+		QStringLiteral("begin"),
+		message.strText.toUtf8().size(),
+		QStringLiteral("messageId=%1 attempts=%2")
+			.arg(message.strMessageId)
+			.arg(nAttempt));
 
 	QString strError;
 	if (!m_spClipboardAdapter->setText(message.strText, &strError))
