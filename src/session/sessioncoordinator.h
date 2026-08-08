@@ -15,17 +15,16 @@
 #include "session/sessioncontroller.h"
 
 #include <QtCore/QElapsedTimer>
-#include <QtCore/QHash>
 #include <QtCore/QObject>
-#include <QtCore/QQueue>
 #include <QtCore/QString>
 
 #include <memory>
-#include <functional>
 
 class IKDeviceInfoProvider;
 class IKInputInjector;
 class KInputInjector;
+class KAccessApprovalController;
+class KSessionCommandDispatcher;
 class KSignalingTransport;
 class QTimer;
 
@@ -72,25 +71,20 @@ private:
 		ConnectPendingRequest,
 		RolePendingRequest
 	};
-	struct KPendingSessionCommand
-	{
-		KSessionMessage message;
-		qint64 nSentMs = 0;
-		int nAttempts = 0;
-		quint64 nGeneration = 0;
-	};
 	bool initializePeer(KSessionRole role, QString *pErrorMessage);
 	void wirePeer();
 	void initializeProtocolRoutes();
 	void initializeSessionHandlers();
 	QString sendSessionMessage(KSessionMessage message);
 	bool transmitSessionMessage(const KSessionMessage &message);
-	void handleSessionCommandTimer();
-	void handleCommandResultMessage(const KSessionMessage &message);
-	void sendCommandResult(const QString &strRequestId,
-		const KProtocolHandlerResult &handlerResult);
-	void rememberCommandResult(const KSessionMessage &message);
-	void clearSessionCommands();
+	void handleSessionCommandCompleted(KSessionMessageType type,
+		const QString &strRequestId,
+		bool bSuccess,
+		const QString &strErrorCode,
+		quint64 nGeneration);
+	void handleSessionCommandTimeout(KSessionMessageType type,
+		const QString &strRequestId,
+		quint64 nGeneration);
 	void continueStoppingTeardown();
 	KStreamConfig constrainedStreamConfig(const KStreamConfig &config) const;
 	void finishSession(KSessionEndReason reason,
@@ -133,7 +127,7 @@ private:
 	KProtocolHandlerResult handleBusyEnvelope(const KProtocolEnvelope &envelope);
 	void handleInvalidSignalingMessage(KProtocolRouteStatus status, const QString &strError);
 	void handleAccessMessage(const KAccessMessage &message);
-	void handleApprovalTimeout();
+	void handleApprovalTimeout(const QString &strRequestId, quint64 nGeneration);
 	void acceptIncomingAccess();
 	void rejectIncomingAccess(const QString &strReason, bool bNotifyRemote);
 	void clearApprovalState(const QString &strReason);
@@ -154,11 +148,7 @@ private:
 
 	KSessionStateMachine m_sessionStateMachine;
 	KProtocolRouter m_protocolRouter;
-	QHash<int, std::function<KProtocolHandlerResult(const KSessionMessage &)>> m_sessionHandlers;
-	QHash<QString, KPendingSessionCommand> m_pendingSessionCommands;
-	QHash<QString, KSessionMessage> m_recentCommandResults;
-	QQueue<QString> m_recentCommandResultIds;
-	QElapsedTimer m_sessionCommandClock;
+	KSessionCommandDispatcher *m_pSessionCommandDispatcher = nullptr;
 	bool m_bDeviceInfoRequested = false;
 	bool m_bInputChannelOpen = false;
 	bool m_bClipboardChannelOpen = false;
@@ -175,10 +165,7 @@ private:
 	QString m_strLastConnectionHost;
 	QElapsedTimer m_reconnectElapsedTimer;
 	KApplicationSettings m_applicationSettings;
-	QString m_strAccessRequestId;
-	QString m_strAccessDeviceName;
-	QString m_strAccessSourceAddress;
-	quint64 m_nApprovalGeneration = 0;
+	KAccessApprovalController *m_pAccessApprovalController = nullptr;
 	int m_nInvalidSignalingMessages = 0;
 	std::unique_ptr<IKDeviceInfoProvider> m_spDeviceInfoProvider;
 	std::unique_ptr<KRemotePeerTransport> m_spRemotePeerTransport;
@@ -186,10 +173,8 @@ private:
 	KSignalingTransport *m_pSignaling = nullptr;
 	KInputInjector *m_pInputInjector = nullptr;
 	QTimer *m_pReconnectTimer = nullptr;
-	QTimer *m_pApprovalTimer = nullptr;
 	QTimer *m_pStopWatchdogTimer = nullptr;
 	QTimer *m_pCapabilityTimer = nullptr;
-	QTimer *m_pSessionCommandTimer = nullptr;
 	bool m_bCaptureShutdownPending = false;
 	bool m_bPeerShutdownPending = false;
 	bool m_bStopKeepListening = false;

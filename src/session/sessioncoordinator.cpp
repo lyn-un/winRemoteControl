@@ -1,5 +1,7 @@
 #include "session/sessioncoordinator.h"
 
+#include "session/accessapprovalcontroller.h"
+#include "session/sessioncommanddispatcher.h"
 #include "common/latencytracelogger.h"
 #include "common/sessiontracelogger.h"
 #include "core/input/inputinjectorinterface.h"
@@ -23,10 +25,6 @@ namespace
 	constexpr int kReconnectTimeoutMs = 10000;
 	constexpr int kInitialApprovalResponseTimeoutMs = 5000;
 	constexpr int kApprovalResponseGraceMs = 5000;
-	constexpr int kSessionCommandTimeoutMs = 1000;
-	constexpr int kSessionCommandTimerIntervalMs = 100;
-	constexpr int kMaximumSessionCommandAttempts = 2;
-	constexpr int kMaximumRecentCommandResults = 128;
 
 	static QString roleToString(KSessionRole role)
 	{
@@ -67,31 +65,32 @@ KSessionCoordinator::KSessionCoordinator(
 	, m_pSignaling(m_spSignalingTransport.get())
 	, m_pInputInjector(new KInputInjector(std::move(spInputInjector), this))
 	, m_pReconnectTimer(new QTimer(this))
-	, m_pApprovalTimer(new QTimer(this))
+	, m_pAccessApprovalController(new KAccessApprovalController(this))
+	, m_pSessionCommandDispatcher(new KSessionCommandDispatcher(this))
 	, m_pStopWatchdogTimer(new QTimer(this))
 	, m_pCapabilityTimer(new QTimer(this))
-	, m_pSessionCommandTimer(new QTimer(this))
 {
 	Q_ASSERT(m_spRemotePeerTransport != nullptr);
 	Q_ASSERT(m_pSignaling != nullptr);
 	initializeProtocolRoutes();
 	initializeSessionHandlers();
 	m_pReconnectTimer->setSingleShot(true);
-	m_pApprovalTimer->setSingleShot(true);
 	m_pStopWatchdogTimer->setSingleShot(true);
 	m_pCapabilityTimer->setSingleShot(true);
-	m_pSessionCommandTimer->setInterval(kSessionCommandTimerIntervalMs);
-	m_sessionCommandClock.start();
 	connect(m_pReconnectTimer, &QTimer::timeout,
 		this, &KSessionCoordinator::handleReconnectTimeout);
-	connect(m_pApprovalTimer, &QTimer::timeout,
+	connect(m_pAccessApprovalController, &KAccessApprovalController::timedOut,
 		this, &KSessionCoordinator::handleApprovalTimeout);
 	connect(m_pStopWatchdogTimer, &QTimer::timeout,
 		this, &KSessionCoordinator::handleStopWatchdog);
 	connect(m_pCapabilityTimer, &QTimer::timeout,
 		this, &KSessionCoordinator::handleCapabilityTimeout);
-	connect(m_pSessionCommandTimer, &QTimer::timeout,
-		this, &KSessionCoordinator::handleSessionCommandTimer);
+	m_pSessionCommandDispatcher->setTransmitFunction(
+		[this](const KSessionMessage &message) { return transmitSessionMessage(message); });
+	connect(m_pSessionCommandDispatcher, &KSessionCommandDispatcher::commandCompleted,
+		this, &KSessionCoordinator::handleSessionCommandCompleted);
+	connect(m_pSessionCommandDispatcher, &KSessionCommandDispatcher::commandTimedOut,
+		this, &KSessionCoordinator::handleSessionCommandTimeout);
 	connect(m_pSignaling, &KSignalingTransport::stateChanged,
 		this, &KSessionCoordinator::signalingChanged);
 	connect(m_pSignaling, &KSignalingTransport::signalingError,
@@ -216,21 +215,21 @@ void KSessionCoordinator::initializeProtocolRoutes()
 
 void KSessionCoordinator::initializeSessionHandlers()
 {
-	m_sessionHandlers.insert(DeviceInfoRequestSessionMessageType,
+	m_pSessionCommandDispatcher->registerHandler(DeviceInfoRequestSessionMessageType,
 		[this](const KSessionMessage &message) { return handleDeviceInfoRequestMessage(message); });
-	m_sessionHandlers.insert(DeviceInfoSessionMessageType,
+	m_pSessionCommandDispatcher->registerHandler(DeviceInfoSessionMessageType,
 		[this](const KSessionMessage &message) { return handleDeviceInfoMessage(message); });
-	m_sessionHandlers.insert(StartStreamingSessionMessageType,
+	m_pSessionCommandDispatcher->registerHandler(StartStreamingSessionMessageType,
 		[this](const KSessionMessage &message) { return handleStartStreamingMessage(message); });
-	m_sessionHandlers.insert(StopStreamingSessionMessageType,
+	m_pSessionCommandDispatcher->registerHandler(StopStreamingSessionMessageType,
 		[this](const KSessionMessage &message) { return handleStopStreamingMessage(message); });
-	m_sessionHandlers.insert(EndSessionMessageType,
+	m_pSessionCommandDispatcher->registerHandler(EndSessionMessageType,
 		[this](const KSessionMessage &message) { return handleEndSessionMessage(message); });
-	m_sessionHandlers.insert(StreamConfigSessionMessageType,
+	m_pSessionCommandDispatcher->registerHandler(StreamConfigSessionMessageType,
 		[this](const KSessionMessage &message) { return handleStreamConfigMessage(message); });
-	m_sessionHandlers.insert(CapabilitiesSessionMessageType,
+	m_pSessionCommandDispatcher->registerHandler(CapabilitiesSessionMessageType,
 		[this](const KSessionMessage &message) { return handleCapabilitiesMessage(message); });
-	m_sessionHandlers.insert(CapabilityRejectedSessionMessageType,
+	m_pSessionCommandDispatcher->registerHandler(CapabilityRejectedSessionMessageType,
 		[this](const KSessionMessage &message) { return handleCapabilityRejectedMessage(message); });
 }
 
@@ -402,12 +401,12 @@ void KSessionCoordinator::applyApplicationSettings(const KApplicationSettings &s
 		&& m_sessionStateMachine.state() != IdleSessionState)
 	{
 		const bool bPendingApproval = m_sessionStateMachine.isAwaitingApproval()
-			&& !m_strAccessRequestId.isEmpty();
+			&& m_pAccessApprovalController->hasRequestId();
 		if (bPendingApproval)
 		{
 			KAccessMessage rejected;
 			rejected.type = RejectedAccessMessageType;
-			rejected.strRequestId = m_strAccessRequestId;
+			rejected.strRequestId = m_pAccessApprovalController->request().strRequestId;
 			rejected.strReason = QStringLiteral("remote_access_disabled");
 			sendAccessMessage(rejected);
 		}
@@ -422,8 +421,8 @@ void KSessionCoordinator::respondIncomingAccessRequest(
 {
 	if (m_sessionStateMachine.role() != ControlledSessionRole
 		|| !m_sessionStateMachine.isAwaitingApproval()
-		|| strRequestId != m_strAccessRequestId
-		|| m_nApprovalGeneration != m_sessionStateMachine.generation())
+		|| !m_pAccessApprovalController->matches(strRequestId,
+			m_sessionStateMachine.generation()))
 	{
 		return;
 	}
@@ -536,22 +535,8 @@ void KSessionCoordinator::sendClipboardMessage(const KClipboardMessage &message)
 
 QString KSessionCoordinator::sendSessionMessage(KSessionMessage message)
 {
-	if (KSessionMessageCodec::isCommand(message.type) && message.strRequestId.isEmpty())
-		message.strRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-	if (!transmitSessionMessage(message))
-		return QString();
-	if (!KSessionMessageCodec::isCommand(message.type))
-		return message.strRequestId;
-
-	KPendingSessionCommand pending;
-	pending.message = message;
-	pending.nSentMs = m_sessionCommandClock.elapsed();
-	pending.nAttempts = 1;
-	pending.nGeneration = m_sessionStateMachine.generation();
-	m_pendingSessionCommands.insert(message.strRequestId, pending);
-	if (!m_pSessionCommandTimer->isActive())
-		m_pSessionCommandTimer->start();
-	return message.strRequestId;
+	return m_pSessionCommandDispatcher->send(std::move(message),
+		m_sessionStateMachine.generation());
 }
 
 bool KSessionCoordinator::transmitSessionMessage(const KSessionMessage &message)
@@ -581,136 +566,61 @@ bool KSessionCoordinator::transmitSessionMessage(const KSessionMessage &message)
 	return false;
 }
 
-void KSessionCoordinator::handleSessionCommandTimer()
+void KSessionCoordinator::handleSessionCommandCompleted(KSessionMessageType type,
+	const QString &strRequestId,
+	bool bSuccess,
+	const QString &strErrorCode,
+	quint64 nGeneration)
 {
-	const qint64 nNowMs = m_sessionCommandClock.elapsed();
-	const QStringList requestIds = m_pendingSessionCommands.keys();
-	for (const QString &strRequestId : requestIds)
-	{
-		auto iterator = m_pendingSessionCommands.find(strRequestId);
-		if (iterator == m_pendingSessionCommands.end())
-			continue;
-		KPendingSessionCommand &pending = iterator.value();
-		if (pending.nGeneration != m_sessionStateMachine.generation())
-		{
-			m_pendingSessionCommands.erase(iterator);
-			continue;
-		}
-		if (nNowMs - pending.nSentMs < kSessionCommandTimeoutMs)
-			continue;
-		if (pending.nAttempts < kMaximumSessionCommandAttempts
-			&& transmitSessionMessage(pending.message))
-		{
-			++pending.nAttempts;
-			pending.nSentMs = nNowMs;
-			KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
-				QStringLiteral("session_command_retry"),
-				KSessionMessageCodec::typeName(pending.message.type), -1,
-				QStringLiteral("requestId=%1 attempt=%2 generation=%3")
-					.arg(strRequestId)
-					.arg(pending.nAttempts)
-					.arg(pending.nGeneration));
-			continue;
-		}
-
-		const KSessionMessageType type = pending.message.type;
-		m_pendingSessionCommands.erase(iterator);
-		KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
-			QStringLiteral("session_command_timeout"),
-			KSessionMessageCodec::typeName(type), -1,
-			QStringLiteral("requestId=%1 generation=%2")
-				.arg(strRequestId)
-				.arg(m_sessionStateMachine.generation()));
-		if (strRequestId == m_strPendingEndCommandId)
-		{
-			m_strPendingEndCommandId.clear();
-			continueStoppingTeardown();
-			break;
-		}
-		reportSessionError(ProtocolSessionErrorDomain,
-			CommandTimeoutSessionErrorCode, ConnectedSessionErrorStage,
-			false, QStringLiteral("Session command timed out: %1")
-				.arg(KSessionMessageCodec::typeName(type)));
-		finishSession(DisconnectTimeoutSessionEndReason,
-			QStringLiteral("session_command_timeout"),
-			m_sessionStateMachine.shouldKeepListening(), false, false);
-		break;
-	}
-	if (m_pendingSessionCommands.isEmpty())
-		m_pSessionCommandTimer->stop();
-}
-
-void KSessionCoordinator::handleCommandResultMessage(const KSessionMessage &message)
-{
-	auto iterator = m_pendingSessionCommands.find(message.strRequestId);
-	if (iterator == m_pendingSessionCommands.end()
-		|| iterator->nGeneration != m_sessionStateMachine.generation())
-	{
+	if (nGeneration != m_sessionStateMachine.generation())
 		return;
-	}
-	const KSessionMessageType commandType = iterator->message.type;
-	m_pendingSessionCommands.erase(iterator);
-	if (m_pendingSessionCommands.isEmpty())
-		m_pSessionCommandTimer->stop();
 	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 		QStringLiteral("session_command_result"),
-		KSessionMessageCodec::typeName(commandType), -1,
+		KSessionMessageCodec::typeName(type), -1,
 		QStringLiteral("requestId=%1 success=%2 errorCode=%3")
-			.arg(message.strRequestId)
-			.arg(message.bSuccess ? 1 : 0)
-			.arg(message.strErrorCode));
-	if (message.strRequestId == m_strPendingEndCommandId)
+			.arg(strRequestId)
+			.arg(bSuccess ? 1 : 0)
+			.arg(strErrorCode));
+	if (type == EndSessionMessageType && m_sessionStateMachine.isStopping())
 	{
 		m_strPendingEndCommandId.clear();
 		continueStoppingTeardown();
 		return;
 	}
-	if (!message.bSuccess)
+	if (!bSuccess)
 	{
 		reportSessionError(ProtocolSessionErrorDomain,
 			InvalidStateSessionErrorCode, ConnectedSessionErrorStage,
 			false, QStringLiteral("Remote rejected session command: %1")
-				.arg(message.strErrorCode));
+				.arg(strErrorCode));
 	}
 }
 
-void KSessionCoordinator::sendCommandResult(const QString &strRequestId,
-	const KProtocolHandlerResult &handlerResult)
+void KSessionCoordinator::handleSessionCommandTimeout(KSessionMessageType type,
+	const QString &strRequestId,
+	quint64 nGeneration)
 {
-	KSessionMessage result;
-	result.type = CommandResultSessionMessageType;
-	result.strRequestId = strRequestId;
-	result.bSuccess = handlerResult.status == ProtocolHandlerSucceeded;
-	if (!result.bSuccess)
-	{
-		if (handlerResult.status == ProtocolHandlerInvalidState)
-			result.strErrorCode = QStringLiteral("invalid_state");
-		else if (handlerResult.status == ProtocolHandlerPermissionDenied)
-			result.strErrorCode = QStringLiteral("permission_denied");
-		else
-			result.strErrorCode = QStringLiteral("execution_failed");
-	}
-	rememberCommandResult(result);
-	transmitSessionMessage(result);
-}
-
-void KSessionCoordinator::rememberCommandResult(const KSessionMessage &message)
-{
-	if (m_recentCommandResults.contains(message.strRequestId))
+	if (nGeneration != m_sessionStateMachine.generation())
 		return;
-	m_recentCommandResults.insert(message.strRequestId, message);
-	m_recentCommandResultIds.enqueue(message.strRequestId);
-	while (m_recentCommandResultIds.size() > kMaximumRecentCommandResults)
-		m_recentCommandResults.remove(m_recentCommandResultIds.dequeue());
-}
-
-void KSessionCoordinator::clearSessionCommands()
-{
-	m_pSessionCommandTimer->stop();
-	m_pendingSessionCommands.clear();
-	m_recentCommandResults.clear();
-	m_recentCommandResultIds.clear();
-	m_strPendingEndCommandId.clear();
+	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
+		QStringLiteral("session_command_timeout"),
+		KSessionMessageCodec::typeName(type), -1,
+		QStringLiteral("requestId=%1 generation=%2")
+			.arg(strRequestId)
+			.arg(nGeneration));
+	if (type == EndSessionMessageType && m_sessionStateMachine.isStopping())
+	{
+		m_strPendingEndCommandId.clear();
+		continueStoppingTeardown();
+		return;
+	}
+	reportSessionError(ProtocolSessionErrorDomain,
+		CommandTimeoutSessionErrorCode, ConnectedSessionErrorStage,
+		false, QStringLiteral("Session command timed out: %1")
+			.arg(KSessionMessageCodec::typeName(type)));
+	finishSession(DisconnectTimeoutSessionEndReason,
+		QStringLiteral("session_command_timeout"),
+		m_sessionStateMachine.shouldKeepListening(), false, false);
 }
 
 void KSessionCoordinator::sendStreamConfig(const KStreamConfig &config)
@@ -762,16 +672,17 @@ void KSessionCoordinator::finishSession(KSessionEndReason reason,
 	const bool bRecovering = m_sessionStateMachine.isReconnecting();
 	if (bNotifyRemote
 		&& m_sessionStateMachine.isAwaitingApproval()
-		&& !m_strAccessRequestId.isEmpty())
+		&& m_pAccessApprovalController->hasRequestId())
 	{
+		const QString strRequestId = m_pAccessApprovalController->request().strRequestId;
 		KAccessMessage message;
 		message.type = RejectedAccessMessageType;
-		message.strRequestId = m_strAccessRequestId;
+		message.strRequestId = strRequestId;
 		message.strReason = QStringLiteral("cancelled");
 		sendAccessMessage(message);
 		KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 			QStringLiteral("access"), QStringLiteral("cancelled"), -1,
-			QStringLiteral("requestId=%1").arg(m_strAccessRequestId));
+			QStringLiteral("requestId=%1").arg(strRequestId));
 	}
 	if (!m_sessionStateMachine.beginStopping())
 		return;
@@ -832,7 +743,6 @@ void KSessionCoordinator::continueStoppingTeardown()
 				.arg(m_reconnectElapsedTimer.isValid() ? m_reconnectElapsedTimer.elapsed() : -1));
 	}
 	m_pReconnectTimer->stop();
-	m_pApprovalTimer->stop();
 	m_pCapabilityTimer->stop();
 	m_nReconnectGeneration = 0;
 	m_reconnectElapsedTimer.invalidate();
@@ -846,7 +756,7 @@ void KSessionCoordinator::continueStoppingTeardown()
 	m_bCapabilitiesReceived = false;
 	m_negotiatedCapabilities = KNegotiatedCapabilities();
 	emit sessionCapabilitiesChanged(m_negotiatedCapabilities);
-	clearSessionCommands();
+	m_pSessionCommandDispatcher->clear();
 	m_bCaptureShutdownPending = m_bCaptureActive;
 	m_bPeerShutdownPending = true;
 	m_pStopWatchdogTimer->start(3000);
@@ -1361,7 +1271,8 @@ void KSessionCoordinator::handleSessionMessage(const KSessionMessage &message)
 {
 	if (message.type == CommandResultSessionMessageType)
 	{
-		handleCommandResultMessage(message);
+		m_pSessionCommandDispatcher->handleIncoming(message,
+			m_sessionStateMachine.generation());
 		return;
 	}
 	if (!m_bCapabilitiesReceived
@@ -1386,32 +1297,16 @@ void KSessionCoordinator::handleSessionMessage(const KSessionMessage &message)
 		QStringLiteral("handle"),
 		strType,
 		strMessage.toUtf8().size());
-	if (KSessionMessageCodec::isCommand(message.type))
+	const KSessionIncomingDispatchResult dispatchResult =
+		m_pSessionCommandDispatcher->handleIncoming(message,
+			m_sessionStateMachine.generation());
+	if (dispatchResult.bEndSessionAccepted)
 	{
-		const auto cached = m_recentCommandResults.constFind(message.strRequestId);
-		if (cached != m_recentCommandResults.constEnd())
-		{
-			transmitSessionMessage(cached.value());
-			return;
-		}
-	}
-
-	KProtocolHandlerResult result = KProtocolHandlerResult::failure(
-		ProtocolHandlerExecutionFailed, QStringLiteral("No session message handler"));
-	const auto iterator = m_sessionHandlers.constFind(static_cast<int>(message.type));
-	if (iterator != m_sessionHandlers.constEnd())
-		result = iterator.value()(message);
-	if (KSessionMessageCodec::isCommand(message.type))
-	{
-		sendCommandResult(message.strRequestId, result);
-		if (message.type == EndSessionMessageType && result.status == ProtocolHandlerSucceeded)
-		{
-			finishSession(RemoteStopSessionEndReason,
-				message.strReason,
-				m_sessionStateMachine.shouldKeepListening(),
-				false,
-				m_sessionStateMachine.role() == ControllerSessionRole);
-		}
+		finishSession(RemoteStopSessionEndReason,
+			message.strReason,
+			m_sessionStateMachine.shouldKeepListening(),
+			false,
+			m_sessionStateMachine.role() == ControllerSessionRole);
 	}
 }
 
@@ -1518,24 +1413,23 @@ void KSessionCoordinator::handleOutgoingConnectionEstablished()
 
 	if (!m_sessionStateMachine.beginAwaitingApproval())
 		return;
-	m_strAccessRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-	m_nApprovalGeneration = m_sessionStateMachine.generation();
+	const KAccessApprovalRequest request = m_pAccessApprovalController->beginOutgoing(
+		m_sessionStateMachine.generation(), kInitialApprovalResponseTimeoutMs);
 	KAccessMessage message;
 	message.type = RequestAccessMessageType;
-	message.strRequestId = m_strAccessRequestId;
+	message.strRequestId = request.strRequestId;
 	message.strDeviceName = m_spDeviceInfoProvider != nullptr
 		? m_spDeviceInfoProvider->deviceName()
 		: QStringLiteral("Windows device");
 	sendAccessMessage(message);
-	m_pApprovalTimer->start(kInitialApprovalResponseTimeoutMs);
 	publishSessionState();
 	KSessionTraceLogger::write(QStringLiteral("controller"),
 		QStringLiteral("access"),
 		QStringLiteral("request_sent"),
 		-1,
 		QStringLiteral("requestId=%1 generation=%2")
-			.arg(m_strAccessRequestId)
-			.arg(m_nApprovalGeneration));
+			.arg(request.strRequestId)
+			.arg(request.nGeneration));
 }
 
 void KSessionCoordinator::handleOutgoingConnectionFailed(const QString &strMessage)
@@ -1561,9 +1455,8 @@ void KSessionCoordinator::handleIncomingConnectionEstablished(
 	if (!m_sessionStateMachine.beginAwaitingApproval())
 		return;
 	m_bSignalingConnected = true;
-	m_strAccessSourceAddress = strSourceAddress;
-	m_nApprovalGeneration = m_sessionStateMachine.generation();
-	m_pApprovalTimer->start(kInitialApprovalResponseTimeoutMs);
+	m_pAccessApprovalController->beginIncoming(strSourceAddress,
+		m_sessionStateMachine.generation(), kInitialApprovalResponseTimeoutMs);
 	updateListeningAvailability(false);
 	publishSessionState();
 	KSessionTraceLogger::write(QStringLiteral("controlled"),
@@ -1573,7 +1466,7 @@ void KSessionCoordinator::handleIncomingConnectionEstablished(
 		QStringLiteral("source=%1 sourcePort=%2 generation=%3")
 			.arg(strSourceAddress)
 			.arg(nSourcePort)
-			.arg(m_nApprovalGeneration));
+			.arg(m_pAccessApprovalController->request().nGeneration));
 }
 
 void KSessionCoordinator::handleSignalingMessage(const QString &strMessage)
@@ -1680,28 +1573,37 @@ void KSessionCoordinator::handleAccessMessage(const KAccessMessage &message)
 	if (m_sessionStateMachine.role() == ControlledSessionRole)
 	{
 		if (message.type == RejectedAccessMessageType
-			&& message.strRequestId == m_strAccessRequestId)
+			&& m_pAccessApprovalController->matches(message.strRequestId,
+				m_sessionStateMachine.generation()))
 		{
 			rejectIncomingAccess(QStringLiteral("cancelled"), false);
 			return;
 		}
-		if (message.type != RequestAccessMessageType || !m_strAccessRequestId.isEmpty())
+		if (message.type != RequestAccessMessageType
+			|| m_pAccessApprovalController->hasRequestId())
 			return;
 
-		m_strAccessRequestId = message.strRequestId;
-		m_strAccessDeviceName = message.strDeviceName;
-		emit incomingAccessObserved(m_strAccessDeviceName, m_strAccessSourceAddress);
-		if (!m_applicationSettings.bRemoteAccessEnabled)
+		if (!m_pAccessApprovalController->receiveIncomingRequest(message.strRequestId,
+			message.strDeviceName,
+			m_applicationSettings.nApprovalTimeoutSeconds * 1000))
+		{
+			return;
+		}
+		const KAccessApprovalRequest &request = m_pAccessApprovalController->request();
+		emit incomingAccessObserved(request.strDeviceName, request.strSourceAddress);
+		const KIncomingAccessDecision decision =
+			KAccessApprovalController::incomingDecision(m_applicationSettings);
+		if (decision == DisabledIncomingAccessDecision)
 		{
 			rejectIncomingAccess(QStringLiteral("remote_access_disabled"), true);
 			return;
 		}
-		if (m_applicationSettings.approvalMode == DenyRemoteApprovalMode)
+		if (decision == DenyIncomingAccessDecision)
 		{
 			rejectIncomingAccess(QStringLiteral("user_rejected"), true);
 			return;
 		}
-		if (m_applicationSettings.approvalMode == AutoAcceptRemoteApprovalMode)
+		if (decision == AcceptIncomingAccessDecision)
 		{
 			acceptIncomingAccess();
 			return;
@@ -1709,32 +1611,33 @@ void KSessionCoordinator::handleAccessMessage(const KAccessMessage &message)
 
 		KAccessMessage pending;
 		pending.type = PendingAccessMessageType;
-		pending.strRequestId = m_strAccessRequestId;
+		pending.strRequestId = request.strRequestId;
 		pending.nTimeoutSeconds = m_applicationSettings.nApprovalTimeoutSeconds;
 		sendAccessMessage(pending);
-		m_pApprovalTimer->start(m_applicationSettings.nApprovalTimeoutSeconds * 1000);
 		const qint64 nExpiresAtMs = QDateTime::currentMSecsSinceEpoch()
 			+ m_applicationSettings.nApprovalTimeoutSeconds * 1000;
-		emit incomingAccessRequest(m_strAccessRequestId,
-			m_strAccessDeviceName,
-			m_strAccessSourceAddress,
+		emit incomingAccessRequest(request.strRequestId,
+			request.strDeviceName,
+			request.strSourceAddress,
 			nExpiresAtMs);
 		KSessionTraceLogger::write(QStringLiteral("controlled"),
 			QStringLiteral("access"),
 			QStringLiteral("pending"),
 			-1,
 			QStringLiteral("requestId=%1 source=%2 timeoutSeconds=%3")
-				.arg(m_strAccessRequestId)
-				.arg(m_strAccessSourceAddress)
+				.arg(request.strRequestId)
+				.arg(request.strSourceAddress)
 				.arg(m_applicationSettings.nApprovalTimeoutSeconds));
 		return;
 	}
 
-	if (message.strRequestId != m_strAccessRequestId)
+	if (!m_pAccessApprovalController->matches(message.strRequestId,
+		m_sessionStateMachine.generation()))
 		return;
 	if (message.type == PendingAccessMessageType)
 	{
-		m_pApprovalTimer->start(message.nTimeoutSeconds * 1000 + kApprovalResponseGraceMs);
+		m_pAccessApprovalController->extendOutgoingTimeout(message.strRequestId,
+			message.nTimeoutSeconds * 1000 + kApprovalResponseGraceMs);
 		KSessionTraceLogger::write(QStringLiteral("controller"),
 			QStringLiteral("access"), QStringLiteral("pending"), -1,
 			QStringLiteral("requestId=%1 timeoutSeconds=%2")
@@ -1744,7 +1647,7 @@ void KSessionCoordinator::handleAccessMessage(const KAccessMessage &message)
 	}
 	if (message.type == AcceptedAccessMessageType)
 	{
-		m_pApprovalTimer->stop();
+		m_pAccessApprovalController->stopTimeout();
 		if (!m_sessionStateMachine.approveConnection())
 			return;
 		clearApprovalState(QStringLiteral("accepted"));
@@ -1784,22 +1687,24 @@ void KSessionCoordinator::handleAccessMessage(const KAccessMessage &message)
 	}
 }
 
-void KSessionCoordinator::handleApprovalTimeout()
+void KSessionCoordinator::handleApprovalTimeout(const QString &strRequestId,
+	quint64 nGeneration)
 {
 	if (!m_sessionStateMachine.isAwaitingApproval()
-		|| m_nApprovalGeneration != m_sessionStateMachine.generation())
+		|| nGeneration != m_sessionStateMachine.generation())
 	{
 		return;
 	}
 	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 		QStringLiteral("access"), QStringLiteral("timeout"), -1,
 		QStringLiteral("requestId=%1 generation=%2")
-			.arg(m_strAccessRequestId)
-			.arg(m_nApprovalGeneration));
+			.arg(strRequestId)
+			.arg(nGeneration));
 
 	if (m_sessionStateMachine.role() == ControlledSessionRole)
 	{
-		rejectIncomingAccess(QStringLiteral("timeout"), !m_strAccessRequestId.isEmpty());
+		rejectIncomingAccess(QStringLiteral("timeout"),
+			m_pAccessApprovalController->hasRequestId());
 		return;
 	}
 
@@ -1813,21 +1718,22 @@ void KSessionCoordinator::handleApprovalTimeout()
 void KSessionCoordinator::acceptIncomingAccess()
 {
 	if (m_sessionStateMachine.role() != ControlledSessionRole
-		|| m_strAccessRequestId.isEmpty()
+		|| !m_pAccessApprovalController->hasRequestId()
 		|| !m_sessionStateMachine.approveConnection())
 	{
 		return;
 	}
 
-	m_pApprovalTimer->stop();
+	const KAccessApprovalRequest request = m_pAccessApprovalController->request();
+	m_pAccessApprovalController->stopTimeout();
 	KAccessMessage accepted;
 	accepted.type = AcceptedAccessMessageType;
-	accepted.strRequestId = m_strAccessRequestId;
+	accepted.strRequestId = request.strRequestId;
 	sendAccessMessage(accepted);
 	KSessionTraceLogger::write(QStringLiteral("controlled"),
 		QStringLiteral("access"), QStringLiteral("accepted"), -1,
 		QStringLiteral("requestId=%1 source=%2")
-			.arg(m_strAccessRequestId, m_strAccessSourceAddress));
+			.arg(request.strRequestId, request.strSourceAddress));
 	clearApprovalState(QStringLiteral("accepted"));
 	publishSessionState();
 }
@@ -1840,19 +1746,20 @@ void KSessionCoordinator::rejectIncomingAccess(const QString &strReason, bool bN
 		return;
 	}
 
-	if (bNotifyRemote && !m_strAccessRequestId.isEmpty())
+	const KAccessApprovalRequest request = m_pAccessApprovalController->request();
+	if (bNotifyRemote && !request.strRequestId.isEmpty())
 	{
 		KAccessMessage rejected;
 		rejected.type = RejectedAccessMessageType;
-		rejected.strRequestId = m_strAccessRequestId;
+		rejected.strRequestId = request.strRequestId;
 		rejected.strReason = strReason;
 		sendAccessMessage(rejected);
 	}
 	KSessionTraceLogger::write(QStringLiteral("controlled"),
 		QStringLiteral("access"), QStringLiteral("rejected"), -1,
 		QStringLiteral("requestId=%1 source=%2 reason=%3")
-			.arg(m_strAccessRequestId, m_strAccessSourceAddress, strReason));
-	m_pApprovalTimer->stop();
+			.arg(request.strRequestId, request.strSourceAddress, strReason));
+	m_pAccessApprovalController->stopTimeout();
 	clearApprovalState(strReason);
 	m_sessionStateMachine.rejectConnection();
 	m_pSignaling->disconnectPeer();
@@ -1862,15 +1769,12 @@ void KSessionCoordinator::rejectIncomingAccess(const QString &strReason, bool bN
 
 void KSessionCoordinator::clearApprovalState(const QString &strReason)
 {
-	if (!m_strAccessRequestId.isEmpty()
-		&& m_sessionStateMachine.role() == ControlledSessionRole)
+	const KAccessApprovalRequest request = m_pAccessApprovalController->clear();
+	if (!request.strRequestId.isEmpty()
+		&& request.side == IncomingAccessApprovalSide)
 	{
-		emit incomingAccessRequestCleared(m_strAccessRequestId, strReason);
+		emit incomingAccessRequestCleared(request.strRequestId, strReason);
 	}
-	m_strAccessRequestId.clear();
-	m_strAccessDeviceName.clear();
-	m_strAccessSourceAddress.clear();
-	m_nApprovalGeneration = 0;
 }
 
 void KSessionCoordinator::sendAccessMessage(const KAccessMessage &message)

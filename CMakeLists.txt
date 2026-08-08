@@ -157,8 +157,12 @@ target_link_libraries(wrc_diagnostics PUBLIC
 add_library(wrc_session_application STATIC
 	src/input/inputinjector.cpp
 	src/input/inputinjector.h
+	src/session/accessapprovalcontroller.cpp
+	src/session/accessapprovalcontroller.h
 	src/session/sessioncoordinator.cpp
 	src/session/sessioncoordinator.h
+	src/session/sessioncommanddispatcher.cpp
+	src/session/sessioncommanddispatcher.h
 	src/session/sessioncontroller.h
 	src/session/sessionerrorpresenter.cpp
 	src/session/sessionerrorpresenter.h
@@ -571,6 +575,25 @@ if(BUILD_TESTING)
 		Qt6::Network
 	)
 	add_test(NAME wrc_session_service_tests COMMAND wrc_session_service_tests)
+
+	add_executable(wrc_access_approval_tests
+		tests/unit/accessapprovalcontrollertest.cpp
+	)
+	target_link_libraries(wrc_access_approval_tests PRIVATE
+		wrc_session_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_access_approval_tests COMMAND wrc_access_approval_tests)
+
+	add_executable(wrc_session_command_dispatcher_tests
+		tests/unit/sessioncommanddispatchertest.cpp
+	)
+	target_link_libraries(wrc_session_command_dispatcher_tests PRIVATE
+		wrc_session_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_session_command_dispatcher_tests
+		COMMAND wrc_session_command_dispatcher_tests)
 
 	add_executable(wrc_lan_discovery_tests
 		tests/unit/landiscoveryservicetest.cpp
