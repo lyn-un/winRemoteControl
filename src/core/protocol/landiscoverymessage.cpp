@@ -8,7 +8,7 @@
 namespace
 {
 	constexpr char kProtocol[] = "wrc-lan-discovery";
-	constexpr int kProtocolVersion = 1;
+	constexpr int kLanDiscoveryProtocolVersion = 1;
 	constexpr char kProtocolField[] = "protocol";
 	constexpr char kVersionField[] = "version";
 	constexpr char kTypeField[] = "type";
@@ -54,7 +54,7 @@ QByteArray KLanDiscoveryMessageCodec::encode(const KLanDiscoveryMessage &message
 {
 	QJsonObject object;
 	object.insert(QString::fromLatin1(kProtocolField), QString::fromLatin1(kProtocol));
-	object.insert(QString::fromLatin1(kVersionField), kProtocolVersion);
+	object.insert(QString::fromLatin1(kVersionField), kLanDiscoveryProtocolVersion);
 	object.insert(QString::fromLatin1(kTypeField), typeName(message.type));
 	object.insert(QString::fromLatin1(kRequestIdField), message.strRequestId);
 	if (message.type == AnnounceLanDiscoveryMessageType)
@@ -89,7 +89,7 @@ bool KLanDiscoveryMessageCodec::decode(const QByteArray &data,
 	const QJsonValue versionValue = object.value(QString::fromLatin1(kVersionField));
 	if (!versionValue.isDouble()
 		|| versionValue.toDouble() != static_cast<double>(versionValue.toInt())
-		|| versionValue.toInt() != kProtocolVersion)
+		|| versionValue.toInt() != kLanDiscoveryProtocolVersion)
 	{
 		return failDecode(QStringLiteral("Unsupported discovery protocol version"), pErrorMessage);
 	}

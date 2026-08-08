@@ -134,12 +134,13 @@ namespace
 			++nSentClipboardCount;
 		}
 
-		bool sendSessionMessage(const KSessionMessage &message) override
+		KSessionMessageSendStatus sendSessionMessage(
+			const KSessionMessage &message) override
 		{
 			lastSentSessionMessage = message;
 			sentSessionMessages.append(message);
 			++nSentSessionCount;
-			return bSessionSendSucceeds;
+			return sessionSendStatus;
 		}
 
 		void setStreamConfig(const KStreamConfig &config) override
@@ -240,7 +241,7 @@ namespace
 		int nSentClipboardCount = 0;
 		int nSentSessionCount = 0;
 		int nStreamConfigCount = 0;
-		bool bSessionSendSucceeds = true;
+		KSessionMessageSendStatus sessionSendStatus = SessionMessageAccepted;
 		bool bInputRealtimeEnabled = false;
 		bool bInitializeSucceeds = true;
 	};
@@ -497,6 +498,16 @@ namespace
 		QCoreApplication::processEvents();
 		check(pControllerPeer->nCreateOfferCount == 1,
 			QStringLiteral("duplicate approval does not create another offer"));
+		pControllerPeer->openSessionChannel();
+		pControllerPeer->deliverDefaultCapabilities();
+		pControllerPeer->sessionSendStatus =
+			KRemotePeerTransport::SessionMessageQueueOverflow;
+		controller.sendStreamConfig(KStreamConfig());
+		check(controllerError.code == CommandQueueOverflowSessionErrorCode
+			&& !controllerError.bRetryable,
+			QStringLiteral("session command queue overflow is a structured error"));
+		pControllerPeer->sessionSendStatus =
+			KRemotePeerTransport::SessionMessageAccepted;
 		pControllerPeer->overflowInputQueue();
 		QCoreApplication::processEvents();
 		check(controllerError.code == InputBackpressureOverflowSessionErrorCode

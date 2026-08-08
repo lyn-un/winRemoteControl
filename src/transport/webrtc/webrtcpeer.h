@@ -54,7 +54,7 @@ public:
 	void pushVideoFrame(const KVideoFrame &frame) override;
 	void sendInputMessage(const KInputMessage &message) override;
 	void sendClipboardMessage(const KClipboardMessage &message) override;
-	bool sendSessionMessage(const KSessionMessage &message) override;
+	KSessionMessageSendStatus sendSessionMessage(const KSessionMessage &message) override;
 	void setInputRealtimeEnabled(bool bEnabled) override;
 	void setStreamConfig(const KStreamConfig &config) override;
 

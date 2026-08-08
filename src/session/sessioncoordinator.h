@@ -25,6 +25,7 @@ class KInputInjector;
 class KAccessApprovalController;
 class KRecoveryController;
 class KSessionCommandDispatcher;
+struct KSessionCommandTransmitResult;
 class KSignalingTransport;
 class KShutdownCoordinator;
 class QTimer;
@@ -77,7 +78,7 @@ private:
 	void initializeProtocolRoutes();
 	void initializeSessionHandlers();
 	QString sendSessionMessage(KSessionMessage message);
-	bool transmitSessionMessage(const KSessionMessage &message);
+	KSessionCommandTransmitResult transmitSessionMessage(const KSessionMessage &message);
 	void handleSessionCommandCompleted(KSessionMessageType type,
 		const QString &strRequestId,
 		bool bSuccess,
@@ -139,7 +140,7 @@ private:
 	void handlePeerConnectionRestored();
 	void handlePeerConnectionTerminated(const QString &strReason);
 	void handleReconnectTimeout(quint64 nGeneration);
-	void sendDeviceInfoMessage();
+	KSessionCommandTransmitResult sendDeviceInfoMessage();
 	void updateListeningAvailability(bool bAvailable, quint16 nPort = 0);
 	void publishSessionState();
 	void reportSessionError(KSessionErrorDomain domain,

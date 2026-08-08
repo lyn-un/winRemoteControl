@@ -1,6 +1,8 @@
 #include "session/sessioncommanddispatcher.h"
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QEventLoop>
+#include <QtCore/QTimer>
 
 #include <iostream>
 
@@ -26,7 +28,7 @@ int main(int nArgc, char *pArgv[])
 		[&](const KSessionMessage &message)
 		{
 			transmittedMessages.append(message);
-			return true;
+			return KSessionCommandTransmitResult { true, QString() };
 		});
 
 	int nHandledCount = 0;
@@ -71,6 +73,75 @@ int main(int nArgc, char *pArgv[])
 	result.bSuccess = true;
 	dispatcher.handleIncoming(result, 9);
 	Check(bCompleted, "a matching result completes the pending command");
+
+	const int nMessagesBeforeRetry = transmittedMessages.size();
+	KSessionMessage retryCommand;
+	retryCommand.type = StartStreamingSessionMessageType;
+	const QString strRetryRequestId = dispatcher.send(retryCommand, 10);
+	QEventLoop retryWait;
+	QTimer::singleShot(1300, &retryWait, &QEventLoop::quit);
+	retryWait.exec();
+	Check(transmittedMessages.size() == nMessagesBeforeRetry + 2
+		&& transmittedMessages.at(nMessagesBeforeRetry).strRequestId == strRetryRequestId
+		&& transmittedMessages.at(nMessagesBeforeRetry + 1).strRequestId == strRetryRequestId,
+		"a missing result retries the same request id");
+	result.strRequestId = strRetryRequestId;
+	dispatcher.handleIncoming(result, 10);
+
+	int nGenerationCompletionCount = 0;
+	QString strGenerationRequestId;
+	QObject::connect(&dispatcher, &KSessionCommandDispatcher::commandCompleted,
+		[&](KSessionMessageType, const QString &strCompletedRequestId, bool,
+			const QString &, quint64)
+		{
+			if (strCompletedRequestId == strGenerationRequestId)
+				++nGenerationCompletionCount;
+		});
+	KSessionMessage generationCommand;
+	generationCommand.type = StreamConfigSessionMessageType;
+	strGenerationRequestId = dispatcher.send(generationCommand, 11);
+	result.strRequestId = strGenerationRequestId;
+	dispatcher.handleIncoming(result, 10);
+	Check(nGenerationCompletionCount == 0,
+		"an acknowledgement from an old generation is ignored");
+	dispatcher.handleIncoming(result, 11);
+	Check(nGenerationCompletionCount == 1,
+		"the matching generation completes the command");
+
+	QString strFailedRequestId;
+	QString strFailureCode;
+	QObject::connect(&dispatcher, &KSessionCommandDispatcher::commandCompleted,
+		[&](KSessionMessageType, const QString &strCompletedRequestId, bool bSuccess,
+			const QString &strErrorCode, quint64)
+		{
+			if (strCompletedRequestId != strFailedRequestId || bSuccess)
+				return;
+			strFailureCode = strErrorCode;
+		});
+	KSessionMessage pendingCommand;
+	pendingCommand.type = StopStreamingSessionMessageType;
+	strFailedRequestId = dispatcher.send(pendingCommand, 12);
+	dispatcher.failAll(QStringLiteral("session_channel_closed"));
+	Check(strFailureCode == QStringLiteral("session_channel_closed"),
+		"closing the channel explicitly fails every pending command");
+
+	KSessionCommandDispatcher failedSender;
+	failedSender.setTransmitFunction([](const KSessionMessage &)
+		{ return KSessionCommandTransmitResult { false, QStringLiteral("send_failed") }; });
+	bool bSendFailureReported = false;
+	QObject::connect(&failedSender, &KSessionCommandDispatcher::commandCompleted,
+		[&](KSessionMessageType, const QString &strCompletedRequestId, bool bSuccess,
+			const QString &strErrorCode, quint64 nGeneration)
+		{
+			bSendFailureReported = !strCompletedRequestId.isEmpty()
+				&& !bSuccess
+				&& strErrorCode == QStringLiteral("send_failed")
+				&& nGeneration == 13;
+		});
+	KSessionMessage failedCommand;
+	failedCommand.type = StartStreamingSessionMessageType;
+	Check(failedSender.send(failedCommand, 13).isEmpty() && bSendFailureReported,
+		"an initial transport failure is reported explicitly");
 
 	return g_nFailureCount == 0 ? 0 : 1;
 }

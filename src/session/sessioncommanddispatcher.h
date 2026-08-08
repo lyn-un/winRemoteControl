@@ -17,13 +17,20 @@ struct KSessionIncomingDispatchResult
 	bool bEndSessionAccepted = false;
 };
 
+struct KSessionCommandTransmitResult
+{
+	bool bAccepted = false;
+	QString strErrorCode;
+};
+
 class KSessionCommandDispatcher : public QObject
 {
 	Q_OBJECT
 
 public:
 	using Handler = std::function<KProtocolHandlerResult(const KSessionMessage &)>;
-	using TransmitFunction = std::function<bool(const KSessionMessage &)>;
+	using TransmitFunction = std::function<KSessionCommandTransmitResult(
+		const KSessionMessage &)>;
 
 	explicit KSessionCommandDispatcher(QObject *pParent = nullptr);
 
@@ -57,7 +64,7 @@ private:
 		quint64 nGeneration = 0;
 	};
 
-	bool transmit(const KSessionMessage &message) const;
+	KSessionCommandTransmitResult transmit(const KSessionMessage &message) const;
 	void handleTimer();
 	void handleCommandResult(const KSessionMessage &message, quint64 nGeneration);
 	KSessionMessage createCommandResult(const QString &strRequestId,

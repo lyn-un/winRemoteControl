@@ -101,6 +101,9 @@ namespace
 			QStringLiteral("queue preserves reliable ordering"));
 		Check(queue.takeFirst(&message) && message.strPayload == QStringLiteral("move-2"),
 			QStringLiteral("queue places the latest mouse position after earlier input"));
+		Check(queue.enqueue({ QStringLiteral("after-drain"), QString(), true })
+			== EnqueuedOutboundMessage,
+			QStringLiteral("a drained backpressure queue accepts new reliable work"));
 
 		KOutboundMessageQueue overflowQueue(2, 64);
 		overflowQueue.enqueue({ QStringLiteral("move"), QStringLiteral("mouseMove"), false });

@@ -84,6 +84,8 @@ namespace
 	constexpr quint64 kInputHighWatermarkBytes = 4 * 1024;
 	constexpr quint64 kRealtimeInputLowWatermarkBytes = 256;
 	constexpr quint64 kRealtimeInputHighWatermarkBytes = 1024;
+	constexpr quint64 kSessionLowWatermarkBytes = 64 * 1024;
+	constexpr quint64 kSessionHighWatermarkBytes = 256 * 1024;
 	constexpr quint64 kClipboardLowWatermarkBytes = 128 * 1024;
 	constexpr quint64 kClipboardHighWatermarkBytes = 512 * 1024;
 	constexpr char kPlayoutDelayUri[] = "http://www.webrtc.org/experiments/rtp-hdrext/playout-delay";
@@ -361,6 +363,8 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 		kInputLowWatermarkBytes, kInputHighWatermarkBytes);
 	m_pRealtimeInputDataChannel->setBufferWatermarks(
 		kRealtimeInputLowWatermarkBytes, kRealtimeInputHighWatermarkBytes);
+	m_pSessionDataChannel->setBufferWatermarks(
+		kSessionLowWatermarkBytes, kSessionHighWatermarkBytes);
 	m_pClipboardDataChannel->setBufferWatermarks(
 		kClipboardLowWatermarkBytes, kClipboardHighWatermarkBytes);
 	connect(m_pInputDataChannel, &KWebRtcDataChannel::openChanged,
@@ -738,26 +742,26 @@ void KWebRtcPeer::flushSessionQueue()
 	}
 }
 
-bool KWebRtcPeer::sendSessionMessage(const KSessionMessage &message)
+KRemotePeerTransport::KSessionMessageSendStatus KWebRtcPeer::sendSessionMessage(
+	const KSessionMessage &message)
 {
 	const QString strPayload = KSessionMessageCodec::encode(message);
 	if (!m_pSessionDataChannel->isOpen())
-		return false;
+		return SessionMessageChannelUnavailable;
 	if (!m_pSessionDataChannel->isBackpressured()
 		&& m_sessionSendQueue.isEmpty())
 	{
-		return m_pSessionDataChannel->sendText(strPayload);
+		return m_pSessionDataChannel->sendText(strPayload)
+			? SessionMessageAccepted : SessionMessageTransportFailed;
 	}
 
 	const KOutboundEnqueueResult result = m_sessionSendQueue.enqueue({
 		strPayload, KSessionMessageCodec::typeName(message.type), true });
 	if (result == OverflowOutboundMessage)
 	{
-		emit transportError(m_nGeneration.load(),
-			QStringLiteral("Session command queue overflow"));
-		return false;
+		return SessionMessageQueueOverflow;
 	}
-	return true;
+	return SessionMessageAccepted;
 }
 
 void KWebRtcPeer::setStreamConfig(const KStreamConfig &config)

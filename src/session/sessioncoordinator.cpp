@@ -541,7 +541,8 @@ QString KSessionCoordinator::sendSessionMessage(KSessionMessage message)
 		m_sessionStateMachine.generation());
 }
 
-bool KSessionCoordinator::transmitSessionMessage(const KSessionMessage &message)
+KSessionCommandTransmitResult KSessionCoordinator::transmitSessionMessage(
+	const KSessionMessage &message)
 {
 	const QString strType = KSessionMessageCodec::typeName(message.type);
 	const QString strMessage = KSessionMessageCodec::encode(message);
@@ -552,20 +553,38 @@ bool KSessionCoordinator::transmitSessionMessage(const KSessionMessage &message)
 			strType,
 			strMessage.toUtf8().size(),
 			QStringLiteral("reason=session_channel_not_open"));
-		return false;
+		return { false, QStringLiteral("session_channel_closed") };
 	}
 
 	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 		QStringLiteral("send"),
 		strType,
 		strMessage.toUtf8().size());
-	if (m_spRemotePeerTransport->sendSessionMessage(message))
-		return true;
+	const KRemotePeerTransport::KSessionMessageSendStatus status =
+		m_spRemotePeerTransport->sendSessionMessage(message);
+	if (status == KRemotePeerTransport::SessionMessageAccepted)
+		return { true, QString() };
+	QString strErrorCode = QStringLiteral("send_failed");
+	if (status == KRemotePeerTransport::SessionMessageChannelUnavailable)
+		strErrorCode = QStringLiteral("session_channel_closed");
+	else if (status == KRemotePeerTransport::SessionMessageQueueOverflow)
+		strErrorCode = QStringLiteral("command_queue_overflow");
 
 	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 		QStringLiteral("send_failed"), strType, strMessage.toUtf8().size(),
 		QStringLiteral("requestId=%1").arg(message.strRequestId));
-	return false;
+	if (!KSessionMessageCodec::isCommand(message.type))
+	{
+		const KSessionErrorCode errorCode = status
+			== KRemotePeerTransport::SessionMessageQueueOverflow
+			? CommandQueueOverflowSessionErrorCode : SendFailedSessionErrorCode;
+		reportSessionError(ProtocolSessionErrorDomain,
+			errorCode,
+			ConnectedSessionErrorStage,
+			false,
+			QStringLiteral("Session message send failed: %1").arg(strErrorCode));
+	}
+	return { false, strErrorCode };
 }
 
 void KSessionCoordinator::handleSessionCommandCompleted(KSessionMessageType type,
@@ -589,10 +608,20 @@ void KSessionCoordinator::handleSessionCommandCompleted(KSessionMessageType type
 		continueStoppingTeardown();
 		return;
 	}
-	if (!bSuccess)
+	if (!bSuccess && !m_sessionStateMachine.isStopping())
 	{
+		KSessionErrorCode errorCode = InvalidStateSessionErrorCode;
+		if (strErrorCode == QStringLiteral("send_failed")
+			|| strErrorCode == QStringLiteral("session_channel_closed"))
+		{
+			errorCode = SendFailedSessionErrorCode;
+		}
+		else if (strErrorCode == QStringLiteral("command_queue_overflow"))
+		{
+			errorCode = CommandQueueOverflowSessionErrorCode;
+		}
 		reportSessionError(ProtocolSessionErrorDomain,
-			InvalidStateSessionErrorCode, ConnectedSessionErrorStage,
+			errorCode, ConnectedSessionErrorStage,
 			false, QStringLiteral("Remote rejected session command: %1")
 				.arg(strErrorCode));
 	}
@@ -756,7 +785,7 @@ void KSessionCoordinator::continueStoppingTeardown()
 	m_bCapabilitiesReceived = false;
 	m_negotiatedCapabilities = KNegotiatedCapabilities();
 	emit sessionCapabilitiesChanged(m_negotiatedCapabilities);
-	m_pSessionCommandDispatcher->clear();
+	m_pSessionCommandDispatcher->failAll(QStringLiteral("session_stopping"));
 	m_pShutdownCoordinator->begin(nGeneration, m_bCaptureActive, true, 3000);
 	if (m_bCaptureActive)
 		emit stopCaptureRequested(nGeneration);
@@ -1129,7 +1158,8 @@ void KSessionCoordinator::handleSessionChannelChanged(bool bOpen)
 		m_pCapabilityTimer->stop();
 		m_bCapabilitiesReceived = false;
 		m_bDeviceInfoRequested = false;
-		if (m_sessionStateMachine.isStopping() && !m_strPendingEndCommandId.isEmpty())
+		m_pSessionCommandDispatcher->failAll(QStringLiteral("session_channel_closed"));
+		if (m_sessionStateMachine.isStopping())
 		{
 			m_strPendingEndCommandId.clear();
 			continueStoppingTeardown();
@@ -1317,7 +1347,13 @@ KProtocolHandlerResult KSessionCoordinator::handleDeviceInfoRequestMessage(
 		return KProtocolHandlerResult::failure(ProtocolHandlerPermissionDenied,
 			QStringLiteral("Only controlled role can provide device information"));
 	}
-	sendDeviceInfoMessage();
+	const KSessionCommandTransmitResult result = sendDeviceInfoMessage();
+	if (!result.bAccepted)
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerExecutionFailed,
+			QStringLiteral("Unable to send device information: %1")
+				.arg(result.strErrorCode));
+	}
 	return KProtocolHandlerResult::success();
 }
 
@@ -1476,6 +1512,14 @@ void KSessionCoordinator::handleSignalingMessage(const QString &strMessage)
 	context.nGeneration = m_sessionStateMachine.generation();
 	const KProtocolRouteResult result = m_protocolRouter.route(
 		SignalingProtocolChannel, strMessage, context);
+	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
+		QStringLiteral("protocol_route"),
+		QStringLiteral("signaling"),
+		strMessage.toUtf8().size(),
+		QStringLiteral("type=%1 routeStatus=%2 handlerStatus=%3")
+			.arg(result.envelope.strType)
+			.arg(static_cast<int>(result.status))
+			.arg(static_cast<int>(result.handlerResult.status)));
 	if (result.status == HandledProtocolRouteStatus)
 	{
 		m_nInvalidSignalingMessages = 0;
@@ -1888,7 +1932,7 @@ void KSessionCoordinator::handleReconnectTimeout(quint64 nGeneration)
 		true);
 }
 
-void KSessionCoordinator::sendDeviceInfoMessage()
+KSessionCommandTransmitResult KSessionCoordinator::sendDeviceInfoMessage()
 {
 	KSessionMessage message;
 	message.type = DeviceInfoSessionMessageType;
@@ -1903,5 +1947,5 @@ void KSessionCoordinator::sendDeviceInfoMessage()
 			.arg(message.deviceInfo.strWallpaperData.isEmpty() ? 0 : 1)
 			.arg(message.deviceInfo.strWallpaperData.size())
 			.arg(strMessage.toUtf8().size()));
-	sendSessionMessage(message);
+	return transmitSessionMessage(message);
 }

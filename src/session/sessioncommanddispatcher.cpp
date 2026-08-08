@@ -38,8 +38,20 @@ QString KSessionCommandDispatcher::send(KSessionMessage message, quint64 nGenera
 {
 	if (KSessionMessageCodec::isCommand(message.type) && message.strRequestId.isEmpty())
 		message.strRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-	if (!transmit(message))
+	const KSessionCommandTransmitResult transmitResult = transmit(message);
+	if (!transmitResult.bAccepted)
+	{
+		if (KSessionMessageCodec::isCommand(message.type))
+		{
+			emit commandCompleted(message.type,
+				message.strRequestId,
+				false,
+				transmitResult.strErrorCode.isEmpty()
+					? QStringLiteral("send_failed") : transmitResult.strErrorCode,
+				nGeneration);
+		}
 		return QString();
+	}
 	if (!KSessionMessageCodec::isCommand(message.type))
 		return message.strRequestId;
 
@@ -116,9 +128,12 @@ void KSessionCommandDispatcher::clear()
 	m_recentCommandResultIds.clear();
 }
 
-bool KSessionCommandDispatcher::transmit(const KSessionMessage &message) const
+KSessionCommandTransmitResult KSessionCommandDispatcher::transmit(
+	const KSessionMessage &message) const
 {
-	return m_transmitFunction && m_transmitFunction(message);
+	if (!m_transmitFunction)
+		return { false, QStringLiteral("send_failed") };
+	return m_transmitFunction(message);
 }
 
 void KSessionCommandDispatcher::handleTimer()
@@ -133,11 +148,24 @@ void KSessionCommandDispatcher::handleTimer()
 		KPendingCommand &pending = iterator.value();
 		if (nNowMs - pending.nSentMs < kCommandTimeoutMs)
 			continue;
-		if (pending.nAttempts < kMaximumCommandAttempts
-			&& transmit(pending.message))
+		if (pending.nAttempts < kMaximumCommandAttempts)
 		{
-			++pending.nAttempts;
-			pending.nSentMs = nNowMs;
+			const KSessionCommandTransmitResult result = transmit(pending.message);
+			if (result.bAccepted)
+			{
+				++pending.nAttempts;
+				pending.nSentMs = nNowMs;
+				continue;
+			}
+			const KSessionMessage message = pending.message;
+			const quint64 nGeneration = pending.nGeneration;
+			m_pendingCommands.erase(iterator);
+			emit commandCompleted(message.type,
+				strRequestId,
+				false,
+				result.strErrorCode.isEmpty()
+					? QStringLiteral("send_failed") : result.strErrorCode,
+				nGeneration);
 			continue;
 		}
 

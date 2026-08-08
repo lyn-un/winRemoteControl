@@ -35,7 +35,16 @@ public:
 	virtual void pushVideoFrame(const KVideoFrame &frame) = 0;
 	virtual void sendInputMessage(const KInputMessage &message) = 0;
 	virtual void sendClipboardMessage(const KClipboardMessage &message) = 0;
-	virtual bool sendSessionMessage(const KSessionMessage &message) = 0;
+	enum KSessionMessageSendStatus
+	{
+		SessionMessageAccepted,
+		SessionMessageChannelUnavailable,
+		SessionMessageQueueOverflow,
+		SessionMessageTransportFailed
+	};
+
+	virtual KSessionMessageSendStatus sendSessionMessage(
+		const KSessionMessage &message) = 0;
 	virtual void setInputRealtimeEnabled(bool bEnabled) = 0;
 	virtual void setStreamConfig(const KStreamConfig &config) = 0;
 
