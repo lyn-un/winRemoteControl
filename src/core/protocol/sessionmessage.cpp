@@ -29,6 +29,9 @@ namespace
 	constexpr char kBitrateKbps[] = "bitrateKbps";
 	constexpr char kCapabilities[] = "capabilities";
 	constexpr char kCapabilityRejected[] = "capabilityRejected";
+	constexpr char kCommandResult[] = "commandResult";
+	constexpr char kSuccess[] = "success";
+	constexpr char kErrorCode[] = "errorCode";
 	constexpr char kProtocolMinVersion[] = "protocolMinVersion";
 	constexpr char kProtocolMaxVersion[] = "protocolMaxVersion";
 	constexpr char kSupportedCodecs[] = "supportedCodecs";
@@ -157,7 +160,8 @@ QString KSessionMessageCodec::encode(const KSessionMessage &message)
 	{
 		object.insert(QString::fromLatin1(kReason), message.strReason);
 	}
-	else if (message.type == StreamConfigSessionMessageType)
+	else if (message.type == StreamConfigSessionMessageType
+		|| (message.type == StartStreamingSessionMessageType && message.bHasStreamConfig))
 	{
 		object.insert(QString::fromLatin1(kFps), message.streamConfig.nFps);
 		object.insert(QString::fromLatin1(kWidth), message.streamConfig.nWidth);
@@ -192,9 +196,15 @@ QString KSessionMessageCodec::encode(const KSessionMessage &message)
 		}
 		object.insert(QString::fromLatin1(kMonitorList), monitors);
 	}
+	else if (message.type == CommandResultSessionMessageType)
+	{
+		object.insert(QString::fromLatin1(kSuccess), message.bSuccess);
+		if (!message.bSuccess)
+			object.insert(QString::fromLatin1(kErrorCode), message.strErrorCode);
+	}
 
 	return KProtocolEnvelopeCodec::encode(SessionProtocolChannel,
-		typeName(message.type), QString(), 0, object);
+		typeName(message.type), message.strRequestId, 0, object);
 }
 
 bool KSessionMessageCodec::decode(const QString &strMessage,
@@ -239,6 +249,8 @@ bool KSessionMessageCodec::decode(const KProtocolEnvelope &envelope,
 		message.type = CapabilitiesSessionMessageType;
 	else if (strType == QString::fromLatin1(kCapabilityRejected))
 		message.type = CapabilityRejectedSessionMessageType;
+	else if (strType == QString::fromLatin1(kCommandResult))
+		message.type = CommandResultSessionMessageType;
 	else
 		return failDecode(QStringLiteral("Unknown session message type"), pErrorMessage);
 
@@ -286,6 +298,22 @@ bool KSessionMessageCodec::decode(const KProtocolEnvelope &envelope,
 		{
 			return failDecode(QStringLiteral("Invalid stream config message"), pErrorMessage);
 		}
+	}
+	else if (message.type == StartStreamingSessionMessageType
+		&& (!object.value(QString::fromLatin1(kFps)).isUndefined()
+			|| !object.value(QString::fromLatin1(kWidth)).isUndefined()
+			|| !object.value(QString::fromLatin1(kHeight)).isUndefined()
+			|| !object.value(QString::fromLatin1(kBitrateKbps)).isUndefined()))
+	{
+		if (!readRequiredInt(object, kFps, &message.streamConfig.nFps)
+			|| !readRequiredInt(object, kWidth, &message.streamConfig.nWidth)
+			|| !readRequiredInt(object, kHeight, &message.streamConfig.nHeight)
+			|| !readRequiredInt(object, kBitrateKbps, &message.streamConfig.nBitrateKbps)
+			|| !isValidStreamConfig(message.streamConfig))
+		{
+			return failDecode(QStringLiteral("Invalid atomic start stream config"), pErrorMessage);
+		}
+		message.bHasStreamConfig = true;
 	}
 	else if (message.type == CapabilitiesSessionMessageType)
 	{
@@ -347,6 +375,26 @@ bool KSessionMessageCodec::decode(const KProtocolEnvelope &envelope,
 		}
 		message.strReason = reasonValue.toString();
 	}
+	else if (message.type == CommandResultSessionMessageType)
+	{
+		const QJsonValue successValue = object.value(QString::fromLatin1(kSuccess));
+		const QJsonValue errorCodeValue = object.value(QString::fromLatin1(kErrorCode));
+		if (envelope.strRequestId.isEmpty()
+			|| !successValue.isBool()
+			|| (!successValue.toBool()
+				&& (!errorCodeValue.isString()
+					|| errorCodeValue.toString().isEmpty()
+					|| errorCodeValue.toString().size() > 64)))
+		{
+			return failDecode(QStringLiteral("Invalid session command result"), pErrorMessage);
+		}
+		message.bSuccess = successValue.toBool();
+		message.strErrorCode = errorCodeValue.toString();
+	}
+
+	message.strRequestId = envelope.strRequestId;
+	if (isCommand(message.type) && message.strRequestId.isEmpty())
+		return failDecode(QStringLiteral("Session command request id is required"), pErrorMessage);
 
 	*pMessage = message;
 	if (pErrorMessage != nullptr)
@@ -372,7 +420,18 @@ QString KSessionMessageCodec::typeName(KSessionMessageType type)
 		return QString::fromLatin1(kCapabilities);
 	if (type == CapabilityRejectedSessionMessageType)
 		return QString::fromLatin1(kCapabilityRejected);
+	if (type == CommandResultSessionMessageType)
+		return QString::fromLatin1(kCommandResult);
 	return QStringLiteral("invalid");
+}
+
+bool KSessionMessageCodec::isCommand(KSessionMessageType type)
+{
+	return type == DeviceInfoRequestSessionMessageType
+		|| type == StartStreamingSessionMessageType
+		|| type == StopStreamingSessionMessageType
+		|| type == EndSessionMessageType
+		|| type == StreamConfigSessionMessageType;
 }
 
 bool KSessionMessageCodec::negotiate(const KSessionCapabilities &local,

@@ -20,7 +20,8 @@ enum KSessionMessageType
 	EndSessionMessageType,
 	StreamConfigSessionMessageType,
 	CapabilitiesSessionMessageType,
-	CapabilityRejectedSessionMessageType
+	CapabilityRejectedSessionMessageType,
+	CommandResultSessionMessageType
 };
 
 struct KMonitorCapability
@@ -78,7 +79,11 @@ struct KRemoteDeviceInfo
 struct KSessionMessage
 {
 	KSessionMessageType type = InvalidSessionMessageType;
+	QString strRequestId;
 	QString strReason;
+	QString strErrorCode;
+	bool bSuccess = false;
+	bool bHasStreamConfig = false;
 	KRemoteDeviceInfo deviceInfo;
 	KStreamConfig streamConfig;
 	KSessionCapabilities capabilities;
@@ -93,6 +98,7 @@ public:
 		KSessionMessage *pMessage,
 		QString *pErrorMessage);
 	static QString typeName(KSessionMessageType type);
+	static bool isCommand(KSessionMessageType type);
 	static bool negotiate(const KSessionCapabilities &local,
 		const KSessionCapabilities &remote,
 		KNegotiatedCapabilities *pNegotiated,

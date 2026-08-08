@@ -22,6 +22,10 @@ namespace
 	constexpr int kReconnectTimeoutMs = 10000;
 	constexpr int kInitialApprovalResponseTimeoutMs = 5000;
 	constexpr int kApprovalResponseGraceMs = 5000;
+	constexpr int kSessionCommandTimeoutMs = 1000;
+	constexpr int kSessionCommandTimerIntervalMs = 100;
+	constexpr int kMaximumSessionCommandAttempts = 2;
+	constexpr int kMaximumRecentCommandResults = 128;
 
 	static QString roleToString(KSessionRole role)
 	{
@@ -65,6 +69,7 @@ KSessionCoordinator::KSessionCoordinator(
 	, m_pApprovalTimer(new QTimer(this))
 	, m_pStopWatchdogTimer(new QTimer(this))
 	, m_pCapabilityTimer(new QTimer(this))
+	, m_pSessionCommandTimer(new QTimer(this))
 {
 	Q_ASSERT(m_spRemotePeerTransport != nullptr);
 	Q_ASSERT(m_pSignaling != nullptr);
@@ -74,6 +79,8 @@ KSessionCoordinator::KSessionCoordinator(
 	m_pApprovalTimer->setSingleShot(true);
 	m_pStopWatchdogTimer->setSingleShot(true);
 	m_pCapabilityTimer->setSingleShot(true);
+	m_pSessionCommandTimer->setInterval(kSessionCommandTimerIntervalMs);
+	m_sessionCommandClock.start();
 	connect(m_pReconnectTimer, &QTimer::timeout,
 		this, &KSessionCoordinator::handleReconnectTimeout);
 	connect(m_pApprovalTimer, &QTimer::timeout,
@@ -82,6 +89,8 @@ KSessionCoordinator::KSessionCoordinator(
 		this, &KSessionCoordinator::handleStopWatchdog);
 	connect(m_pCapabilityTimer, &QTimer::timeout,
 		this, &KSessionCoordinator::handleCapabilityTimeout);
+	connect(m_pSessionCommandTimer, &QTimer::timeout,
+		this, &KSessionCoordinator::handleSessionCommandTimer);
 	connect(m_pSignaling, &KSignalingTransport::stateChanged,
 		this, &KSessionCoordinator::signalingChanged);
 	connect(m_pSignaling, &KSignalingTransport::signalingError,
@@ -207,21 +216,21 @@ void KSessionCoordinator::initializeProtocolRoutes()
 void KSessionCoordinator::initializeSessionHandlers()
 {
 	m_sessionHandlers.insert(DeviceInfoRequestSessionMessageType,
-		[this](const KSessionMessage &message) { handleDeviceInfoRequestMessage(message); });
+		[this](const KSessionMessage &message) { return handleDeviceInfoRequestMessage(message); });
 	m_sessionHandlers.insert(DeviceInfoSessionMessageType,
-		[this](const KSessionMessage &message) { handleDeviceInfoMessage(message); });
+		[this](const KSessionMessage &message) { return handleDeviceInfoMessage(message); });
 	m_sessionHandlers.insert(StartStreamingSessionMessageType,
-		[this](const KSessionMessage &message) { handleStartStreamingMessage(message); });
+		[this](const KSessionMessage &message) { return handleStartStreamingMessage(message); });
 	m_sessionHandlers.insert(StopStreamingSessionMessageType,
-		[this](const KSessionMessage &message) { handleStopStreamingMessage(message); });
+		[this](const KSessionMessage &message) { return handleStopStreamingMessage(message); });
 	m_sessionHandlers.insert(EndSessionMessageType,
-		[this](const KSessionMessage &message) { handleEndSessionMessage(message); });
+		[this](const KSessionMessage &message) { return handleEndSessionMessage(message); });
 	m_sessionHandlers.insert(StreamConfigSessionMessageType,
-		[this](const KSessionMessage &message) { handleStreamConfigMessage(message); });
+		[this](const KSessionMessage &message) { return handleStreamConfigMessage(message); });
 	m_sessionHandlers.insert(CapabilitiesSessionMessageType,
-		[this](const KSessionMessage &message) { handleCapabilitiesMessage(message); });
+		[this](const KSessionMessage &message) { return handleCapabilitiesMessage(message); });
 	m_sessionHandlers.insert(CapabilityRejectedSessionMessageType,
-		[this](const KSessionMessage &message) { handleCapabilityRejectedMessage(message); });
+		[this](const KSessionMessage &message) { return handleCapabilityRejectedMessage(message); });
 }
 
 void KSessionCoordinator::publishSessionState()
@@ -440,9 +449,10 @@ void KSessionCoordinator::enterRemoteDesktop(const KStreamConfig &config)
 			.arg(config.nHeight)
 			.arg(config.nFps)
 			.arg(config.nBitrateKbps));
-	sendStreamConfig(config);
 	KSessionMessage message;
 	message.type = StartStreamingSessionMessageType;
+	message.streamConfig = constrainedStreamConfig(config);
+	message.bHasStreamConfig = true;
 	sendSessionMessage(message);
 	m_sessionStateMachine.beginStreaming();
 	publishSessionState();
@@ -523,7 +533,27 @@ void KSessionCoordinator::sendClipboardMessage(const KClipboardMessage &message)
 	m_spRemotePeerTransport->sendClipboardMessage(message);
 }
 
-void KSessionCoordinator::sendSessionMessage(const KSessionMessage &message)
+QString KSessionCoordinator::sendSessionMessage(KSessionMessage message)
+{
+	if (KSessionMessageCodec::isCommand(message.type) && message.strRequestId.isEmpty())
+		message.strRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+	if (!transmitSessionMessage(message))
+		return QString();
+	if (!KSessionMessageCodec::isCommand(message.type))
+		return message.strRequestId;
+
+	KPendingSessionCommand pending;
+	pending.message = message;
+	pending.nSentMs = m_sessionCommandClock.elapsed();
+	pending.nAttempts = 1;
+	pending.nGeneration = m_sessionStateMachine.generation();
+	m_pendingSessionCommands.insert(message.strRequestId, pending);
+	if (!m_pSessionCommandTimer->isActive())
+		m_pSessionCommandTimer->start();
+	return message.strRequestId;
+}
+
+bool KSessionCoordinator::transmitSessionMessage(const KSessionMessage &message)
 {
 	const QString strType = KSessionMessageCodec::typeName(message.type);
 	const QString strMessage = KSessionMessageCodec::encode(message);
@@ -534,14 +564,152 @@ void KSessionCoordinator::sendSessionMessage(const KSessionMessage &message)
 			strType,
 			strMessage.toUtf8().size(),
 			QStringLiteral("reason=session_channel_not_open"));
-		return;
+		return false;
 	}
 
 	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 		QStringLiteral("send"),
 		strType,
 		strMessage.toUtf8().size());
-	m_spRemotePeerTransport->sendSessionMessage(message);
+	if (m_spRemotePeerTransport->sendSessionMessage(message))
+		return true;
+
+	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
+		QStringLiteral("send_failed"), strType, strMessage.toUtf8().size(),
+		QStringLiteral("requestId=%1").arg(message.strRequestId));
+	return false;
+}
+
+void KSessionCoordinator::handleSessionCommandTimer()
+{
+	const qint64 nNowMs = m_sessionCommandClock.elapsed();
+	const QStringList requestIds = m_pendingSessionCommands.keys();
+	for (const QString &strRequestId : requestIds)
+	{
+		auto iterator = m_pendingSessionCommands.find(strRequestId);
+		if (iterator == m_pendingSessionCommands.end())
+			continue;
+		KPendingSessionCommand &pending = iterator.value();
+		if (pending.nGeneration != m_sessionStateMachine.generation())
+		{
+			m_pendingSessionCommands.erase(iterator);
+			continue;
+		}
+		if (nNowMs - pending.nSentMs < kSessionCommandTimeoutMs)
+			continue;
+		if (pending.nAttempts < kMaximumSessionCommandAttempts
+			&& transmitSessionMessage(pending.message))
+		{
+			++pending.nAttempts;
+			pending.nSentMs = nNowMs;
+			KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
+				QStringLiteral("session_command_retry"),
+				KSessionMessageCodec::typeName(pending.message.type), -1,
+				QStringLiteral("requestId=%1 attempt=%2 generation=%3")
+					.arg(strRequestId)
+					.arg(pending.nAttempts)
+					.arg(pending.nGeneration));
+			continue;
+		}
+
+		const KSessionMessageType type = pending.message.type;
+		m_pendingSessionCommands.erase(iterator);
+		KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
+			QStringLiteral("session_command_timeout"),
+			KSessionMessageCodec::typeName(type), -1,
+			QStringLiteral("requestId=%1 generation=%2")
+				.arg(strRequestId)
+				.arg(m_sessionStateMachine.generation()));
+		if (strRequestId == m_strPendingEndCommandId)
+		{
+			m_strPendingEndCommandId.clear();
+			continueStoppingTeardown();
+			break;
+		}
+		reportSessionError(ProtocolSessionErrorDomain,
+			CommandTimeoutSessionErrorCode, ConnectedSessionErrorStage,
+			false, QStringLiteral("Session command timed out: %1")
+				.arg(KSessionMessageCodec::typeName(type)));
+		finishSession(DisconnectTimeoutSessionEndReason,
+			QStringLiteral("session_command_timeout"),
+			m_sessionStateMachine.shouldKeepListening(), false, false);
+		break;
+	}
+	if (m_pendingSessionCommands.isEmpty())
+		m_pSessionCommandTimer->stop();
+}
+
+void KSessionCoordinator::handleCommandResultMessage(const KSessionMessage &message)
+{
+	auto iterator = m_pendingSessionCommands.find(message.strRequestId);
+	if (iterator == m_pendingSessionCommands.end()
+		|| iterator->nGeneration != m_sessionStateMachine.generation())
+	{
+		return;
+	}
+	const KSessionMessageType commandType = iterator->message.type;
+	m_pendingSessionCommands.erase(iterator);
+	if (m_pendingSessionCommands.isEmpty())
+		m_pSessionCommandTimer->stop();
+	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
+		QStringLiteral("session_command_result"),
+		KSessionMessageCodec::typeName(commandType), -1,
+		QStringLiteral("requestId=%1 success=%2 errorCode=%3")
+			.arg(message.strRequestId)
+			.arg(message.bSuccess ? 1 : 0)
+			.arg(message.strErrorCode));
+	if (message.strRequestId == m_strPendingEndCommandId)
+	{
+		m_strPendingEndCommandId.clear();
+		continueStoppingTeardown();
+		return;
+	}
+	if (!message.bSuccess)
+	{
+		reportSessionError(ProtocolSessionErrorDomain,
+			InvalidStateSessionErrorCode, ConnectedSessionErrorStage,
+			false, QStringLiteral("Remote rejected session command: %1")
+				.arg(message.strErrorCode));
+	}
+}
+
+void KSessionCoordinator::sendCommandResult(const QString &strRequestId,
+	const KProtocolHandlerResult &handlerResult)
+{
+	KSessionMessage result;
+	result.type = CommandResultSessionMessageType;
+	result.strRequestId = strRequestId;
+	result.bSuccess = handlerResult.status == ProtocolHandlerSucceeded;
+	if (!result.bSuccess)
+	{
+		if (handlerResult.status == ProtocolHandlerInvalidState)
+			result.strErrorCode = QStringLiteral("invalid_state");
+		else if (handlerResult.status == ProtocolHandlerPermissionDenied)
+			result.strErrorCode = QStringLiteral("permission_denied");
+		else
+			result.strErrorCode = QStringLiteral("execution_failed");
+	}
+	rememberCommandResult(result);
+	transmitSessionMessage(result);
+}
+
+void KSessionCoordinator::rememberCommandResult(const KSessionMessage &message)
+{
+	if (m_recentCommandResults.contains(message.strRequestId))
+		return;
+	m_recentCommandResults.insert(message.strRequestId, message);
+	m_recentCommandResultIds.enqueue(message.strRequestId);
+	while (m_recentCommandResultIds.size() > kMaximumRecentCommandResults)
+		m_recentCommandResults.remove(m_recentCommandResultIds.dequeue());
+}
+
+void KSessionCoordinator::clearSessionCommands()
+{
+	m_pSessionCommandTimer->stop();
+	m_pendingSessionCommands.clear();
+	m_recentCommandResults.clear();
+	m_recentCommandResultIds.clear();
+	m_strPendingEndCommandId.clear();
 }
 
 void KSessionCoordinator::sendStreamConfig(const KStreamConfig &config)
@@ -550,21 +718,27 @@ void KSessionCoordinator::sendStreamConfig(const KStreamConfig &config)
 		return;
 	KSessionMessage message;
 	message.type = StreamConfigSessionMessageType;
-	message.streamConfig = config;
+	message.streamConfig = constrainedStreamConfig(config);
+	sendSessionMessage(message);
+}
+
+KStreamConfig KSessionCoordinator::constrainedStreamConfig(const KStreamConfig &config) const
+{
+	KStreamConfig result = config;
 	if (m_negotiatedCapabilities.bValid)
 	{
-		if (message.streamConfig.nWidth > 0)
-			message.streamConfig.nWidth = std::min(message.streamConfig.nWidth,
+		if (result.nWidth > 0)
+			result.nWidth = std::min(result.nWidth,
 				m_negotiatedCapabilities.nMaximumWidth);
-		if (message.streamConfig.nHeight > 0)
-			message.streamConfig.nHeight = std::min(message.streamConfig.nHeight,
+		if (result.nHeight > 0)
+			result.nHeight = std::min(result.nHeight,
 				m_negotiatedCapabilities.nMaximumHeight);
-		message.streamConfig.nFps = std::min(message.streamConfig.nFps,
+		result.nFps = std::min(result.nFps,
 			m_negotiatedCapabilities.nMaximumFps);
-		message.streamConfig.nBitrateKbps = std::min(message.streamConfig.nBitrateKbps,
+		result.nBitrateKbps = std::min(result.nBitrateKbps,
 			m_negotiatedCapabilities.nMaximumBitrateKbps);
 	}
-	sendSessionMessage(message);
+	return result;
 }
 
 void KSessionCoordinator::handleCaptureFailure()
@@ -614,14 +788,38 @@ void KSessionCoordinator::finishSession(KSessionEndReason reason,
 			.arg(nGeneration)
 			.arg(bKeepListening ? 1 : 0)
 			.arg(bNotifyRemote ? 1 : 0));
+	m_bStopKeepListening = bKeepListening;
+	m_bStopReportError = bReportError;
+	m_bStopRecovering = bRecovering;
+	m_stopRole = role;
+	m_strStopReason = strReason;
+	m_nStoppingGeneration = nGeneration;
+	m_bStopTeardownStarted = false;
+	m_pInputInjector->releaseAllInputs();
+	resetInputTraceState();
 
 	if (bNotifyRemote && m_bSessionChannelOpen)
 	{
 		KSessionMessage message;
 		message.type = EndSessionMessageType;
 		message.strReason = strReason;
-		sendSessionMessage(message);
+		m_strPendingEndCommandId = sendSessionMessage(message);
+		if (!m_strPendingEndCommandId.isEmpty())
+			return;
 	}
+	continueStoppingTeardown();
+}
+
+void KSessionCoordinator::continueStoppingTeardown()
+{
+	if (m_bStopTeardownStarted || !m_sessionStateMachine.isStopping())
+		return;
+	m_bStopTeardownStarted = true;
+
+	const bool bRecovering = m_bStopRecovering;
+	const KSessionRole role = m_stopRole;
+	const QString strReason = m_strStopReason;
+	const quint64 nGeneration = m_nStoppingGeneration;
 
 	if (bRecovering)
 	{
@@ -647,16 +845,9 @@ void KSessionCoordinator::finishSession(KSessionEndReason reason,
 	m_bCapabilitiesReceived = false;
 	m_negotiatedCapabilities = KNegotiatedCapabilities();
 	emit sessionCapabilitiesChanged(m_negotiatedCapabilities);
-	m_pInputInjector->releaseAllInputs();
-	resetInputTraceState();
+	clearSessionCommands();
 	m_bCaptureShutdownPending = m_bCaptureActive;
 	m_bPeerShutdownPending = true;
-	m_bStopKeepListening = bKeepListening;
-	m_bStopReportError = bReportError;
-	m_bStopRecovering = bRecovering;
-	m_stopRole = role;
-	m_strStopReason = strReason;
-	m_nStoppingGeneration = nGeneration;
 	m_pStopWatchdogTimer->start(3000);
 	if (m_bCaptureActive)
 		emit stopCaptureRequested(nGeneration);
@@ -713,6 +904,7 @@ void KSessionCoordinator::finishStopping()
 	const QString strReason = m_strStopReason;
 	m_bCaptureShutdownPending = false;
 	m_bPeerShutdownPending = false;
+	m_bStopTeardownStarted = false;
 
 	bool bListening = false;
 	if (bKeepListening && role == ControlledSessionRole)
@@ -1027,7 +1219,12 @@ void KSessionCoordinator::handleSessionChannelChanged(bool bOpen)
 		m_pCapabilityTimer->stop();
 		m_bCapabilitiesReceived = false;
 		m_bDeviceInfoRequested = false;
-		if (bWasOpen && !m_sessionStateMachine.isStopping())
+		if (m_sessionStateMachine.isStopping() && !m_strPendingEndCommandId.isEmpty())
+		{
+			m_strPendingEndCommandId.clear();
+			continueStoppingTeardown();
+		}
+		else if (bWasOpen && !m_sessionStateMachine.isStopping())
 		{
 			finishSession(SessionChannelClosedSessionEndReason,
 				QString(),
@@ -1102,10 +1299,14 @@ KSessionCapabilities KSessionCoordinator::localCapabilities() const
 	return capabilities;
 }
 
-void KSessionCoordinator::handleCapabilitiesMessage(const KSessionMessage &message)
+KProtocolHandlerResult KSessionCoordinator::handleCapabilitiesMessage(
+	const KSessionMessage &message)
 {
 	if (!m_bSessionChannelOpen || m_sessionStateMachine.state() != NegotiatingSessionState)
-		return;
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerInvalidState,
+			QStringLiteral("Capabilities received outside negotiation"));
+	}
 	KNegotiatedCapabilities negotiated;
 	QString strError;
 	if (!KSessionMessageCodec::negotiate(localCapabilities(), message.capabilities,
@@ -1120,20 +1321,26 @@ void KSessionCoordinator::handleCapabilitiesMessage(const KSessionMessage &messa
 		reportSessionError(ProtocolSessionErrorDomain,
 			IncompatibleProtocolSessionErrorCode, NegotiationSessionErrorStage,
 			false, strError);
-		return;
+		return KProtocolHandlerResult::failure(ProtocolHandlerExecutionFailed, strError);
 	}
 	completeCapabilityNegotiation(negotiated);
+	return KProtocolHandlerResult::success();
 }
 
-void KSessionCoordinator::handleCapabilityRejectedMessage(const KSessionMessage &message)
+KProtocolHandlerResult KSessionCoordinator::handleCapabilityRejectedMessage(
+	const KSessionMessage &message)
 {
 	if (m_sessionStateMachine.state() != NegotiatingSessionState)
-		return;
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerInvalidState,
+			QStringLiteral("Capability rejection received outside negotiation"));
+	}
 	finishSession(ConnectFailedSessionEndReason, QStringLiteral("incompatible_protocol"),
 		m_sessionStateMachine.shouldKeepListening(), false, false);
 	reportSessionError(ProtocolSessionErrorDomain,
 		IncompatibleProtocolSessionErrorCode, NegotiationSessionErrorStage,
 		false, message.strReason);
+	return KProtocolHandlerResult::success();
 }
 
 void KSessionCoordinator::handleCapabilityTimeout()
@@ -1149,6 +1356,11 @@ void KSessionCoordinator::handleCapabilityTimeout()
 
 void KSessionCoordinator::handleSessionMessage(const KSessionMessage &message)
 {
+	if (message.type == CommandResultSessionMessageType)
+	{
+		handleCommandResultMessage(message);
+		return;
+	}
 	if (!m_bCapabilitiesReceived
 		&& message.type != CapabilitiesSessionMessageType
 		&& message.type != CapabilityRejectedSessionMessageType
@@ -1171,46 +1383,93 @@ void KSessionCoordinator::handleSessionMessage(const KSessionMessage &message)
 		QStringLiteral("handle"),
 		strType,
 		strMessage.toUtf8().size());
+	if (KSessionMessageCodec::isCommand(message.type))
+	{
+		const auto cached = m_recentCommandResults.constFind(message.strRequestId);
+		if (cached != m_recentCommandResults.constEnd())
+		{
+			transmitSessionMessage(cached.value());
+			return;
+		}
+	}
+
+	KProtocolHandlerResult result = KProtocolHandlerResult::failure(
+		ProtocolHandlerExecutionFailed, QStringLiteral("No session message handler"));
 	const auto iterator = m_sessionHandlers.constFind(static_cast<int>(message.type));
 	if (iterator != m_sessionHandlers.constEnd())
-		iterator.value()(message);
+		result = iterator.value()(message);
+	if (KSessionMessageCodec::isCommand(message.type))
+	{
+		sendCommandResult(message.strRequestId, result);
+		if (message.type == EndSessionMessageType && result.status == ProtocolHandlerSucceeded)
+		{
+			finishSession(RemoteStopSessionEndReason,
+				message.strReason,
+				m_sessionStateMachine.shouldKeepListening(),
+				false,
+				m_sessionStateMachine.role() == ControllerSessionRole);
+		}
+	}
 }
 
-void KSessionCoordinator::handleDeviceInfoRequestMessage(const KSessionMessage &)
+KProtocolHandlerResult KSessionCoordinator::handleDeviceInfoRequestMessage(
+	const KSessionMessage &)
 {
-	if (m_sessionStateMachine.role() == ControlledSessionRole)
-		sendDeviceInfoMessage();
+	if (m_sessionStateMachine.role() != ControlledSessionRole)
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerPermissionDenied,
+			QStringLiteral("Only controlled role can provide device information"));
+	}
+	sendDeviceInfoMessage();
+	return KProtocolHandlerResult::success();
 }
 
-void KSessionCoordinator::handleDeviceInfoMessage(const KSessionMessage &message)
+KProtocolHandlerResult KSessionCoordinator::handleDeviceInfoMessage(
+	const KSessionMessage &message)
 {
 	if (m_sessionStateMachine.role() != ControllerSessionRole)
-		return;
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerPermissionDenied,
+			QStringLiteral("Only controller role can receive device information"));
+	}
 	emit remoteDeviceInfoChanged(message.deviceInfo.strComputerName,
 		message.deviceInfo.strWallpaperMime,
 		message.deviceInfo.strWallpaperData,
 		message.deviceInfo.nScreenWidth,
 		message.deviceInfo.nScreenHeight);
+	return KProtocolHandlerResult::success();
 }
 
-void KSessionCoordinator::handleStartStreamingMessage(const KSessionMessage &)
+KProtocolHandlerResult KSessionCoordinator::handleStartStreamingMessage(
+	const KSessionMessage &message)
 {
 	if (!m_sessionStateMachine.canStartControlledStreaming())
-		return;
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerInvalidState,
+			QStringLiteral("Cannot start controlled streaming in the current state"));
+	}
+	if (message.bHasStreamConfig)
+	{
+		m_spRemotePeerTransport->setStreamConfig(message.streamConfig);
+		emit streamConfigChanged(message.streamConfig);
+	}
 	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 		QStringLiteral("emit"), QStringLiteral("startCaptureRequested"));
 	emit startCaptureRequested(m_sessionStateMachine.generation());
 	m_bCaptureActive = true;
 	m_sessionStateMachine.beginStreaming();
 	publishSessionState();
+	return KProtocolHandlerResult::success();
 }
 
-void KSessionCoordinator::handleStopStreamingMessage(const KSessionMessage &)
+KProtocolHandlerResult KSessionCoordinator::handleStopStreamingMessage(
+	const KSessionMessage &)
 {
 	if (m_sessionStateMachine.role() != ControlledSessionRole
 		|| m_sessionStateMachine.state() != StreamingSessionState)
 	{
-		return;
+		return KProtocolHandlerResult::failure(ProtocolHandlerInvalidState,
+			QStringLiteral("Cannot stop controlled streaming in the current state"));
 	}
 	m_sessionStateMachine.stopStreaming();
 	m_pInputInjector->releaseAllInputs();
@@ -1218,23 +1477,26 @@ void KSessionCoordinator::handleStopStreamingMessage(const KSessionMessage &)
 	emit stopCaptureRequested(m_sessionStateMachine.generation());
 	m_bCaptureActive = false;
 	publishSessionState();
+	return KProtocolHandlerResult::success();
 }
 
-void KSessionCoordinator::handleEndSessionMessage(const KSessionMessage &message)
+KProtocolHandlerResult KSessionCoordinator::handleEndSessionMessage(
+	const KSessionMessage &)
 {
-	finishSession(RemoteStopSessionEndReason,
-		message.strReason,
-		m_sessionStateMachine.shouldKeepListening(),
-		false,
-		m_sessionStateMachine.role() == ControllerSessionRole);
+	return KProtocolHandlerResult::success();
 }
 
-void KSessionCoordinator::handleStreamConfigMessage(const KSessionMessage &message)
+KProtocolHandlerResult KSessionCoordinator::handleStreamConfigMessage(
+	const KSessionMessage &message)
 {
 	if (m_sessionStateMachine.role() != ControlledSessionRole)
-		return;
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerPermissionDenied,
+			QStringLiteral("Only controlled role can apply stream configuration"));
+	}
 	m_spRemotePeerTransport->setStreamConfig(message.streamConfig);
 	emit streamConfigChanged(message.streamConfig);
+	return KProtocolHandlerResult::success();
 }
 
 void KSessionCoordinator::handleInputInjected(quint64 nSeq, qint64 nInjectedMs)

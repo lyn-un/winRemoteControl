@@ -22,6 +22,10 @@ QString KSessionErrorPresenter::userMessage(const KSessionError &error)
 		return QStringLiteral("网络恢复失败，可以重新连接");
 	if (error.code == InputBackpressureOverflowSessionErrorCode)
 		return QStringLiteral("网络拥塞过重，已安全停止输入");
+	if (error.code == CommandTimeoutSessionErrorCode)
+		return QStringLiteral("远端未确认控制命令，会话已安全停止");
+	if (error.code == CommandQueueOverflowSessionErrorCode)
+		return QStringLiteral("控制命令队列已满，会话已安全停止");
 	if (error.code == CaptureFailedSessionErrorCode)
 		return QStringLiteral("屏幕采集失败");
 	if (error.code == InvalidArgumentSessionErrorCode)

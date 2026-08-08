@@ -10,10 +10,12 @@
 #include <QtCore/QDebug>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QThread>
+#include <QtCore/QUuid>
 #include <QtNetwork/QHostAddress>
 #include <QtNetwork/QTcpServer>
 #include <QtNetwork/QTcpSocket>
 
+#include <algorithm>
 #include <memory>
 #include <iostream>
 #include <functional>
@@ -128,10 +130,12 @@ namespace
 			++nSentClipboardCount;
 		}
 
-		void sendSessionMessage(const KSessionMessage &message) override
+		bool sendSessionMessage(const KSessionMessage &message) override
 		{
 			lastSentSessionMessage = message;
+			sentSessionMessages.append(message);
 			++nSentSessionCount;
+			return bSessionSendSucceeds;
 		}
 
 		void setStreamConfig(const KStreamConfig &config) override
@@ -162,7 +166,13 @@ namespace
 
 		void deliverSessionMessage(const KSessionMessage &message)
 		{
-			emit sessionMessageReceived(m_nGeneration, message);
+			KSessionMessage delivered = message;
+			if (KSessionMessageCodec::isCommand(delivered.type)
+				&& delivered.strRequestId.isEmpty())
+			{
+				delivered.strRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+			}
+			emit sessionMessageReceived(m_nGeneration, delivered);
 		}
 
 		void deliverDefaultCapabilities()
@@ -204,6 +214,7 @@ namespace
 
 		KSessionRole initializedRole = ControllerSessionRole;
 		KSessionMessage lastSentSessionMessage;
+		QVector<KSessionMessage> sentSessionMessages;
 		KInputMessage lastSentInputMessage;
 		KClipboardMessage lastSentClipboardMessage;
 		KVideoFrame lastVideoFrame;
@@ -219,6 +230,7 @@ namespace
 		int nSentClipboardCount = 0;
 		int nSentSessionCount = 0;
 		int nStreamConfigCount = 0;
+		bool bSessionSendSucceeds = true;
 	};
 
 	quint16 reserveLocalPort()
@@ -326,9 +338,14 @@ namespace
 		KSessionMessage deviceInfoRequest;
 		deviceInfoRequest.type = DeviceInfoRequestSessionMessageType;
 		pTransport->deliverSessionMessage(deviceInfoRequest);
-		check(pTransport->lastSentSessionMessage.type == DeviceInfoSessionMessageType,
+		const auto deviceInfoIterator = std::find_if(
+			pTransport->sentSessionMessages.cbegin(), pTransport->sentSessionMessages.cend(),
+			[](const KSessionMessage &message)
+			{ return message.type == DeviceInfoSessionMessageType; });
+		check(deviceInfoIterator != pTransport->sentSessionMessages.cend(),
 			QStringLiteral("device info request is routed through transport port"));
-		check(pTransport->lastSentSessionMessage.deviceInfo.strComputerName
+		check(deviceInfoIterator != pTransport->sentSessionMessages.cend()
+				&& deviceInfoIterator->deviceInfo.strComputerName
 				== QStringLiteral("fake-controlled-host"),
 			QStringLiteral("session uses injected device provider"));
 

@@ -356,7 +356,7 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 		[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
 		{ return decodeSessionMessage(envelope); });
 	for (KSessionMessageType type : { CapabilitiesSessionMessageType,
-		CapabilityRejectedSessionMessageType })
+		CapabilityRejectedSessionMessageType, CommandResultSessionMessageType })
 	{
 		m_protocolRouter.registerHandler(SessionProtocolChannel,
 			KSessionMessageCodec::typeName(type), allowMessage,
@@ -398,6 +398,8 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 			handleProtocolReject(QStringLiteral("session"), nMessageBytes,
 				strReason, &m_nInvalidSessionMessages);
 		});
+	connect(m_pSessionDataChannel, &KWebRtcDataChannel::lowWatermarkReached,
+		this, &KWebRtcPeer::flushSessionQueue);
 	connect(m_pClipboardDataChannel, &KWebRtcDataChannel::openChanged,
 		this, &KWebRtcPeer::handleClipboardChannelChanged);
 	connect(m_pClipboardDataChannel, &KWebRtcDataChannel::textMessageReceived,
@@ -668,9 +670,43 @@ void KWebRtcPeer::flushClipboardQueue()
 	}
 }
 
-void KWebRtcPeer::sendSessionMessage(const KSessionMessage &message)
+void KWebRtcPeer::flushSessionQueue()
 {
-	m_pSessionDataChannel->sendText(KSessionMessageCodec::encode(message));
+	while (m_pSessionDataChannel->isOpen()
+		&& !m_pSessionDataChannel->isBackpressured()
+		&& !m_sessionSendQueue.isEmpty())
+	{
+		KOutboundMessage message;
+		if (!m_sessionSendQueue.takeFirst(&message))
+			return;
+		if (!m_pSessionDataChannel->sendText(message.strPayload))
+		{
+			m_sessionSendQueue.prepend(message);
+			return;
+		}
+	}
+}
+
+bool KWebRtcPeer::sendSessionMessage(const KSessionMessage &message)
+{
+	const QString strPayload = KSessionMessageCodec::encode(message);
+	if (!m_pSessionDataChannel->isOpen())
+		return false;
+	if (!m_pSessionDataChannel->isBackpressured()
+		&& m_sessionSendQueue.isEmpty())
+	{
+		return m_pSessionDataChannel->sendText(strPayload);
+	}
+
+	const KOutboundEnqueueResult result = m_sessionSendQueue.enqueue({
+		strPayload, KSessionMessageCodec::typeName(message.type), true });
+	if (result == OverflowOutboundMessage)
+	{
+		emit transportError(m_nGeneration.load(),
+			QStringLiteral("Session command queue overflow"));
+		return false;
+	}
+	return true;
 }
 
 void KWebRtcPeer::setStreamConfig(const KStreamConfig &config)
@@ -975,6 +1011,10 @@ void KWebRtcPeer::handleInputChannelChanged(bool bOpen)
 void KWebRtcPeer::handleSessionChannelChanged(bool bOpen)
 {
 	emit sessionChannelChanged(m_nGeneration.load(), bOpen);
+	if (bOpen)
+		flushSessionQueue();
+	else
+		m_sessionSendQueue.clear();
 	emit stateChanged(m_nGeneration.load(), bOpen
 		? QStringLiteral("SessionChannelOpen")
 		: QStringLiteral("SessionChannelClosed"));

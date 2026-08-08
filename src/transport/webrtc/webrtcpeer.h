@@ -54,7 +54,7 @@ public:
 	void pushVideoFrame(const KVideoFrame &frame) override;
 	void sendInputMessage(const KInputMessage &message) override;
 	void sendClipboardMessage(const KClipboardMessage &message) override;
-	void sendSessionMessage(const KSessionMessage &message) override;
+	bool sendSessionMessage(const KSessionMessage &message) override;
 	void setStreamConfig(const KStreamConfig &config) override;
 
 private:
@@ -112,6 +112,7 @@ private:
 	void resetStatsHistory();
 	void sendLatencyPing();
 	void flushInputQueue();
+	void flushSessionQueue();
 	void flushClipboardQueue();
 	bool enqueueInputMessage(const QString &strPayload, bool bMouseMove);
 	static QString rtcErrorMessage(const QString &strPrefix, const webrtc::RTCError &error);
@@ -142,6 +143,7 @@ private:
 	std::atomic_int m_nInvalidClipboardMessages = 0;
 	std::atomic_bool m_bProtocolTerminationPending = false;
 	KOutboundMessageQueue m_inputSendQueue { 256, 64 * 1024 };
+	KOutboundMessageQueue m_sessionSendQueue { 32, 512 * 1024 };
 	KOutboundMessageQueue m_clipboardSendQueue { 8, 1024 * 1024 };
 	KProtocolRouter m_protocolRouter;
 

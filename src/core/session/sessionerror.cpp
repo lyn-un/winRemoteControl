@@ -25,7 +25,8 @@ QString KSessionError::codeName(KSessionErrorCode code)
 		"connection_timeout", "connection_lost", "remote_busy", "approval_rejected",
 		"approval_timeout", "incompatible_protocol", "malformed_message", "message_too_large",
 		"protocol_violation", "invalid_state", "initialization_failed", "send_failed",
-		"channel_closed", "recovery_failed", "capture_failed", "input_backpressure_overflow"
+		"channel_closed", "recovery_failed", "capture_failed", "input_backpressure_overflow",
+		"command_timeout", "command_queue_overflow"
 	};
 	const int nIndex = static_cast<int>(code);
 	return nIndex >= 0 && nIndex < static_cast<int>(std::size(names))

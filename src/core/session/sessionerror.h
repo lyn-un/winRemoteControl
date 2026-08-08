@@ -38,7 +38,9 @@ enum KSessionErrorCode
 	ChannelClosedSessionErrorCode = 16,
 	RecoveryFailedSessionErrorCode = 17,
 	CaptureFailedSessionErrorCode = 18,
-	InputBackpressureOverflowSessionErrorCode = 19
+	InputBackpressureOverflowSessionErrorCode = 19,
+	CommandTimeoutSessionErrorCode = 20,
+	CommandQueueOverflowSessionErrorCode = 21
 };
 
 enum KSessionErrorStage

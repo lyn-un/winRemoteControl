@@ -17,6 +17,7 @@
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QHash>
 #include <QtCore/QObject>
+#include <QtCore/QQueue>
 #include <QtCore/QString>
 
 #include <memory>
@@ -71,11 +72,27 @@ private:
 		ConnectPendingRequest,
 		RolePendingRequest
 	};
+	struct KPendingSessionCommand
+	{
+		KSessionMessage message;
+		qint64 nSentMs = 0;
+		int nAttempts = 0;
+		quint64 nGeneration = 0;
+	};
 	bool initializePeer(KSessionRole role, QString *pErrorMessage);
 	void wirePeer();
 	void initializeProtocolRoutes();
 	void initializeSessionHandlers();
-	void sendSessionMessage(const KSessionMessage &message);
+	QString sendSessionMessage(KSessionMessage message);
+	bool transmitSessionMessage(const KSessionMessage &message);
+	void handleSessionCommandTimer();
+	void handleCommandResultMessage(const KSessionMessage &message);
+	void sendCommandResult(const QString &strRequestId,
+		const KProtocolHandlerResult &handlerResult);
+	void rememberCommandResult(const KSessionMessage &message);
+	void clearSessionCommands();
+	void continueStoppingTeardown();
+	KStreamConfig constrainedStreamConfig(const KStreamConfig &config) const;
 	void finishSession(KSessionEndReason reason,
 		const QString &strDetail,
 		bool bKeepListening,
@@ -95,14 +112,14 @@ private:
 	void handleClipboardChannelChanged(bool bOpen);
 	void handleSessionChannelChanged(bool bOpen);
 	void handleSessionMessage(const KSessionMessage &message);
-	void handleDeviceInfoRequestMessage(const KSessionMessage &message);
-	void handleDeviceInfoMessage(const KSessionMessage &message);
-	void handleStartStreamingMessage(const KSessionMessage &message);
-	void handleStopStreamingMessage(const KSessionMessage &message);
-	void handleEndSessionMessage(const KSessionMessage &message);
-	void handleStreamConfigMessage(const KSessionMessage &message);
-	void handleCapabilitiesMessage(const KSessionMessage &message);
-	void handleCapabilityRejectedMessage(const KSessionMessage &message);
+	KProtocolHandlerResult handleDeviceInfoRequestMessage(const KSessionMessage &message);
+	KProtocolHandlerResult handleDeviceInfoMessage(const KSessionMessage &message);
+	KProtocolHandlerResult handleStartStreamingMessage(const KSessionMessage &message);
+	KProtocolHandlerResult handleStopStreamingMessage(const KSessionMessage &message);
+	KProtocolHandlerResult handleEndSessionMessage(const KSessionMessage &message);
+	KProtocolHandlerResult handleStreamConfigMessage(const KSessionMessage &message);
+	KProtocolHandlerResult handleCapabilitiesMessage(const KSessionMessage &message);
+	KProtocolHandlerResult handleCapabilityRejectedMessage(const KSessionMessage &message);
 	void handleCapabilityTimeout();
 	void completeCapabilityNegotiation(const KNegotiatedCapabilities &capabilities);
 	KSessionCapabilities localCapabilities() const;
@@ -137,7 +154,11 @@ private:
 
 	KSessionStateMachine m_sessionStateMachine;
 	KProtocolRouter m_protocolRouter;
-	QHash<int, std::function<void(const KSessionMessage &)>> m_sessionHandlers;
+	QHash<int, std::function<KProtocolHandlerResult(const KSessionMessage &)>> m_sessionHandlers;
+	QHash<QString, KPendingSessionCommand> m_pendingSessionCommands;
+	QHash<QString, KSessionMessage> m_recentCommandResults;
+	QQueue<QString> m_recentCommandResultIds;
+	QElapsedTimer m_sessionCommandClock;
 	bool m_bDeviceInfoRequested = false;
 	bool m_bInputChannelOpen = false;
 	bool m_bClipboardChannelOpen = false;
@@ -168,6 +189,7 @@ private:
 	QTimer *m_pApprovalTimer = nullptr;
 	QTimer *m_pStopWatchdogTimer = nullptr;
 	QTimer *m_pCapabilityTimer = nullptr;
+	QTimer *m_pSessionCommandTimer = nullptr;
 	bool m_bCaptureShutdownPending = false;
 	bool m_bPeerShutdownPending = false;
 	bool m_bStopKeepListening = false;
@@ -178,6 +200,8 @@ private:
 	bool m_bCapabilitiesReceived = false;
 	QString m_strStopReason;
 	quint64 m_nStoppingGeneration = 0;
+	QString m_strPendingEndCommandId;
+	bool m_bStopTeardownStarted = false;
 	PendingRequestType m_pendingRequestType = NoPendingRequest;
 	QString m_strPendingHost;
 	quint16 m_nPendingPort = 0;

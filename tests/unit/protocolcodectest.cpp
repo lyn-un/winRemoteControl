@@ -11,6 +11,8 @@
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 
+#include <iostream>
+
 namespace
 {
 	int g_nFailureCount = 0;
@@ -21,6 +23,7 @@ namespace
 			return;
 
 		qCritical().noquote() << QStringLiteral("FAILED: %1").arg(strDescription);
+		std::cerr << "FAILED: " << strDescription.toStdString() << '\n';
 		++g_nFailureCount;
 	}
 
@@ -157,15 +160,15 @@ namespace
 	void testLegacyInputWireCompatibility()
 	{
 		const QString strLegacyMouse = QStringLiteral(
-			"{\"type\":\"mouseButton\",\"button\":\"left\",\"pressed\":true,"
+			"{\"version\":1,\"type\":\"mouseButton\",\"button\":\"left\",\"pressed\":true,"
 			"\"x\":11,\"y\":22,\"seq\":\"7\",\"trace\":true}");
 		KInputMessage mouseMessage;
 		check(KInputMessageCodec::decode(strLegacyMouse, &mouseMessage, nullptr),
-			QStringLiteral("legacy mouse JSON decodes"));
+			QStringLiteral("flat mouse JSON decodes"));
 		check(mouseMessage.type == MouseButtonInputMessageType
 			&& mouseMessage.mouseButton == LeftRemoteMouseButton
 			&& mouseMessage.nSequence == 7,
-			QStringLiteral("legacy mouse fields retain their meaning"));
+			QStringLiteral("flat mouse fields retain their meaning"));
 
 		KInputMessage keyMessage;
 		keyMessage.type = KeyInputMessageType;
@@ -193,6 +196,7 @@ namespace
 		{
 			KSessionMessage source;
 			source.type = type;
+			source.strRequestId = QStringLiteral("12345678-1234-1234-1234-1234567890ab");
 			KSessionMessage decoded;
 			check(KSessionMessageCodec::decode(KSessionMessageCodec::encode(source), &decoded, nullptr),
 				QStringLiteral("session control message decodes"));
@@ -225,6 +229,7 @@ namespace
 	{
 		KSessionMessage endSource;
 		endSource.type = EndSessionMessageType;
+		endSource.strRequestId = QStringLiteral("12345678-1234-1234-1234-1234567890ab");
 		endSource.strReason = QStringLiteral("test_stop");
 		KSessionMessage endDecoded;
 		check(KSessionMessageCodec::decode(KSessionMessageCodec::encode(endSource), &endDecoded, nullptr),
@@ -234,6 +239,7 @@ namespace
 
 		KSessionMessage configSource;
 		configSource.type = StreamConfigSessionMessageType;
+		configSource.strRequestId = QStringLiteral("22345678-1234-1234-1234-1234567890ab");
 		configSource.streamConfig.nFps = 60;
 		configSource.streamConfig.nWidth = 1600;
 		configSource.streamConfig.nHeight = 900;
@@ -246,6 +252,32 @@ namespace
 			&& configDecoded.streamConfig.nHeight == 900
 			&& configDecoded.streamConfig.nBitrateKbps == 5000,
 			QStringLiteral("stream config round-trips"));
+
+		KSessionMessage resultSource;
+		resultSource.type = CommandResultSessionMessageType;
+		resultSource.strRequestId = configSource.strRequestId;
+		resultSource.bSuccess = false;
+		resultSource.strErrorCode = QStringLiteral("invalid_state");
+		KSessionMessage resultDecoded;
+		check(KSessionMessageCodec::decode(KSessionMessageCodec::encode(resultSource),
+			&resultDecoded, nullptr)
+			&& resultDecoded.type == CommandResultSessionMessageType
+			&& resultDecoded.strRequestId == resultSource.strRequestId
+			&& !resultDecoded.bSuccess
+			&& resultDecoded.strErrorCode == resultSource.strErrorCode,
+			QStringLiteral("session command result round-trips"));
+
+		KSessionMessage startSource;
+		startSource.type = StartStreamingSessionMessageType;
+		startSource.strRequestId = QStringLiteral("32345678-1234-1234-1234-1234567890ab");
+		startSource.bHasStreamConfig = true;
+		startSource.streamConfig = configSource.streamConfig;
+		KSessionMessage startDecoded;
+		check(KSessionMessageCodec::decode(KSessionMessageCodec::encode(startSource),
+			&startDecoded, nullptr)
+			&& startDecoded.bHasStreamConfig
+			&& startDecoded.streamConfig.nWidth == configSource.streamConfig.nWidth,
+			QStringLiteral("atomic start stream config round-trips"));
 	}
 
 	void testInvalidSessionMessages()
@@ -284,19 +316,20 @@ namespace
 	void testLegacySessionWireCompatibility()
 	{
 		const QString strLegacyDeviceInfo = QStringLiteral(
-			"{\"type\":\"deviceInfo\",\"computerName\":\"legacy-host\","
+			"{\"version\":1,\"type\":\"deviceInfo\",\"computerName\":\"legacy-host\","
 			"\"screenWidth\":1366,\"screenHeight\":768,"
 			"\"wallpaperMime\":\"image/jpeg\",\"wallpaperData\":\"YWJj\"}");
 		KSessionMessage deviceMessage;
 		check(KSessionMessageCodec::decode(strLegacyDeviceInfo, &deviceMessage, nullptr),
-			QStringLiteral("legacy device info JSON decodes"));
+			QStringLiteral("flat device info JSON decodes"));
 		check(deviceMessage.type == DeviceInfoSessionMessageType
 			&& deviceMessage.deviceInfo.strComputerName == QStringLiteral("legacy-host")
 			&& deviceMessage.deviceInfo.nScreenWidth == 1366,
-			QStringLiteral("legacy device info fields retain their meaning"));
+			QStringLiteral("flat device info fields retain their meaning"));
 
 		KSessionMessage configMessage;
 		configMessage.type = StreamConfigSessionMessageType;
+		configMessage.strRequestId = QStringLiteral("12345678-1234-1234-1234-1234567890ab");
 		configMessage.streamConfig.nFps = 30;
 		configMessage.streamConfig.nWidth = 1280;
 		configMessage.streamConfig.nHeight = 720;
