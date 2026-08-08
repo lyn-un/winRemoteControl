@@ -11,7 +11,7 @@ class IKCaptureFrameSink
 public:
 	virtual ~IKCaptureFrameSink() = default;
 	virtual bool initialize(QString *pErrorMessage) = 0;
-	virtual bool processFrame(KCaptureFrame frame, QString *pErrorMessage) = 0;
+	virtual bool processFrame(KCaptureFrame &frame, QString *pErrorMessage) = 0;
 	virtual void handleCaptureTimeout() = 0;
 	virtual void shutdown() = 0;
 	virtual void setStreamConfig(const KStreamConfig &config) = 0;

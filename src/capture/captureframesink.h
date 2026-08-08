@@ -10,9 +10,11 @@
 
 #include <memory>
 #include <mutex>
+#include <vector>
 
 class KH264Decoder;
 class KH264Encoder;
+struct SwsContext;
 
 class KCaptureFrameSink : public QObject, public IKCaptureFrameSink
 {
@@ -29,7 +31,7 @@ public:
 	~KCaptureFrameSink() override;
 
 	bool initialize(QString *pErrorMessage) override;
-	bool processFrame(KCaptureFrame frame, QString *pErrorMessage) override;
+	bool processFrame(KCaptureFrame &frame, QString *pErrorMessage) override;
 	void handleCaptureTimeout() override;
 	void shutdown() override;
 	void setStreamConfig(const KStreamConfig &config) override;
@@ -41,15 +43,27 @@ signals:
 	void frameReady(int nWidth, int nHeight, quint64 nFrameIndex, qint64 nTimestampMs);
 
 private:
+	enum FrameConversionResult
+	{
+		ConvertedFrameConversionResult,
+		DroppedFrameConversionResult,
+		FailedFrameConversionResult
+	};
+
 	KStreamConfig streamConfig() const;
 	void inputTraceState(quint64 *pSeq, qint64 *pInjectedMs) const;
-	bool processRemoteFrame(KCaptureFrame frame, const KStreamConfig &config, QString *pErrorMessage);
+	bool processRemoteFrame(KCaptureFrame &frame,
+		const KStreamConfig &config,
+		QString *pErrorMessage);
 	bool processLocalPreviewFrame(KCaptureFrame &frame, QString *pErrorMessage);
-	static bool convertBgraToI420(KCaptureFrame &captureFrame,
+	FrameConversionResult convertBgraToI420(KCaptureFrame &captureFrame,
 		const KStreamConfig &config,
 		quint64 nLastInputSeq,
 		qint64 nLastInputAgeMs,
 		KVideoFrame *pVideoFrame);
+	std::shared_ptr<KI420FrameBuffer> acquireFrameBuffer(int nWidth, int nHeight);
+	static void resizeFrameBuffer(KI420FrameBuffer *pBuffer, int nWidth, int nHeight);
+	qint64 framePoolBytes() const;
 	static KStreamConfig normalizeStreamConfig(const KStreamConfig &config);
 
 	SinkMode m_mode = LocalPreviewSinkMode;
@@ -65,6 +79,9 @@ private:
 	QElapsedTimer m_initialFrameRetryTimer;
 	KVideoFrame m_lastVideoFrame;
 	int m_nInitialFrameRetryCount = 0;
+	SwsContext *m_pSwsContext = nullptr;
+	std::vector<std::shared_ptr<KI420FrameBuffer>> m_vecFrameBufferPool;
+	quint64 m_nFramePoolDrops = 0;
 };
 
 #endif // _WINREMOTECONTROL_CAPTUREFRAMESINK_H_

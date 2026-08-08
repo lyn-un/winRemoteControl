@@ -18,12 +18,17 @@ namespace
 
 		CaptureResult captureNextFrame(KCaptureFrame *pFrame, QString *pErrorMessage) override
 		{
-			if (nCaptureCalls++ == 0)
+			if (nCaptureCalls < 2)
 			{
+				++nCaptureCalls;
 				pFrame->nWidth = 2;
 				pFrame->nHeight = 2;
-				pFrame->nFrameIndex = 1;
+				pFrame->nFrameIndex = static_cast<quint64>(nCaptureCalls);
 				pFrame->vecBgraBuffer.resize(16);
+				if (pFirstBuffer == nullptr)
+					pFirstBuffer = pFrame->vecBgraBuffer.data();
+				else
+					bBufferReused = pFirstBuffer == pFrame->vecBgraBuffer.data();
 				return CapturedCaptureResult;
 			}
 			if (pErrorMessage != nullptr)
@@ -38,6 +43,8 @@ namespace
 
 		bool bInitialized = false;
 		bool bShutdown = false;
+		bool bBufferReused = false;
+		unsigned char *pFirstBuffer = nullptr;
 		int nCaptureCalls = 0;
 	};
 
@@ -50,7 +57,7 @@ namespace
 			return true;
 		}
 
-		bool processFrame(KCaptureFrame frame, QString *) override
+		bool processFrame(KCaptureFrame &frame, QString *) override
 		{
 			++nProcessedFrames;
 			nLastFrameIndex = frame.nFrameIndex;
@@ -101,7 +108,41 @@ int main(int argc, char *argv[])
 	bSuccess &= require(pSource->bShutdown, "capture source was not shut down");
 	bSuccess &= require(pSink->bInitialized, "capture sink was not initialized");
 	bSuccess &= require(pSink->bShutdown, "capture sink was not shut down");
-	bSuccess &= require(pSink->nProcessedFrames == 1, "captured frame was not routed to sink");
-	bSuccess &= require(pSink->nLastFrameIndex == 1, "routed frame metadata changed");
+	bSuccess &= require(pSink->nProcessedFrames == 2, "captured frames were not routed to sink");
+	bSuccess &= require(pSink->nLastFrameIndex == 2, "routed frame metadata changed");
+	bSuccess &= require(pSource->bBufferReused,
+		"capture loop reuses the BGRA allocation between equal-sized frames");
+
+	KCaptureFrameSink videoSink(KCaptureFrameSink::RemoteVideoSinkMode);
+	std::vector<std::shared_ptr<KI420FrameBuffer>> vecObservedBuffers;
+	QObject::connect(&videoSink, &KCaptureFrameSink::videoFrameReady,
+		[&](const KVideoFrame &frame) { vecObservedBuffers.push_back(frame.spBuffer); });
+	QString strError;
+	bSuccess &= require(videoSink.initialize(&strError),
+		"remote video sink initializes without local codecs");
+	KCaptureFrame videoFrame;
+	videoFrame.nWidth = 4;
+	videoFrame.nHeight = 4;
+	videoFrame.vecBgraBuffer.resize(4 * 4 * 4);
+	for (quint64 nFrameIndex = 1; nFrameIndex <= 4; ++nFrameIndex)
+	{
+		videoFrame.nFrameIndex = nFrameIndex;
+		bSuccess &= require(videoSink.processFrame(videoFrame, &strError),
+			"I420 conversion succeeds while pool capacity is available");
+	}
+	bSuccess &= require(vecObservedBuffers.size() == 4,
+		"four in-flight frame buffers fill the bounded pool");
+	videoFrame.nFrameIndex = 5;
+	bSuccess &= require(videoSink.processFrame(videoFrame, &strError)
+		&& vecObservedBuffers.size() == 4,
+		"pool exhaustion drops a frame without stopping capture");
+	KI420FrameBuffer *pFirstBuffer = vecObservedBuffers.front().get();
+	vecObservedBuffers.front().reset();
+	videoFrame.nFrameIndex = 6;
+	bSuccess &= require(videoSink.processFrame(videoFrame, &strError)
+		&& vecObservedBuffers.size() == 5
+		&& vecObservedBuffers.back().get() == pFirstBuffer,
+		"a released I420 buffer is reused instead of allocated again");
+	videoSink.shutdown();
 	return bSuccess ? 0 : 1;
 }

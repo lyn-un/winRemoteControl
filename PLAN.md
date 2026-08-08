@@ -500,16 +500,21 @@ WebView2/React 永远是展示层。
 
 ## 17. P2 架构与基础能力改造
 
-P2 已按四个独立变更完成：
+P2 已按独立变更完成：
 
 1. **采集解耦**：BGRA 采集帧和采集接口进入 core 媒体类型；DXGI Source、采集循环、远端 WebRTC FrameSink 与本地预览 Sink 分离。采集适配器不再依赖 WebRTC adapter，缩放与 I420 转换统一使用 FFmpeg `swscale`。
 2. **异步停止**：采集和 Peer 采用 generation 标识的请求式关闭；协调器等待两个组件完成后再结束会话，并用 3 秒 watchdog 记录未完成组件。GUI 线程不再无限等待工作线程，程序关闭也保留 Qt 事件循环直到清理完成。
 3. **能力协商**：Session DataChannel 打开后双方必须在 3 秒内交换协议、编解码器、通道、媒体上限、剪贴板和输入能力；H.264、video、session、input 为必需交集。无交集或旧客户端无响应时明确提示版本不兼容，不静默回退。
 4. **Windows 输入增强**：键盘消息支持扫描码、左右修饰键、扩展键和自动重复；增加 Unicode Text 注入，支持中文 IME commit 与 Emoji；鼠标增加中键和两个侧键；注入端对重复、倒序序号及重复按键状态进行幂等处理。
+5. **会话职责拆分**：`KSessionCoordinator` 只保留跨模块编排；能力交集、接入审批、可靠命令、停止聚合和 ICE 恢复分别由 `KCapabilityNegotiator`、`KAccessApprovalController`、`KSessionCommandDispatcher`、`KShutdownCoordinator` 和 `KRecoveryController` 负责。Session 业务状态仍只存于状态机，不在协作者中复制。
+6. **可移植构建入口**：Qt 路径不再写死，顶层提供 `WRC_BUILD_APP`、`WRC_BUILD_TESTS`、`WRC_ENABLE_WEBRTC`、`WRC_ENABLE_FFMPEG` 和 `WRC_ENABLE_WEBVIEW2`。`core-tests` Preset 可在没有 WebRTC、FFmpeg 和 WebView2 的环境中仅构建 protocol/core 及其测试，仓库 CI 使用同一入口。
+7. **视频内存路径**：采集循环复用同尺寸 BGRA 分配；`SwsContext` 跨帧缓存并在尺寸变化时更新；I420 使用最多四块的有界池，池耗尽时丢弃当前帧而不阻塞或扩容；WebRTC 通过外部 I420 wrapper 持有共享 buffer，取消进入视频源前的 Y/U/V plane copy。
+
+视频优化使用同一套可复现实验口径：在相同分辨率、帧率、画面运动和会话时长下以 `--latency-trace` 运行，比较 `capture_pipeline_stage`、`frame_converted`、`webrtc_frame_delivered`、`source_frame_coalesced`、`video_buffer_pool_drop` 和 `input_roundtrip_stats`。日志分别提供采集/处理/转换/push 耗时、BGRA 容量、I420 池字节数和丢帧数；进程 CPU 与工作集峰值由同一次运行的系统性能计数器记录。不得用不同画面负载的两次运行直接比较。
 
 本轮明确延期：
 
 - 多显示器切换、虚拟桌面坐标和负坐标映射。
 - H.265/AV1、音频和文件传输等新能力的实际实现。
 
-当前仍保持 H.264、三类既有 DataChannel、审批流程和单屏 DXGI 默认输出。自动化验证覆盖协议、采集管线、会话生命周期和输入注入；双机上的 IME、快速断开重连及应用退出仍应作为发布前手动回归项目。
+当前仍保持 H.264、现有 DataChannel 划分、审批流程和单屏 DXGI 默认输出。自动化验证覆盖协议、采集管线、会话生命周期和输入注入；双机上的 IME、快速断开重连、持续视频负载及应用退出仍应作为发布前手动回归项目。

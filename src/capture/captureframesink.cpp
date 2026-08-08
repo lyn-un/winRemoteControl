@@ -21,6 +21,7 @@ namespace
 	constexpr quint64 kVideoTraceFrameInterval = 30;
 	constexpr qint64 kInitialFrameRetryDurationMs = 1000;
 	constexpr int kInitialFrameRetryMaxCount = 10;
+	constexpr size_t kMaximumFramePoolSize = 4;
 }
 
 KCaptureFrameSink::KCaptureFrameSink(SinkMode mode, QObject *pParent)
@@ -50,11 +51,11 @@ bool KCaptureFrameSink::initialize(QString *pErrorMessage)
 	return true;
 }
 
-bool KCaptureFrameSink::processFrame(KCaptureFrame frame, QString *pErrorMessage)
+bool KCaptureFrameSink::processFrame(KCaptureFrame &frame, QString *pErrorMessage)
 {
 	const KStreamConfig currentConfig = streamConfig();
 	const bool bSuccess = m_mode == RemoteVideoSinkMode
-		? processRemoteFrame(std::move(frame), currentConfig, pErrorMessage)
+		? processRemoteFrame(frame, currentConfig, pErrorMessage)
 		: processLocalPreviewFrame(frame, pErrorMessage);
 	return bSuccess;
 }
@@ -94,6 +95,11 @@ void KCaptureFrameSink::shutdown()
 	m_lastVideoFrame = KVideoFrame();
 	m_initialFrameRetryTimer.invalidate();
 	m_nInitialFrameRetryCount = 0;
+	if (m_pSwsContext != nullptr)
+		sws_freeContext(m_pSwsContext);
+	m_pSwsContext = nullptr;
+	m_vecFrameBufferPool.clear();
+	m_nFramePoolDrops = 0;
 }
 
 void KCaptureFrameSink::setStreamConfig(const KStreamConfig &config)
@@ -124,7 +130,7 @@ void KCaptureFrameSink::inputTraceState(quint64 *pSeq, qint64 *pInjectedMs) cons
 		*pInjectedMs = m_nLastInputInjectedMs;
 }
 
-bool KCaptureFrameSink::processRemoteFrame(KCaptureFrame frame,
+bool KCaptureFrameSink::processRemoteFrame(KCaptureFrame &frame,
 	const KStreamConfig &config,
 	QString *pErrorMessage)
 {
@@ -146,7 +152,27 @@ bool KCaptureFrameSink::processRemoteFrame(KCaptureFrame frame,
 		? frame.nTimestampMs - nLastInputInjectedMs : -1;
 
 	KVideoFrame videoFrame;
-	if (!convertBgraToI420(frame, config, nLastInputSeq, nLastInputAgeMs, &videoFrame))
+	QElapsedTimer conversionTimer;
+	conversionTimer.start();
+	const FrameConversionResult conversionResult = convertBgraToI420(frame,
+		config, nLastInputSeq, nLastInputAgeMs, &videoFrame);
+	const qint64 nConversionUs = conversionTimer.nsecsElapsed() / 1000;
+	if (conversionResult == DroppedFrameConversionResult)
+	{
+		if (m_nFramePoolDrops == 1
+			|| m_nFramePoolDrops % kVideoTraceFrameInterval == 0)
+		{
+			KLatencyTraceLogger::write(QStringLiteral("controlled"),
+				QStringLiteral("video_buffer_pool_drop"),
+				QStringLiteral("frame=%1 dropped=%2 buffers=%3 bytes=%4")
+					.arg(frame.nFrameIndex)
+					.arg(m_nFramePoolDrops)
+					.arg(m_vecFrameBufferPool.size())
+					.arg(framePoolBytes()));
+		}
+		return true;
+	}
+	if (conversionResult == FailedFrameConversionResult)
 	{
 		if (pErrorMessage != nullptr)
 			*pErrorMessage = QStringLiteral("Convert BGRA to I420 failed");
@@ -161,11 +187,16 @@ bool KCaptureFrameSink::processRemoteFrame(KCaptureFrame frame,
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controlled"),
 			QStringLiteral("frame_converted"),
-			QStringLiteral("frame=%1 width=%2 height=%3 timestampMs=%4")
+			QStringLiteral("frame=%1 width=%2 height=%3 timestampMs=%4 convertUs=%5 "
+				"poolBuffers=%6 poolBytes=%7 poolDrops=%8")
 				.arg(videoFrame.nFrameIndex)
 				.arg(videoFrame.nWidth)
 				.arg(videoFrame.nHeight)
-				.arg(videoFrame.nTimestampMs));
+				.arg(videoFrame.nTimestampMs)
+				.arg(nConversionUs)
+				.arg(m_vecFrameBufferPool.size())
+				.arg(framePoolBytes())
+				.arg(m_nFramePoolDrops));
 	}
 
 	emit videoFrameReady(videoFrame);
@@ -222,7 +253,8 @@ bool KCaptureFrameSink::processLocalPreviewFrame(KCaptureFrame &frame, QString *
 	return true;
 }
 
-bool KCaptureFrameSink::convertBgraToI420(KCaptureFrame &captureFrame,
+KCaptureFrameSink::FrameConversionResult KCaptureFrameSink::convertBgraToI420(
+	KCaptureFrame &captureFrame,
 	const KStreamConfig &config,
 	quint64 nLastInputSeq,
 	qint64 nLastInputAgeMs,
@@ -231,7 +263,7 @@ bool KCaptureFrameSink::convertBgraToI420(KCaptureFrame &captureFrame,
 	if (pVideoFrame == nullptr || captureFrame.nWidth < 2 || captureFrame.nHeight < 2
 		|| captureFrame.vecBgraBuffer.empty())
 	{
-		return false;
+		return FailedFrameConversionResult;
 	}
 
 	int nWidth = captureFrame.nWidth & ~1;
@@ -263,14 +295,15 @@ bool KCaptureFrameSink::convertBgraToI420(KCaptureFrame &captureFrame,
 	pVideoFrame->nTimestampMs = captureFrame.nTimestampMs;
 	pVideoFrame->nLastInputSeq = nLastInputSeq;
 	pVideoFrame->nInputAgeMs = nLastInputAgeMs;
-	pVideoFrame->nStrideY = nWidth;
-	pVideoFrame->nStrideU = nWidth / 2;
-	pVideoFrame->nStrideV = nWidth / 2;
-	pVideoFrame->yPlane.resize(nWidth * nHeight);
-	pVideoFrame->uPlane.resize((nWidth / 2) * (nHeight / 2));
-	pVideoFrame->vPlane.resize((nWidth / 2) * (nHeight / 2));
+	pVideoFrame->spBuffer = acquireFrameBuffer(nWidth, nHeight);
+	if (pVideoFrame->spBuffer == nullptr)
+	{
+		++m_nFramePoolDrops;
+		return DroppedFrameConversionResult;
+	}
 
-	SwsContext *pSwsContext = sws_getContext(captureFrame.nWidth,
+	m_pSwsContext = sws_getCachedContext(m_pSwsContext,
+		captureFrame.nWidth,
 		captureFrame.nHeight,
 		AV_PIX_FMT_BGRA,
 		nWidth,
@@ -280,32 +313,92 @@ bool KCaptureFrameSink::convertBgraToI420(KCaptureFrame &captureFrame,
 		nullptr,
 		nullptr,
 		nullptr);
-	if (pSwsContext == nullptr)
-		return false;
+	if (m_pSwsContext == nullptr)
+		return FailedFrameConversionResult;
+
+	KI420FrameBuffer *pBuffer = pVideoFrame->spBuffer.get();
 
 	const uint8_t *pSourceData[] = { captureFrame.vecBgraBuffer.data(), nullptr, nullptr, nullptr };
 	const int nSourceStride[] = { captureFrame.nWidth * 4, 0, 0, 0 };
 	uint8_t *pDestinationData[] = {
-		reinterpret_cast<uint8_t *>(pVideoFrame->yPlane.data()),
-		reinterpret_cast<uint8_t *>(pVideoFrame->uPlane.data()),
-		reinterpret_cast<uint8_t *>(pVideoFrame->vPlane.data()),
+		reinterpret_cast<uint8_t *>(pBuffer->yPlane.data()),
+		reinterpret_cast<uint8_t *>(pBuffer->uPlane.data()),
+		reinterpret_cast<uint8_t *>(pBuffer->vPlane.data()),
 		nullptr
 	};
 	const int nDestinationStride[] = {
-		pVideoFrame->nStrideY,
-		pVideoFrame->nStrideU,
-		pVideoFrame->nStrideV,
+		pBuffer->nStrideY,
+		pBuffer->nStrideU,
+		pBuffer->nStrideV,
 		0
 	};
-	const int nScaledRows = sws_scale(pSwsContext,
+	const int nScaledRows = sws_scale(m_pSwsContext,
 		pSourceData,
 		nSourceStride,
 		0,
 		captureFrame.nHeight,
 		pDestinationData,
 		nDestinationStride);
-	sws_freeContext(pSwsContext);
-	return nScaledRows == nHeight;
+	return nScaledRows == nHeight
+		? ConvertedFrameConversionResult : FailedFrameConversionResult;
+}
+
+std::shared_ptr<KI420FrameBuffer> KCaptureFrameSink::acquireFrameBuffer(
+	int nWidth,
+	int nHeight)
+{
+	auto acquireReleasedBuffer = [this, nWidth, nHeight]()
+	{
+		for (const std::shared_ptr<KI420FrameBuffer> &spBuffer : m_vecFrameBufferPool)
+		{
+			if (spBuffer.use_count() != 1)
+				continue;
+			resizeFrameBuffer(spBuffer.get(), nWidth, nHeight);
+			return spBuffer;
+		}
+		return std::shared_ptr<KI420FrameBuffer>();
+	};
+	if (std::shared_ptr<KI420FrameBuffer> spBuffer = acquireReleasedBuffer())
+		return spBuffer;
+
+	m_lastVideoFrame = KVideoFrame();
+	if (std::shared_ptr<KI420FrameBuffer> spBuffer = acquireReleasedBuffer())
+		return spBuffer;
+	if (m_vecFrameBufferPool.size() >= kMaximumFramePoolSize)
+		return {};
+
+	auto spBuffer = std::make_shared<KI420FrameBuffer>();
+	resizeFrameBuffer(spBuffer.get(), nWidth, nHeight);
+	m_vecFrameBufferPool.push_back(spBuffer);
+	return spBuffer;
+}
+
+void KCaptureFrameSink::resizeFrameBuffer(KI420FrameBuffer *pBuffer,
+	int nWidth,
+	int nHeight)
+{
+	if (pBuffer == nullptr)
+		return;
+	pBuffer->nWidth = nWidth;
+	pBuffer->nHeight = nHeight;
+	pBuffer->nStrideY = nWidth;
+	pBuffer->nStrideU = nWidth / 2;
+	pBuffer->nStrideV = nWidth / 2;
+	pBuffer->yPlane.resize(nWidth * nHeight);
+	pBuffer->uPlane.resize((nWidth / 2) * (nHeight / 2));
+	pBuffer->vPlane.resize((nWidth / 2) * (nHeight / 2));
+}
+
+qint64 KCaptureFrameSink::framePoolBytes() const
+{
+	qint64 nBytes = 0;
+	for (const std::shared_ptr<KI420FrameBuffer> &spBuffer : m_vecFrameBufferPool)
+	{
+		nBytes += spBuffer->yPlane.capacity();
+		nBytes += spBuffer->uPlane.capacity();
+		nBytes += spBuffer->vPlane.capacity();
+	}
+	return nBytes;
 }
 
 KStreamConfig KCaptureFrameSink::normalizeStreamConfig(const KStreamConfig &config)

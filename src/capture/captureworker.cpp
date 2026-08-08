@@ -11,6 +11,7 @@
 namespace
 {
 	constexpr qint64 kImmediateFrameTraceIntervalMs = 500;
+	constexpr quint64 kVideoTraceFrameInterval = 30;
 }
 
 KCaptureWorker::KCaptureWorker(WorkMode mode, QObject *pParent)
@@ -67,13 +68,16 @@ void KCaptureWorker::startWork()
 		return;
 	}
 
+	KCaptureFrame frame;
 	while (m_bRunning)
 	{
 		QElapsedTimer frameTimer;
 		frameTimer.start();
-		KCaptureFrame frame;
+		QElapsedTimer captureTimer;
+		captureTimer.start();
 		strError.clear();
 		const IKCaptureSource::CaptureResult result = m_upSource->captureNextFrame(&frame, &strError);
+		const qint64 nCaptureUs = captureTimer.nsecsElapsed() / 1000;
 		if (result == IKCaptureSource::TimeoutCaptureResult)
 		{
 			m_upSink->handleCaptureTimeout();
@@ -86,12 +90,28 @@ void KCaptureWorker::startWork()
 			emit statusChanged(QStringLiteral("Error"));
 			break;
 		}
-		if (!m_upSink->processFrame(std::move(frame), &strError))
+		QElapsedTimer processTimer;
+		processTimer.start();
+		if (!m_upSink->processFrame(frame, &strError))
 		{
 			m_bRunning = false;
 			emit captureError(strError.isEmpty() ? QStringLiteral("Capture frame processing failed") : strError);
 			emit statusChanged(QStringLiteral("Error"));
 			break;
+		}
+		if (KLatencyTraceLogger::isEnabled()
+			&& frame.nFrameIndex > 0
+			&& frame.nFrameIndex % kVideoTraceFrameInterval == 0)
+		{
+			KLatencyTraceLogger::write(QStringLiteral("controlled"),
+				QStringLiteral("capture_pipeline_stage"),
+				QStringLiteral("frame=%1 captureUs=%2 processUs=%3 totalUs=%4 "
+					"bgraCapacity=%5")
+					.arg(frame.nFrameIndex)
+					.arg(nCaptureUs)
+					.arg(processTimer.nsecsElapsed() / 1000)
+					.arg(frameTimer.nsecsElapsed() / 1000)
+					.arg(frame.vecBgraBuffer.capacity()));
 		}
 
 		const int nFrameIntervalMs = std::max(1, 1000 / std::max(1, m_nFrameRate.load()));

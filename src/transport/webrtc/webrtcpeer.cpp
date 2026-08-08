@@ -10,6 +10,7 @@
 #include "transport/webrtc/webrtclatencyprobe.h"
 #include "transport/webrtc/webrtcremoteframeprocessor.h"
 
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QMetaObject>
 #include <QtCore/QPointer>
 #include <QtCore/QThread>
@@ -30,14 +31,11 @@
 #include <api/rtp_transceiver_direction.h>
 #include <api/rtp_transceiver_interface.h>
 #include <api/video/video_source_interface.h>
-#include <api/video/i420_buffer.h>
+#include <common_video/include/video_frame_buffer.h>
 #include <pc/video_track_source.h>
 #include <rtc_base/logging.h>
 
-#include <libyuv.h>
-
 #include <algorithm>
-#include <cstring>
 #include <cmath>
 #include <functional>
 #include <optional>
@@ -139,29 +137,22 @@ namespace
 
 		void pushFrame(const KVideoFrame &frame)
 		{
-			if (frame.nWidth <= 0 || frame.nHeight <= 0)
+			if (frame.nWidth <= 0 || frame.nHeight <= 0 || frame.spBuffer == nullptr)
 				return;
 
-			webrtc::scoped_refptr<webrtc::I420Buffer> spBuffer =
-				webrtc::I420Buffer::Create(frame.nWidth, frame.nHeight);
-			copyPlane(reinterpret_cast<const unsigned char *>(frame.yPlane.constData()),
-				frame.nStrideY,
-				spBuffer->MutableDataY(),
-				spBuffer->StrideY(),
-				frame.nWidth,
-				frame.nHeight);
-			copyPlane(reinterpret_cast<const unsigned char *>(frame.uPlane.constData()),
-				frame.nStrideU,
-				spBuffer->MutableDataU(),
-				spBuffer->StrideU(),
-				frame.nWidth / 2,
-				frame.nHeight / 2);
-			copyPlane(reinterpret_cast<const unsigned char *>(frame.vPlane.constData()),
-				frame.nStrideV,
-				spBuffer->MutableDataV(),
-				spBuffer->StrideV(),
-				frame.nWidth / 2,
-				frame.nHeight / 2);
+			QElapsedTimer pushTimer;
+			pushTimer.start();
+			std::shared_ptr<KI420FrameBuffer> spFrameBuffer = frame.spBuffer;
+			webrtc::scoped_refptr<webrtc::I420BufferInterface> spBuffer =
+				webrtc::WrapI420Buffer(frame.nWidth,
+					frame.nHeight,
+					reinterpret_cast<const uint8_t *>(spFrameBuffer->yPlane.constData()),
+					spFrameBuffer->nStrideY,
+					reinterpret_cast<const uint8_t *>(spFrameBuffer->uPlane.constData()),
+					spFrameBuffer->nStrideU,
+					reinterpret_cast<const uint8_t *>(spFrameBuffer->vPlane.constData()),
+					spFrameBuffer->nStrideV,
+					[spFrameBuffer]() mutable { spFrameBuffer.reset(); });
 
 			const webrtc::VideoFrame videoFrame = webrtc::VideoFrame::Builder()
 				.set_video_frame_buffer(spBuffer)
@@ -181,6 +172,15 @@ namespace
 				if (pSink != nullptr)
 					pSink->OnFrame(videoFrame);
 			}
+			if (frame.nFrameIndex > 0
+				&& frame.nFrameIndex % kVideoTraceFrameInterval == 0)
+			{
+				KLatencyTraceLogger::write(QStringLiteral("controlled"),
+					QStringLiteral("webrtc_frame_delivered"),
+					QStringLiteral("frame=%1 pushUs=%2 copyBytes=0")
+						.arg(frame.nFrameIndex)
+						.arg(pushTimer.nsecsElapsed() / 1000));
+			}
 		}
 
 	private:
@@ -189,26 +189,6 @@ namespace
 			webrtc::VideoSinkInterface<webrtc::VideoFrame> *pSink = nullptr;
 			webrtc::VideoSinkWants wants;
 		};
-
-		static void copyPlane(const unsigned char *pSrc,
-			int nSrcStride,
-			unsigned char *pDst,
-			int nDstStride,
-			int nWidth,
-			int nHeight)
-		{
-			if (pSrc == nullptr || pDst == nullptr)
-				return;
-
-			// libyuv::CopyPlane uses SIMD memcpy and handles stride alignment,
-			// replacing the per-row std::memcpy loop.
-			libyuv::CopyPlane(pSrc,
-				nSrcStride,
-				pDst,
-				nDstStride,
-				nWidth,
-				nHeight);
-		}
 
 		std::mutex m_mutex;
 		std::vector<SinkItem> m_vecSinks;
