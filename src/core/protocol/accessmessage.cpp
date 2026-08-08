@@ -1,14 +1,12 @@
 #include "core/protocol/accessmessage.h"
 
-#include <QtCore/QJsonDocument>
+#include "core/protocol/protocolenvelope.h"
+
 #include <QtCore/QJsonObject>
 #include <QtCore/QUuid>
 
 namespace
 {
-	constexpr char kType[] = "type";
-	constexpr char kVersion[] = "version";
-	constexpr char kRequestId[] = "requestId";
 	constexpr char kDeviceName[] = "deviceName";
 	constexpr char kTimeoutSeconds[] = "timeoutSeconds";
 	constexpr char kReason[] = "reason";
@@ -41,16 +39,14 @@ namespace
 QString KAccessMessageCodec::encode(const KAccessMessage &message)
 {
 	QJsonObject object;
-	object.insert(QString::fromLatin1(kType), typeName(message.type));
-	object.insert(QString::fromLatin1(kVersion), kProtocolVersion);
-	object.insert(QString::fromLatin1(kRequestId), message.strRequestId);
 	if (message.type == RequestAccessMessageType)
 		object.insert(QString::fromLatin1(kDeviceName), message.strDeviceName.left(128));
 	else if (message.type == PendingAccessMessageType)
 		object.insert(QString::fromLatin1(kTimeoutSeconds), message.nTimeoutSeconds);
 	else if (message.type == RejectedAccessMessageType)
 		object.insert(QString::fromLatin1(kReason), message.strReason);
-	return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
+	return KProtocolEnvelopeCodec::encode(SignalingProtocolChannel,
+		typeName(message.type), message.strRequestId, 0, object);
 }
 
 bool KAccessMessageCodec::decode(const QString &strMessage,
@@ -59,24 +55,31 @@ bool KAccessMessageCodec::decode(const QString &strMessage,
 {
 	if (pMessage == nullptr)
 		return FailDecode(QStringLiteral("Access message output is null"), pErrorMessage);
-	if (strMessage.toUtf8().size() > kMaximumMessageBytes)
+	KProtocolEnvelope envelope;
+	if (!KProtocolEnvelopeCodec::decode(SignalingProtocolChannel,
+		strMessage, &envelope, pErrorMessage))
+	{
+		return false;
+	}
+	if (envelope.nEncodedBytes > kMaximumMessageBytes)
 		return FailDecode(QStringLiteral("Access message is too large"), pErrorMessage);
+	if (envelope.nVersion != KProtocolConstraints::kEnvelopeSchemaVersion)
+		return FailDecode(QStringLiteral("Unsupported access envelope version"), pErrorMessage);
+	return decode(envelope, pMessage, pErrorMessage);
+}
 
-	const QJsonDocument document = QJsonDocument::fromJson(strMessage.toUtf8());
-	if (!document.isObject())
-		return FailDecode(QStringLiteral("Access message is not a JSON object"), pErrorMessage);
-	const QJsonObject object = document.object();
-	const KAccessMessageType type = MessageTypeFromName(
-		object.value(QString::fromLatin1(kType)).toString());
+bool KAccessMessageCodec::decode(const KProtocolEnvelope &envelope,
+	KAccessMessage *pMessage,
+	QString *pErrorMessage)
+{
+	if (pMessage == nullptr)
+		return FailDecode(QStringLiteral("Access message output is null"), pErrorMessage);
+	const QJsonObject object = envelope.payload;
+	const KAccessMessageType type = MessageTypeFromName(envelope.strType);
 	if (type == InvalidAccessMessageType)
 		return FailDecode(QStringLiteral("Unknown access message type"), pErrorMessage);
-	const QJsonValue versionValue = object.value(QString::fromLatin1(kVersion));
-	if (!versionValue.isDouble()
-		|| versionValue.toDouble() != static_cast<double>(versionValue.toInt())
-		|| versionValue.toInt() != kProtocolVersion)
-		return FailDecode(QStringLiteral("Unsupported access protocol version"), pErrorMessage);
 
-	const QString strRequestId = object.value(QString::fromLatin1(kRequestId)).toString();
+	const QString strRequestId = envelope.strRequestId;
 	if (QUuid(strRequestId).isNull())
 		return FailDecode(QStringLiteral("Invalid access request id"), pErrorMessage);
 
@@ -121,12 +124,10 @@ bool KAccessMessageCodec::decode(const QString &strMessage,
 
 bool KAccessMessageCodec::isAccessMessage(const QString &strMessage)
 {
-	if (strMessage.toUtf8().size() > KProtocolConstraints::kMaximumSignalingMessageBytes)
-		return false;
-	const QJsonDocument document = QJsonDocument::fromJson(strMessage.toUtf8());
-	return document.isObject()
-		&& MessageTypeFromName(document.object().value(QString::fromLatin1(kType)).toString())
-			!= InvalidAccessMessageType;
+	KProtocolEnvelope envelope;
+	return KProtocolEnvelopeCodec::decode(SignalingProtocolChannel,
+		strMessage, &envelope, nullptr)
+		&& MessageTypeFromName(envelope.strType) != InvalidAccessMessageType;
 }
 
 QString KAccessMessageCodec::typeName(KAccessMessageType type)

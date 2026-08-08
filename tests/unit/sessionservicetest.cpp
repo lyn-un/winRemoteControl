@@ -105,9 +105,9 @@ namespace
 			++nRestartIceCount;
 		}
 
-		void handleSignalingMessage(const QString &strMessage) override
+		void handleSignalingMessage(const KWebRtcSignalingMessage &message) override
 		{
-			strLastSignalingMessage = strMessage;
+			strLastSignalingMessage = KWebRtcSignalingMessageCodec::encode(message);
 		}
 
 		void pushVideoFrame(const KVideoFrame &frame) override

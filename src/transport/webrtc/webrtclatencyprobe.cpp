@@ -2,29 +2,17 @@
 
 #include "common/latencytracelogger.h"
 #include "core/protocol/protocolconstraints.h"
+#include "core/protocol/protocolenvelope.h"
 
 #include <QtCore/QDateTime>
-#include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 
 namespace
 {
-	constexpr char kMessageType[] = "type";
-	constexpr char kVersion[] = "version";
 	constexpr char kLatencyPing[] = "latencyPing";
 	constexpr char kLatencyPong[] = "latencyPong";
 	constexpr char kLatencyId[] = "id";
 	constexpr char kLatencySendMs[] = "sendMs";
-
-	bool hasSupportedVersion(const QJsonObject &object)
-	{
-		const QJsonValue value = object.value(QString::fromLatin1(kVersion));
-		if (value.isUndefined())
-			return true;
-		return value.isDouble()
-			&& value.toDouble() == static_cast<double>(value.toInt())
-			&& value.toInt() == KProtocolConstraints::kProtocolVersion;
-	}
 
 	bool readLatencyFields(const QJsonObject &object, quint64 *pId, qint64 *pSendMs)
 	{
@@ -49,11 +37,10 @@ namespace
 QString KWebRtcLatencyProbe::createPing()
 {
 	QJsonObject object;
-	object.insert(QString::fromLatin1(kVersion), KProtocolConstraints::kProtocolVersion);
-	object.insert(QString::fromLatin1(kMessageType), QString::fromLatin1(kLatencyPing));
 	object.insert(QString::fromLatin1(kLatencyId), QString::number(++m_nPingId));
 	object.insert(QString::fromLatin1(kLatencySendMs), QDateTime::currentMSecsSinceEpoch());
-	return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
+	return KProtocolEnvelopeCodec::encode(InputProtocolChannel,
+		QString::fromLatin1(kLatencyPing), QString(), 0, object);
 }
 
 bool KWebRtcLatencyProbe::handleMessage(const QString &strMessage,
@@ -62,15 +49,24 @@ bool KWebRtcLatencyProbe::handleMessage(const QString &strMessage,
 {
 	if (pResponseMessage != nullptr)
 		pResponseMessage->clear();
-	const QByteArray data = strMessage.toUtf8();
-	if (data.size() > KProtocolConstraints::kMaximumInputMessageBytes)
+	KProtocolEnvelope envelope;
+	if (!KProtocolEnvelopeCodec::decode(InputProtocolChannel,
+		strMessage, &envelope, nullptr)
+		|| envelope.nVersion != KProtocolConstraints::kEnvelopeSchemaVersion)
+	{
 		return false;
-	const QJsonDocument document = QJsonDocument::fromJson(data);
-	if (!document.isObject())
-		return false;
+	}
+	return handleMessage(envelope, role, pResponseMessage);
+}
 
-	const QJsonObject object = document.object();
-	const QString strType = object.value(QString::fromLatin1(kMessageType)).toString();
+bool KWebRtcLatencyProbe::handleMessage(const KProtocolEnvelope &envelope,
+	KSessionRole role,
+	QString *pResponseMessage)
+{
+	if (pResponseMessage != nullptr)
+		pResponseMessage->clear();
+	const QJsonObject object = envelope.payload;
+	const QString strType = envelope.strType;
 	if (strType != QString::fromLatin1(kLatencyPing)
 		&& strType != QString::fromLatin1(kLatencyPong))
 	{
@@ -78,23 +74,21 @@ bool KWebRtcLatencyProbe::handleMessage(const QString &strMessage,
 	}
 	quint64 nId = 0;
 	qint64 nSendMs = -1;
-	if (!hasSupportedVersion(object) || !readLatencyFields(object, &nId, &nSendMs))
+	if (!readLatencyFields(object, &nId, &nSendMs))
 		return false;
 	if (strType == QString::fromLatin1(kLatencyPing))
 	{
 		if (role != ControlledSessionRole)
 			return true;
 		QJsonObject response;
-		response.insert(QString::fromLatin1(kVersion), KProtocolConstraints::kProtocolVersion);
-		response.insert(QString::fromLatin1(kMessageType), QString::fromLatin1(kLatencyPong));
 		response.insert(QString::fromLatin1(kLatencyId),
 			object.value(QString::fromLatin1(kLatencyId)));
 		response.insert(QString::fromLatin1(kLatencySendMs),
 			object.value(QString::fromLatin1(kLatencySendMs)));
 		if (pResponseMessage != nullptr)
 		{
-			*pResponseMessage = QString::fromUtf8(
-				QJsonDocument(response).toJson(QJsonDocument::Compact));
+			*pResponseMessage = KProtocolEnvelopeCodec::encode(InputProtocolChannel,
+				QString::fromLatin1(kLatencyPong), QString(), 0, response);
 		}
 		return true;
 	}

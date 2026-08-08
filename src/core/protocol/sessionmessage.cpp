@@ -1,19 +1,16 @@
 #include "core/protocol/sessionmessage.h"
 
 #include "core/protocol/protocolconstraints.h"
+#include "core/protocol/protocolenvelope.h"
 
 #include <QtCore/QByteArray>
-#include <QtCore/QJsonDocument>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
-#include <QtCore/QJsonParseError>
 
 #include <algorithm>
 
 namespace
 {
-	constexpr char kType[] = "type";
-	constexpr char kVersion[] = "version";
 	constexpr char kDeviceInfoRequest[] = "deviceInfoRequest";
 	constexpr char kDeviceInfo[] = "deviceInfo";
 	constexpr char kStartStreaming[] = "startStreaming";
@@ -76,16 +73,6 @@ namespace
 		if (pErrorMessage != nullptr)
 			*pErrorMessage = strError;
 		return false;
-	}
-
-	bool hasSupportedVersion(const QJsonObject &object)
-	{
-		const QJsonValue value = object.value(QString::fromLatin1(kVersion));
-		if (value.isUndefined())
-			return true;
-		return value.isDouble()
-			&& value.toDouble() == static_cast<double>(value.toInt())
-			&& value.toInt() == KSessionMessageCodec::kProtocolVersion;
 	}
 
 	bool isValidStreamConfig(const KStreamConfig &config)
@@ -155,8 +142,6 @@ namespace
 QString KSessionMessageCodec::encode(const KSessionMessage &message)
 {
 	QJsonObject object;
-	object.insert(QString::fromLatin1(kVersion), kProtocolVersion);
-	object.insert(QString::fromLatin1(kType), typeName(message.type));
 	if (message.type == DeviceInfoSessionMessageType)
 	{
 		object.insert(QString::fromLatin1(kComputerName), message.deviceInfo.strComputerName);
@@ -208,7 +193,8 @@ QString KSessionMessageCodec::encode(const KSessionMessage &message)
 		object.insert(QString::fromLatin1(kMonitorList), monitors);
 	}
 
-	return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
+	return KProtocolEnvelopeCodec::encode(SessionProtocolChannel,
+		typeName(message.type), QString(), 0, object);
 }
 
 bool KSessionMessageCodec::decode(const QString &strMessage,
@@ -217,19 +203,25 @@ bool KSessionMessageCodec::decode(const QString &strMessage,
 {
 	if (pMessage == nullptr)
 		return failDecode(QStringLiteral("Session message output is null"), pErrorMessage);
-	const QByteArray data = strMessage.toUtf8();
-	if (data.size() > KProtocolConstraints::kMaximumSessionMessageBytes)
-		return failDecode(QStringLiteral("Session message is too large"), pErrorMessage);
+	KProtocolEnvelope envelope;
+	if (!KProtocolEnvelopeCodec::decode(SessionProtocolChannel,
+		strMessage, &envelope, pErrorMessage))
+	{
+		return false;
+	}
+	if (envelope.nVersion != KProtocolConstraints::kEnvelopeSchemaVersion)
+		return failDecode(QStringLiteral("Unsupported session envelope version"), pErrorMessage);
+	return decode(envelope, pMessage, pErrorMessage);
+}
 
-	QJsonParseError parseError;
-	const QJsonDocument document = QJsonDocument::fromJson(data, &parseError);
-	if (parseError.error != QJsonParseError::NoError || !document.isObject())
-		return failDecode(QStringLiteral("Session message is not a JSON object"), pErrorMessage);
-
-	const QJsonObject object = document.object();
-	if (!hasSupportedVersion(object))
-		return failDecode(QStringLiteral("Unsupported session protocol version"), pErrorMessage);
-	const QString strType = object.value(QString::fromLatin1(kType)).toString();
+bool KSessionMessageCodec::decode(const KProtocolEnvelope &envelope,
+	KSessionMessage *pMessage,
+	QString *pErrorMessage)
+{
+	if (pMessage == nullptr)
+		return failDecode(QStringLiteral("Session message output is null"), pErrorMessage);
+	const QJsonObject object = envelope.payload;
+	const QString strType = envelope.strType;
 	KSessionMessage message;
 	if (strType == QString::fromLatin1(kDeviceInfoRequest))
 		message.type = DeviceInfoRequestSessionMessageType;

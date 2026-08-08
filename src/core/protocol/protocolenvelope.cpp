@@ -4,6 +4,9 @@
 
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonValue>
+#include <QtCore/QUuid>
+
+#include <cmath>
 
 namespace
 {
@@ -13,6 +16,7 @@ namespace
 	constexpr char kRequestId[] = "requestId";
 	constexpr char kSequence[] = "seq";
 	constexpr char kPayload[] = "payload";
+	constexpr double kMaximumExactJsonInteger = 9007199254740991.0;
 
 	int MaximumMessageBytes(KProtocolChannel channel)
 	{
@@ -26,6 +30,59 @@ namespace
 			return KProtocolConstraints::kMaximumClipboardMessageBytes;
 		return 0;
 	}
+
+	bool ReadSequence(const QJsonValue &value, quint64 *pSequence)
+	{
+		if (value.isUndefined())
+		{
+			*pSequence = 0;
+			return true;
+		}
+		if (value.isString())
+		{
+			const QString strSequence = value.toString();
+			if (strSequence.isEmpty())
+				return false;
+			for (const QChar character : strSequence)
+			{
+				if (!character.isDigit())
+					return false;
+			}
+			bool bOk = false;
+			const quint64 nSequence = strSequence.toULongLong(&bOk);
+			if (!bOk)
+				return false;
+			*pSequence = nSequence;
+			return true;
+		}
+		if (!value.isDouble())
+			return false;
+		const double nSequence = value.toDouble();
+		if (nSequence < 0
+			|| nSequence > kMaximumExactJsonInteger
+			|| std::floor(nSequence) != nSequence)
+		{
+			return false;
+		}
+		*pSequence = static_cast<quint64>(nSequence);
+		return true;
+	}
+}
+
+QString KProtocolEnvelopeCodec::encode(KProtocolChannel,
+	const QString &strType,
+	const QString &strRequestId,
+	quint64 nSequence,
+	const QJsonObject &payload)
+{
+	QJsonObject object = payload;
+	object.insert(QString::fromLatin1(kVersion), KProtocolConstraints::kEnvelopeSchemaVersion);
+	object.insert(QString::fromLatin1(kType), strType);
+	if (!strRequestId.isEmpty())
+		object.insert(QString::fromLatin1(kRequestId), strRequestId);
+	if (nSequence != 0)
+		object.insert(QString::fromLatin1(kSequence), QString::number(nSequence));
+	return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
 }
 
 bool KProtocolEnvelopeCodec::decode(KProtocolChannel channel,
@@ -59,15 +116,12 @@ bool KProtocolEnvelopeCodec::decode(KProtocolChannel channel,
 
 	const QJsonObject object = document.object();
 	const QJsonValue versionValue = object.value(QString::fromLatin1(kVersion));
-	const int nVersion = versionValue.isUndefined()
-		? KProtocolConstraints::kProtocolVersion
-		: versionValue.toInt(0);
+	const int nVersion = versionValue.toInt(0);
 	QJsonValue typeValue = object.value(QString::fromLatin1(kType));
 	if (typeValue.isUndefined())
 		typeValue = object.value(QString::fromLatin1(kMessageType));
-	if ((!versionValue.isUndefined()
-			&& (!versionValue.isDouble()
-				|| versionValue.toDouble() != static_cast<double>(nVersion)))
+	if (!versionValue.isDouble()
+		|| versionValue.toDouble() != static_cast<double>(nVersion)
 		|| nVersion <= 0
 		|| !typeValue.isString()
 		|| typeValue.toString().isEmpty())
@@ -77,20 +131,52 @@ bool KProtocolEnvelopeCodec::decode(KProtocolChannel channel,
 		return false;
 	}
 
+	const QJsonValue requestIdValue = object.value(QString::fromLatin1(kRequestId));
+	const QString strRequestId = requestIdValue.toString();
+	if (!requestIdValue.isUndefined()
+		&& (!requestIdValue.isString()
+			|| strRequestId.size() > KProtocolConstraints::kMaximumRequestIdCharacters
+			|| QUuid(strRequestId).isNull()))
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("Protocol request id is invalid");
+		return false;
+	}
+
 	quint64 nSequence = 0;
 	const QJsonValue sequenceValue = object.value(QString::fromLatin1(kSequence));
-	if (sequenceValue.isString())
-		nSequence = sequenceValue.toString().toULongLong();
-	else if (sequenceValue.isDouble() && sequenceValue.toDouble() >= 0)
-		nSequence = static_cast<quint64>(sequenceValue.toDouble());
+	if (!ReadSequence(sequenceValue, &nSequence))
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("Protocol sequence is invalid");
+		return false;
+	}
 
 	pEnvelope->nVersion = nVersion;
 	pEnvelope->channel = channel;
 	pEnvelope->strType = typeValue.toString();
-	pEnvelope->strRequestId = object.value(QString::fromLatin1(kRequestId)).toString();
+	pEnvelope->strRequestId = strRequestId;
 	pEnvelope->nSequence = nSequence;
 	const QJsonValue payloadValue = object.value(QString::fromLatin1(kPayload));
-	pEnvelope->payload = payloadValue.isObject() ? payloadValue.toObject() : object;
+	if (!payloadValue.isUndefined() && !payloadValue.isObject())
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("Protocol payload is invalid");
+		return false;
+	}
+	if (payloadValue.isObject())
+	{
+		pEnvelope->payload = payloadValue.toObject();
+	}
+	else
+	{
+		pEnvelope->payload = object;
+		pEnvelope->payload.remove(QString::fromLatin1(kVersion));
+		pEnvelope->payload.remove(QString::fromLatin1(kType));
+		pEnvelope->payload.remove(QString::fromLatin1(kMessageType));
+		pEnvelope->payload.remove(QString::fromLatin1(kRequestId));
+		pEnvelope->payload.remove(QString::fromLatin1(kSequence));
+	}
 	pEnvelope->strRawMessage = strMessage;
 	pEnvelope->nEncodedBytes = data.size();
 	return true;

@@ -516,7 +516,7 @@ namespace
 		const QJsonObject inputObject = QJsonDocument::fromJson(
 			KInputMessageCodec::encode(input).toUtf8()).object();
 		check(inputObject.value(QStringLiteral("version")).toInt()
-			== KProtocolConstraints::kProtocolVersion,
+			== KProtocolConstraints::kEnvelopeSchemaVersion,
 			QStringLiteral("input encoder writes protocol version"));
 
 		KSessionMessage session;
@@ -524,7 +524,7 @@ namespace
 		const QJsonObject sessionObject = QJsonDocument::fromJson(
 			KSessionMessageCodec::encode(session).toUtf8()).object();
 		check(sessionObject.value(QStringLiteral("version")).toInt()
-			== KProtocolConstraints::kProtocolVersion,
+			== KProtocolConstraints::kEnvelopeSchemaVersion,
 			QStringLiteral("session encoder writes protocol version"));
 
 		KClipboardMessage clipboard;
@@ -533,7 +533,7 @@ namespace
 		const QJsonObject clipboardObject = QJsonDocument::fromJson(
 			KClipboardMessageCodec::encode(clipboard).toUtf8()).object();
 		check(clipboardObject.value(QStringLiteral("version")).toInt()
-			== KProtocolConstraints::kProtocolVersion,
+			== KProtocolConstraints::kEnvelopeSchemaVersion,
 			QStringLiteral("clipboard encoder writes protocol version"));
 
 		KInputMessage decoded;

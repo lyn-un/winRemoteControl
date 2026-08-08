@@ -29,6 +29,11 @@ struct KProtocolEnvelope
 class KProtocolEnvelopeCodec
 {
 public:
+	static QString encode(KProtocolChannel channel,
+		const QString &strType,
+		const QString &strRequestId,
+		quint64 nSequence,
+		const QJsonObject &payload);
 	static bool decode(KProtocolChannel channel,
 		const QString &strMessage,
 		KProtocolEnvelope *pEnvelope,

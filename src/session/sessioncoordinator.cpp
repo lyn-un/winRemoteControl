@@ -173,7 +173,8 @@ void KSessionCoordinator::initializeProtocolRoutes()
 			return acceptsWebRtcSignalingState(context);
 		};
 	const KProtocolRouter::Handler accessHandler =
-		[this](const KProtocolEnvelope &envelope) { handleAccessEnvelope(envelope); };
+		[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
+		{ return handleAccessEnvelope(envelope); };
 	m_protocolRouter.registerHandler(SignalingProtocolChannel,
 		KAccessMessageCodec::typeName(RequestAccessMessageType),
 		controlledAwaitingApproval, accessHandler);
@@ -187,12 +188,11 @@ void KSessionCoordinator::initializeProtocolRoutes()
 		eitherAwaitingApproval, accessHandler);
 	m_protocolRouter.registerHandler(SignalingProtocolChannel, QStringLiteral("busy"),
 		controllerAwaitingApproval,
-		[this](const KProtocolEnvelope &envelope) { handleBusyEnvelope(envelope); });
+		[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
+		{ return handleBusyEnvelope(envelope); });
 	const KProtocolRouter::Handler signalingHandler =
-		[this](const KProtocolEnvelope &envelope)
-		{
-			handleWebRtcSignalingEnvelope(envelope);
-		};
+		[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
+		{ return handleWebRtcSignalingEnvelope(envelope); };
 	m_protocolRouter.registerHandler(SignalingProtocolChannel,
 		KWebRtcSignalingMessageCodec::typeName(OfferWebRtcSignalingMessageType),
 		controlledAcceptsOffer, signalingHandler);
@@ -641,7 +641,6 @@ void KSessionCoordinator::finishSession(KSessionEndReason reason,
 	clearApprovalState(strReason);
 	m_bDeviceInfoRequested = false;
 	m_nInvalidSignalingMessages = 0;
-	m_bSignalingHandlerRejected = false;
 	m_bInputChannelOpen = false;
 	m_bClipboardChannelOpen = false;
 	m_bSessionChannelOpen = false;
@@ -1318,45 +1317,51 @@ void KSessionCoordinator::handleSignalingMessage(const QString &strMessage)
 	context.nRole = static_cast<int>(m_sessionStateMachine.role());
 	context.nState = static_cast<int>(m_sessionStateMachine.state());
 	context.nGeneration = m_sessionStateMachine.generation();
-	m_bSignalingHandlerRejected = false;
 	const KProtocolRouteResult result = m_protocolRouter.route(
 		SignalingProtocolChannel, strMessage, context);
-	if (result.status == HandledProtocolRouteStatus && !m_bSignalingHandlerRejected)
+	if (result.status == HandledProtocolRouteStatus)
 	{
 		m_nInvalidSignalingMessages = 0;
 		return;
 	}
-	if (result.status != HandledProtocolRouteStatus)
-		handleInvalidSignalingMessage(result.status, result.strError);
+	handleInvalidSignalingMessage(result.status, result.strError);
 }
 
-void KSessionCoordinator::handleAccessEnvelope(const KProtocolEnvelope &envelope)
+KProtocolHandlerResult KSessionCoordinator::handleAccessEnvelope(
+	const KProtocolEnvelope &envelope)
 {
 	KAccessMessage message;
 	QString strError;
-	if (!KAccessMessageCodec::decode(envelope.strRawMessage, &message, &strError))
-	{
-		m_bSignalingHandlerRejected = true;
-		handleInvalidSignalingMessage(MalformedProtocolRouteStatus, strError);
-		return;
-	}
+	if (!KAccessMessageCodec::decode(envelope, &message, &strError))
+		return KProtocolHandlerResult::failure(ProtocolHandlerDecodeFailed, strError);
 	handleAccessMessage(message);
+	return KProtocolHandlerResult::success();
 }
 
-void KSessionCoordinator::handleWebRtcSignalingEnvelope(const KProtocolEnvelope &envelope)
+KProtocolHandlerResult KSessionCoordinator::handleWebRtcSignalingEnvelope(
+	const KProtocolEnvelope &envelope)
 {
-	m_spRemotePeerTransport->handleSignalingMessage(envelope.strRawMessage);
+	KWebRtcSignalingMessage message;
+	QString strError;
+	if (!KWebRtcSignalingMessageCodec::decode(envelope, &message, &strError))
+		return KProtocolHandlerResult::failure(ProtocolHandlerDecodeFailed, strError);
+	m_spRemotePeerTransport->handleSignalingMessage(message);
+	return KProtocolHandlerResult::success();
 }
 
-void KSessionCoordinator::handleBusyEnvelope(const KProtocolEnvelope &)
+KProtocolHandlerResult KSessionCoordinator::handleBusyEnvelope(const KProtocolEnvelope &)
 {
 	if (m_sessionStateMachine.role() != ControllerSessionRole)
-		return;
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerInvalidState,
+			QStringLiteral("Busy response received by controlled peer"));
+	}
 	finishSession(ConnectFailedSessionEndReason, QStringLiteral("busy"),
 		false, false, false);
 	reportSessionError(AccessSessionErrorDomain,
 		RemoteBusySessionErrorCode, ApprovalSessionErrorStage,
 		true, QStringLiteral("Remote peer is busy"));
+	return KProtocolHandlerResult::success();
 }
 
 void KSessionCoordinator::handleInvalidSignalingMessage(KProtocolRouteStatus status,

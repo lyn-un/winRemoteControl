@@ -50,7 +50,7 @@ public:
 	quint64 generation() const override;
 	void createOffer() override;
 	void restartIce() override;
-	void handleSignalingMessage(const QString &strMessage) override;
+	void handleSignalingMessage(const KWebRtcSignalingMessage &message) override;
 	void pushVideoFrame(const KVideoFrame &frame) override;
 	void sendInputMessage(const KInputMessage &message) override;
 	void sendClipboardMessage(const KClipboardMessage &message) override;
@@ -87,10 +87,10 @@ private:
 	void handleInputChannelMessage(const QString &strMessage);
 	void handleSessionChannelMessage(const QString &strMessage);
 	void handleClipboardChannelMessage(const QString &strMessage);
-	void decodeInputMessage(const KProtocolEnvelope &envelope);
-	void decodeSessionMessage(const KProtocolEnvelope &envelope);
-	void decodeClipboardMessage(const KProtocolEnvelope &envelope);
-	void handleLatencyMessage(const KProtocolEnvelope &envelope);
+	KProtocolHandlerResult decodeInputMessage(const KProtocolEnvelope &envelope);
+	KProtocolHandlerResult decodeSessionMessage(const KProtocolEnvelope &envelope);
+	KProtocolHandlerResult decodeClipboardMessage(const KProtocolEnvelope &envelope);
+	KProtocolHandlerResult handleLatencyMessage(const KProtocolEnvelope &envelope);
 	void routeDataMessage(KProtocolChannel channel,
 		const QString &strMessage,
 		std::atomic_int *pInvalidCount);
@@ -141,7 +141,6 @@ private:
 	std::atomic_int m_nInvalidSessionMessages = 0;
 	std::atomic_int m_nInvalidClipboardMessages = 0;
 	std::atomic_bool m_bProtocolTerminationPending = false;
-	bool m_bRouteHandlerRejected = false;
 	KOutboundMessageQueue m_inputSendQueue { 256, 64 * 1024 };
 	KOutboundMessageQueue m_clipboardSendQueue { 8, 1024 * 1024 };
 	KProtocolRouter m_protocolRouter;

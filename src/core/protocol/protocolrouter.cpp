@@ -2,6 +2,22 @@
 
 #include "core/protocol/protocolconstraints.h"
 
+KProtocolHandlerResult KProtocolHandlerResult::success()
+{
+	KProtocolHandlerResult result;
+	result.status = ProtocolHandlerSucceeded;
+	return result;
+}
+
+KProtocolHandlerResult KProtocolHandlerResult::failure(KProtocolHandlerStatus status,
+	const QString &strTechnicalMessage)
+{
+	KProtocolHandlerResult result;
+	result.status = status;
+	result.strTechnicalMessage = strTechnicalMessage;
+	return result;
+}
+
 bool KProtocolRouter::registerHandler(KProtocolChannel channel,
 	const QString &strType,
 	Guard guard,
@@ -26,7 +42,7 @@ KProtocolRouteResult KProtocolRouter::route(KProtocolChannel channel,
 	{
 		return result;
 	}
-	if (result.envelope.nVersion != KProtocolConstraints::kProtocolVersion)
+	if (result.envelope.nVersion != KProtocolConstraints::kEnvelopeSchemaVersion)
 	{
 		result.status = UnsupportedVersionProtocolRouteStatus;
 		result.strError = QStringLiteral("Unsupported protocol version");
@@ -47,8 +63,18 @@ KProtocolRouteResult KProtocolRouter::route(KProtocolChannel channel,
 		return result;
 	}
 
-	iterator->handler(result.envelope);
-	result.status = HandledProtocolRouteStatus;
+	result.handlerResult = iterator->handler(result.envelope, context);
+	if (result.handlerResult.status == ProtocolHandlerSucceeded)
+	{
+		result.status = HandledProtocolRouteStatus;
+	}
+	else
+	{
+		result.status = HandlerFailedProtocolRouteStatus;
+		result.strError = result.handlerResult.strTechnicalMessage;
+		if (result.strError.isEmpty())
+			result.strError = QStringLiteral("Protocol handler failed");
+	}
 	return result;
 }
 

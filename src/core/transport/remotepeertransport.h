@@ -8,6 +8,7 @@
 #include "core/protocol/inputmessage.h"
 #include "core/protocol/clipboardmessage.h"
 #include "core/protocol/sessionmessage.h"
+#include "core/protocol/webrtcsignalingmessage.h"
 #include "core/session/sessionstatemachine.h"
 
 #include <QtCore/QObject>
@@ -30,7 +31,7 @@ public:
 	virtual quint64 generation() const = 0;
 	virtual void createOffer() = 0;
 	virtual void restartIce() = 0;
-	virtual void handleSignalingMessage(const QString &strMessage) = 0;
+	virtual void handleSignalingMessage(const KWebRtcSignalingMessage &message) = 0;
 	virtual void pushVideoFrame(const KVideoFrame &frame) = 0;
 	virtual void sendInputMessage(const KInputMessage &message) = 0;
 	virtual void sendClipboardMessage(const KClipboardMessage &message) = 0;

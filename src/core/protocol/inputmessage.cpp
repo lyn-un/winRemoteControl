@@ -1,15 +1,12 @@
 #include "core/protocol/inputmessage.h"
 
 #include "core/protocol/protocolconstraints.h"
+#include "core/protocol/protocolenvelope.h"
 
-#include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
-#include <QtCore/QJsonParseError>
 
 namespace
 {
-	constexpr char kType[] = "type";
-	constexpr char kVersion[] = "version";
 	constexpr char kMouseMove[] = "mouseMove";
 	constexpr char kMouseButton[] = "mouseButton";
 	constexpr char kMouseWheel[] = "mouseWheel";
@@ -25,7 +22,6 @@ namespace
 	constexpr char kX[] = "x";
 	constexpr char kY[] = "y";
 	constexpr char kDelta[] = "delta";
-	constexpr char kSeq[] = "seq";
 	constexpr char kTrace[] = "trace";
 	constexpr char kVirtualKey[] = "vk";
 	constexpr char kExtended[] = "extended";
@@ -76,38 +72,11 @@ namespace
 		return readRequiredInt(object, pName, pValue);
 	}
 
-	bool readSequence(const QJsonObject &object, quint64 *pSequence)
-	{
-		const QJsonValue value = object.value(QString::fromLatin1(kSeq));
-		if (value.isUndefined())
-			return true;
-		if (!value.isString())
-			return false;
-
-		bool bOk = false;
-		const quint64 nSequence = value.toString().toULongLong(&bOk);
-		if (!bOk)
-			return false;
-
-		*pSequence = nSequence;
-		return true;
-	}
-
 	bool failDecode(const QString &strError, QString *pErrorMessage)
 	{
 		if (pErrorMessage != nullptr)
 			*pErrorMessage = strError;
 		return false;
-	}
-
-	bool hasSupportedVersion(const QJsonObject &object)
-	{
-		const QJsonValue value = object.value(QString::fromLatin1(kVersion));
-		if (value.isUndefined())
-			return true;
-		return value.isDouble()
-			&& value.toDouble() == static_cast<double>(value.toInt())
-			&& value.toInt() == KInputMessageCodec::kProtocolVersion;
 	}
 
 	bool isValidMousePosition(int nX, int nY)
@@ -120,9 +89,6 @@ namespace
 QString KInputMessageCodec::encode(const KInputMessage &message)
 {
 	QJsonObject object;
-	object.insert(QString::fromLatin1(kVersion), kProtocolVersion);
-	object.insert(QString::fromLatin1(kType), typeName(message.type));
-	object.insert(QString::fromLatin1(kSeq), QString::number(message.nSequence));
 	if (message.bTrace)
 		object.insert(QString::fromLatin1(kTrace), true);
 
@@ -157,7 +123,8 @@ QString KInputMessageCodec::encode(const KInputMessage &message)
 		object.insert(QString::fromLatin1(kValue), message.strText);
 	}
 
-	return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
+	return KProtocolEnvelopeCodec::encode(InputProtocolChannel,
+		typeName(message.type), QString(), message.nSequence, object);
 }
 
 bool KInputMessageCodec::decode(const QString &strMessage,
@@ -166,20 +133,27 @@ bool KInputMessageCodec::decode(const QString &strMessage,
 {
 	if (pMessage == nullptr)
 		return failDecode(QStringLiteral("Input message output is null"), pErrorMessage);
-	const QByteArray data = strMessage.toUtf8();
-	if (data.size() > KProtocolConstraints::kMaximumInputMessageBytes)
-		return failDecode(QStringLiteral("Input message is too large"), pErrorMessage);
+	KProtocolEnvelope envelope;
+	if (!KProtocolEnvelopeCodec::decode(InputProtocolChannel,
+		strMessage, &envelope, pErrorMessage))
+	{
+		return false;
+	}
+	if (envelope.nVersion != KProtocolConstraints::kEnvelopeSchemaVersion)
+		return failDecode(QStringLiteral("Unsupported input envelope version"), pErrorMessage);
+	return decode(envelope, pMessage, pErrorMessage);
+}
 
-	QJsonParseError parseError;
-	const QJsonDocument document = QJsonDocument::fromJson(data, &parseError);
-	if (parseError.error != QJsonParseError::NoError || !document.isObject())
-		return failDecode(QStringLiteral("Input message is not a JSON object"), pErrorMessage);
-
-	const QJsonObject object = document.object();
-	if (!hasSupportedVersion(object))
-		return failDecode(QStringLiteral("Unsupported input protocol version"), pErrorMessage);
-	const QString strType = object.value(QString::fromLatin1(kType)).toString();
+bool KInputMessageCodec::decode(const KProtocolEnvelope &envelope,
+	KInputMessage *pMessage,
+	QString *pErrorMessage)
+{
+	if (pMessage == nullptr)
+		return failDecode(QStringLiteral("Input message output is null"), pErrorMessage);
+	const QJsonObject object = envelope.payload;
+	const QString strType = envelope.strType;
 	KInputMessage message;
+	message.nSequence = envelope.nSequence;
 	if (strType == QString::fromLatin1(kMouseMove))
 		message.type = MouseMoveInputMessageType;
 	else if (strType == QString::fromLatin1(kMouseButton))
@@ -193,8 +167,7 @@ bool KInputMessageCodec::decode(const QString &strMessage,
 	else
 		return failDecode(QStringLiteral("Unknown input message type"), pErrorMessage);
 
-	if (!readSequence(object, &message.nSequence)
-		|| !readOptionalBool(object, kTrace, &message.bTrace))
+	if (!readOptionalBool(object, kTrace, &message.bTrace))
 	{
 		return failDecode(QStringLiteral("Invalid input message metadata"), pErrorMessage);
 	}

@@ -1,4 +1,5 @@
 #include "core/protocol/protocolrouter.h"
+#include "core/protocol/inputmessage.h"
 #include "core/session/sessionerror.h"
 #include "core/transport/outboundmessagequeue.h"
 #include "session/sessionerrorpresenter.h"
@@ -28,13 +29,16 @@ namespace
 			{
 				return context.nState == 7;
 			},
-			[&nHandled](const KProtocolEnvelope &envelope)
+			[&nHandled](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
 			{
 				Check(envelope.nSequence == 42, QStringLiteral("router preserves sequence"));
 				++nHandled;
+				return KProtocolHandlerResult::success();
 			}), QStringLiteral("router registers handler"));
 		Check(!router.registerHandler(InputProtocolChannel,
-			QStringLiteral("mouseMove"), {}, [](const KProtocolEnvelope &) {}),
+			QStringLiteral("mouseMove"), {},
+			[](const KProtocolEnvelope &, const KProtocolRouteContext &)
+			{ return KProtocolHandlerResult::success(); }),
 			QStringLiteral("router rejects duplicate handler"));
 
 		KProtocolRouteContext context;
@@ -63,6 +67,20 @@ namespace
 		result = router.route(InputProtocolChannel, QStringLiteral("not-json"), context);
 		Check(result.status == MalformedProtocolRouteStatus,
 			QStringLiteral("router rejects malformed input"));
+
+		Check(router.registerHandler(InputProtocolChannel,
+			QStringLiteral("badPayload"), {},
+			[](const KProtocolEnvelope &, const KProtocolRouteContext &)
+			{
+				return KProtocolHandlerResult::failure(ProtocolHandlerDecodeFailed,
+					QStringLiteral("payload is invalid"));
+			}), QStringLiteral("router registers failing handler"));
+		result = router.route(InputProtocolChannel,
+			QStringLiteral("{\"version\":1,\"type\":\"badPayload\"}"), context);
+		Check(result.status == HandlerFailedProtocolRouteStatus
+			&& result.handlerResult.status == ProtocolHandlerDecodeFailed
+			&& result.strError == QStringLiteral("payload is invalid"),
+			QStringLiteral("handler failure is returned without side-channel state"));
 	}
 
 	void TestOutboundQueue()
@@ -93,6 +111,51 @@ namespace
 			== OverflowOutboundMessage, QStringLiteral("reliable-only overflow is explicit"));
 	}
 
+	void TestProtocolEnvelopeValidationAndSingleParse()
+	{
+		KProtocolEnvelope envelope;
+		QString strError;
+		Check(!KProtocolEnvelopeCodec::decode(InputProtocolChannel,
+			QStringLiteral("{\"type\":\"mouseMove\",\"seq\":\"1\",\"x\":1,\"y\":1}"),
+			&envelope, &strError),
+			QStringLiteral("missing envelope version is rejected"));
+		for (const QString &strSequence : {
+			QStringLiteral("-1"), QStringLiteral("1.5"), QStringLiteral("not-a-number"),
+			QStringLiteral("18446744073709551616") })
+		{
+			Check(!KProtocolEnvelopeCodec::decode(InputProtocolChannel,
+				QStringLiteral("{\"version\":1,\"type\":\"mouseMove\",\"seq\":\"%1\"}")
+					.arg(strSequence), &envelope, &strError),
+				QStringLiteral("invalid sequence is rejected: %1").arg(strSequence));
+		}
+		Check(!KProtocolEnvelopeCodec::decode(InputProtocolChannel,
+			QStringLiteral("{\"version\":1,\"type\":\"mouseMove\",\"seq\":1.5}"),
+			&envelope, &strError),
+			QStringLiteral("fractional numeric sequence is rejected"));
+		Check(!KProtocolEnvelopeCodec::decode(SessionProtocolChannel,
+			QStringLiteral("{\"version\":1,\"type\":\"endSession\","
+				"\"requestId\":\"not-a-uuid\"}"), &envelope, &strError),
+			QStringLiteral("invalid request id is rejected"));
+
+		KInputMessage source;
+		source.type = MouseMoveInputMessageType;
+		source.nSequence = 42;
+		source.nX = 10;
+		source.nY = 20;
+		const QString strEncoded = KInputMessageCodec::encode(source);
+		Check(KProtocolEnvelopeCodec::decode(InputProtocolChannel,
+			strEncoded, &envelope, &strError),
+			QStringLiteral("encoded input has a valid common envelope"));
+		envelope.strRawMessage = QStringLiteral("not-json-after-routing");
+		envelope.payload.insert(QStringLiteral("futureField"), true);
+		KInputMessage decoded;
+		Check(KInputMessageCodec::decode(envelope, &decoded, &strError)
+			&& decoded.nSequence == 42
+			&& decoded.nX == 10
+			&& decoded.nY == 20,
+			QStringLiteral("typed codec consumes parsed payload and ignores unknown fields"));
+	}
+
 	void TestSessionErrorNames()
 	{
 		KSessionError error;
@@ -117,6 +180,7 @@ int main(int argc, char *argv[])
 {
 	QCoreApplication application(argc, argv);
 	TestProtocolRouter();
+	TestProtocolEnvelopeValidationAndSingleParse();
 	TestOutboundQueue();
 	TestSessionErrorNames();
 	return g_nFailures == 0 ? 0 : 1;

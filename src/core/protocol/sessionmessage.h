@@ -2,10 +2,13 @@
 #define _WINREMOTECONTROL_CORE_PROTOCOL_SESSIONMESSAGE_H_
 
 #include "core/media/streamconfig.h"
+#include "core/protocol/protocolconstraints.h"
 
 #include <QtCore/QString>
 #include <QtCore/QStringList>
 #include <QtCore/QVector>
+
+struct KProtocolEnvelope;
 
 enum KSessionMessageType
 {
@@ -30,8 +33,8 @@ struct KMonitorCapability
 
 struct KSessionCapabilities
 {
-	int nProtocolMinVersion = 2;
-	int nProtocolMaxVersion = 2;
+	int nProtocolMinVersion = KProtocolConstraints::kSessionProtocolMinVersion;
+	int nProtocolMaxVersion = KProtocolConstraints::kSessionProtocolMaxVersion;
 	QStringList supportedCodecs;
 	QStringList supportedChannels;
 	int nMaximumWidth = 1920;
@@ -84,10 +87,11 @@ struct KSessionMessage
 class KSessionMessageCodec
 {
 public:
-	static constexpr int kProtocolVersion = 1;
-
 	static QString encode(const KSessionMessage &message);
 	static bool decode(const QString &strMessage, KSessionMessage *pMessage, QString *pErrorMessage);
+	static bool decode(const KProtocolEnvelope &envelope,
+		KSessionMessage *pMessage,
+		QString *pErrorMessage);
 	static QString typeName(KSessionMessageType type);
 	static bool negotiate(const KSessionCapabilities &local,
 		const KSessionCapabilities &remote,

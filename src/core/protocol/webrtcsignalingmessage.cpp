@@ -1,15 +1,12 @@
 #include "core/protocol/webrtcsignalingmessage.h"
 
 #include "core/protocol/protocolconstraints.h"
+#include "core/protocol/protocolenvelope.h"
 
-#include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
-#include <QtCore/QJsonParseError>
 
 namespace
 {
-	constexpr char kVersion[] = "version";
-	constexpr char kMessageType[] = "messageType";
 	constexpr char kSdpType[] = "sdpType";
 	constexpr char kSdp[] = "sdp";
 	constexpr char kSdpMid[] = "sdpMid";
@@ -30,22 +27,11 @@ namespace
 		return false;
 	}
 
-	bool HasSupportedVersion(const QJsonObject &object)
-	{
-		const QJsonValue value = object.value(QString::fromLatin1(kVersion));
-		if (value.isUndefined())
-			return true;
-		return value.isDouble()
-			&& value.toDouble() == static_cast<double>(value.toInt())
-			&& value.toInt() == KProtocolConstraints::kProtocolVersion;
-	}
 }
 
 QString KWebRtcSignalingMessageCodec::encode(const KWebRtcSignalingMessage &message)
 {
 	QJsonObject object;
-	object.insert(QString::fromLatin1(kVersion), KProtocolConstraints::kProtocolVersion);
-	object.insert(QString::fromLatin1(kMessageType), typeName(message.type));
 	if (message.type == OfferWebRtcSignalingMessageType
 		|| message.type == AnswerWebRtcSignalingMessageType)
 	{
@@ -58,7 +44,8 @@ QString KWebRtcSignalingMessageCodec::encode(const KWebRtcSignalingMessage &mess
 		object.insert(QString::fromLatin1(kSdpMLineIndex), message.nSdpMLineIndex);
 		object.insert(QString::fromLatin1(kCandidate), message.strCandidate);
 	}
-	return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
+	return KProtocolEnvelopeCodec::encode(SignalingProtocolChannel,
+		typeName(message.type), QString(), 0, object);
 }
 
 bool KWebRtcSignalingMessageCodec::decode(const QString &strMessage,
@@ -67,19 +54,25 @@ bool KWebRtcSignalingMessageCodec::decode(const QString &strMessage,
 {
 	if (pMessage == nullptr)
 		return FailDecode(QStringLiteral("Signaling message output is null"), pErrorMessage);
-	const QByteArray data = strMessage.toUtf8();
-	if (data.size() > KProtocolConstraints::kMaximumSignalingMessageBytes)
-		return FailDecode(QStringLiteral("Signaling message is too large"), pErrorMessage);
+	KProtocolEnvelope envelope;
+	if (!KProtocolEnvelopeCodec::decode(SignalingProtocolChannel,
+		strMessage, &envelope, pErrorMessage))
+	{
+		return false;
+	}
+	if (envelope.nVersion != KProtocolConstraints::kEnvelopeSchemaVersion)
+		return FailDecode(QStringLiteral("Unsupported signaling envelope version"), pErrorMessage);
+	return decode(envelope, pMessage, pErrorMessage);
+}
 
-	QJsonParseError parseError;
-	const QJsonDocument document = QJsonDocument::fromJson(data, &parseError);
-	if (parseError.error != QJsonParseError::NoError || !document.isObject())
-		return FailDecode(QStringLiteral("Signaling message is not a JSON object"), pErrorMessage);
-	const QJsonObject object = document.object();
-	if (!HasSupportedVersion(object))
-		return FailDecode(QStringLiteral("Unsupported signaling protocol version"), pErrorMessage);
-
-	const QString strType = object.value(QString::fromLatin1(kMessageType)).toString();
+bool KWebRtcSignalingMessageCodec::decode(const KProtocolEnvelope &envelope,
+	KWebRtcSignalingMessage *pMessage,
+	QString *pErrorMessage)
+{
+	if (pMessage == nullptr)
+		return FailDecode(QStringLiteral("Signaling message output is null"), pErrorMessage);
+	const QJsonObject object = envelope.payload;
+	const QString strType = envelope.strType;
 	KWebRtcSignalingMessage message;
 	if (strType == QString::fromLatin1(kOffer))
 		message.type = OfferWebRtcSignalingMessageType;

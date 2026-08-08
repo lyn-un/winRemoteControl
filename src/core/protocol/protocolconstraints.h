@@ -4,7 +4,10 @@
 class KProtocolConstraints
 {
 public:
-	static constexpr int kProtocolVersion = 1;
+	static constexpr int kEnvelopeSchemaVersion = 1;
+	static constexpr int kSessionProtocolMinVersion = 2;
+	static constexpr int kSessionProtocolMaxVersion = 2;
+	static constexpr int kMaximumRequestIdCharacters = 64;
 	static constexpr int kMaximumAccessMessageBytes = 2048;
 	static constexpr int kMaximumInputMessageBytes = 4096;
 	static constexpr int kMaximumSessionMessageBytes = 160 * 1024;

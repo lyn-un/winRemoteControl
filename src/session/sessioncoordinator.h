@@ -111,9 +111,9 @@ private:
 	void handleOutgoingConnectionFailed(const QString &strMessage);
 	void handleIncomingConnectionEstablished(const QString &strSourceAddress, quint16 nSourcePort);
 	void handleSignalingMessage(const QString &strMessage);
-	void handleAccessEnvelope(const KProtocolEnvelope &envelope);
-	void handleWebRtcSignalingEnvelope(const KProtocolEnvelope &envelope);
-	void handleBusyEnvelope(const KProtocolEnvelope &envelope);
+	KProtocolHandlerResult handleAccessEnvelope(const KProtocolEnvelope &envelope);
+	KProtocolHandlerResult handleWebRtcSignalingEnvelope(const KProtocolEnvelope &envelope);
+	KProtocolHandlerResult handleBusyEnvelope(const KProtocolEnvelope &envelope);
 	void handleInvalidSignalingMessage(KProtocolRouteStatus status, const QString &strError);
 	void handleAccessMessage(const KAccessMessage &message);
 	void handleApprovalTimeout();
@@ -159,7 +159,6 @@ private:
 	QString m_strAccessSourceAddress;
 	quint64 m_nApprovalGeneration = 0;
 	int m_nInvalidSignalingMessages = 0;
-	bool m_bSignalingHandlerRejected = false;
 	std::unique_ptr<IKDeviceInfoProvider> m_spDeviceInfoProvider;
 	std::unique_ptr<KRemotePeerTransport> m_spRemotePeerTransport;
 	std::unique_ptr<KSignalingTransport> m_spSignalingTransport;

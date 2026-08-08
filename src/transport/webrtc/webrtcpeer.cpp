@@ -329,12 +329,14 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 	{
 		m_protocolRouter.registerHandler(InputProtocolChannel,
 			KInputMessageCodec::typeName(type), allowControlledInput,
-			[this](const KProtocolEnvelope &envelope) { decodeInputMessage(envelope); });
+			[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
+			{ return decodeInputMessage(envelope); });
 	}
 	for (const QString &strType : { QStringLiteral("latencyPing"), QStringLiteral("latencyPong") })
 	{
 		m_protocolRouter.registerHandler(InputProtocolChannel, strType, allowMessage,
-			[this](const KProtocolEnvelope &envelope) { handleLatencyMessage(envelope); });
+			[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
+			{ return handleLatencyMessage(envelope); });
 	}
 	for (KSessionMessageType type : { DeviceInfoRequestSessionMessageType,
 		StartStreamingSessionMessageType, StopStreamingSessionMessageType,
@@ -342,27 +344,32 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 	{
 		m_protocolRouter.registerHandler(SessionProtocolChannel,
 			KSessionMessageCodec::typeName(type), allowControlledInput,
-			[this](const KProtocolEnvelope &envelope) { decodeSessionMessage(envelope); });
+			[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
+			{ return decodeSessionMessage(envelope); });
 	}
 	m_protocolRouter.registerHandler(SessionProtocolChannel,
 		KSessionMessageCodec::typeName(DeviceInfoSessionMessageType), allowControllerMessage,
-		[this](const KProtocolEnvelope &envelope) { decodeSessionMessage(envelope); });
+		[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
+		{ return decodeSessionMessage(envelope); });
 	m_protocolRouter.registerHandler(SessionProtocolChannel,
 		KSessionMessageCodec::typeName(EndSessionMessageType), allowMessage,
-		[this](const KProtocolEnvelope &envelope) { decodeSessionMessage(envelope); });
+		[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
+		{ return decodeSessionMessage(envelope); });
 	for (KSessionMessageType type : { CapabilitiesSessionMessageType,
 		CapabilityRejectedSessionMessageType })
 	{
 		m_protocolRouter.registerHandler(SessionProtocolChannel,
 			KSessionMessageCodec::typeName(type), allowMessage,
-			[this](const KProtocolEnvelope &envelope) { decodeSessionMessage(envelope); });
+			[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
+			{ return decodeSessionMessage(envelope); });
 	}
 	for (KClipboardMessageType type : { ReadyClipboardMessageType,
 		TextClipboardMessageType, SyncStateClipboardMessageType })
 	{
 		m_protocolRouter.registerHandler(ClipboardProtocolChannel,
 			KClipboardMessageCodec::typeName(type), allowMessage,
-			[this](const KProtocolEnvelope &envelope) { decodeClipboardMessage(envelope); });
+			[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
+			{ return decodeClipboardMessage(envelope); });
 	}
 
 	m_pInputDataChannel->setBufferWatermarks(
@@ -544,17 +551,8 @@ void KWebRtcPeer::restartIce()
 		webrtc::PeerConnectionInterface::RTCOfferAnswerOptions());
 }
 
-void KWebRtcPeer::handleSignalingMessage(const QString &strMessage)
+void KWebRtcPeer::handleSignalingMessage(const KWebRtcSignalingMessage &message)
 {
-	KWebRtcSignalingMessage message;
-	QString strError;
-	if (!KWebRtcSignalingMessageCodec::decode(strMessage, &message, &strError))
-	{
-		handleProtocolReject(QStringLiteral("signaling"), strMessage.toUtf8().size(),
-			strError, &m_nInvalidSignalingMessages);
-		return;
-	}
-	m_nInvalidSignalingMessages = 0;
 	if (message.type == OfferWebRtcSignalingMessageType
 		|| message.type == AnswerWebRtcSignalingMessageType)
 	{
@@ -996,18 +994,14 @@ void KWebRtcPeer::handleSessionChannelMessage(const QString &strMessage)
 	routeDataMessage(SessionProtocolChannel, strMessage, &m_nInvalidSessionMessages);
 }
 
-void KWebRtcPeer::decodeSessionMessage(const KProtocolEnvelope &envelope)
+KProtocolHandlerResult KWebRtcPeer::decodeSessionMessage(const KProtocolEnvelope &envelope)
 {
 	KSessionMessage message;
 	QString strError;
-	if (!KSessionMessageCodec::decode(envelope.strRawMessage, &message, &strError))
-	{
-		m_bRouteHandlerRejected = true;
-		handleProtocolReject(QStringLiteral("session"), envelope.nEncodedBytes,
-			strError, &m_nInvalidSessionMessages);
-		return;
-	}
+	if (!KSessionMessageCodec::decode(envelope, &message, &strError))
+		return KProtocolHandlerResult::failure(ProtocolHandlerDecodeFailed, strError);
 	emit sessionMessageReceived(m_nGeneration.load(), message);
+	return KProtocolHandlerResult::success();
 }
 
 void KWebRtcPeer::handleClipboardChannelMessage(const QString &strMessage)
@@ -1015,18 +1009,14 @@ void KWebRtcPeer::handleClipboardChannelMessage(const QString &strMessage)
 	routeDataMessage(ClipboardProtocolChannel, strMessage, &m_nInvalidClipboardMessages);
 }
 
-void KWebRtcPeer::decodeClipboardMessage(const KProtocolEnvelope &envelope)
+KProtocolHandlerResult KWebRtcPeer::decodeClipboardMessage(const KProtocolEnvelope &envelope)
 {
 	KClipboardMessage message;
 	QString strError;
-	if (!KClipboardMessageCodec::decode(envelope.strRawMessage, &message, &strError))
-	{
-		m_bRouteHandlerRejected = true;
-		handleProtocolReject(QStringLiteral("clipboard"), envelope.nEncodedBytes,
-			strError, &m_nInvalidClipboardMessages);
-		return;
-	}
+	if (!KClipboardMessageCodec::decode(envelope, &message, &strError))
+		return KProtocolHandlerResult::failure(ProtocolHandlerDecodeFailed, strError);
 	emit clipboardMessageReceived(m_nGeneration.load(), message);
+	return KProtocolHandlerResult::success();
 }
 
 void KWebRtcPeer::handleInputChannelMessage(const QString &strMessage)
@@ -1034,34 +1024,32 @@ void KWebRtcPeer::handleInputChannelMessage(const QString &strMessage)
 	routeDataMessage(InputProtocolChannel, strMessage, &m_nInvalidInputMessages);
 }
 
-void KWebRtcPeer::handleLatencyMessage(const KProtocolEnvelope &envelope)
+KProtocolHandlerResult KWebRtcPeer::handleLatencyMessage(const KProtocolEnvelope &envelope)
 {
 	QString strResponse;
-	if (m_spLatencyProbe->handleMessage(envelope.strRawMessage, m_role, &strResponse))
+	if (m_spLatencyProbe->handleMessage(envelope, m_role, &strResponse))
 	{
-		if (!strResponse.isEmpty() && m_pInputDataChannel->isOpen())
-			m_pInputDataChannel->sendText(strResponse);
+		if (!strResponse.isEmpty()
+			&& (!m_pInputDataChannel->isOpen()
+				|| !m_pInputDataChannel->sendText(strResponse)))
+		{
+			return KProtocolHandlerResult::failure(ProtocolHandlerExecutionFailed,
+				QStringLiteral("Unable to send latency response"));
+		}
+		return KProtocolHandlerResult::success();
 	}
-	else
-	{
-		m_bRouteHandlerRejected = true;
-		handleProtocolReject(QStringLiteral("input"), envelope.nEncodedBytes,
-			QStringLiteral("Invalid latency message"), &m_nInvalidInputMessages);
-	}
+	return KProtocolHandlerResult::failure(ProtocolHandlerDecodeFailed,
+		QStringLiteral("Invalid latency message"));
 }
 
-void KWebRtcPeer::decodeInputMessage(const KProtocolEnvelope &envelope)
+KProtocolHandlerResult KWebRtcPeer::decodeInputMessage(const KProtocolEnvelope &envelope)
 {
 	KInputMessage message;
 	QString strError;
-	if (!KInputMessageCodec::decode(envelope.strRawMessage, &message, &strError))
-	{
-		m_bRouteHandlerRejected = true;
-		handleProtocolReject(QStringLiteral("input"), envelope.nEncodedBytes,
-			strError, &m_nInvalidInputMessages);
-		return;
-	}
+	if (!KInputMessageCodec::decode(envelope, &message, &strError))
+		return KProtocolHandlerResult::failure(ProtocolHandlerDecodeFailed, strError);
 	emit inputMessageReceived(m_nGeneration.load(), message);
+	return KProtocolHandlerResult::success();
 }
 
 void KWebRtcPeer::routeDataMessage(KProtocolChannel channel,
@@ -1070,11 +1058,18 @@ void KWebRtcPeer::routeDataMessage(KProtocolChannel channel,
 {
 	KProtocolRouteContext context;
 	context.nRole = static_cast<int>(m_role);
-	m_bRouteHandlerRejected = false;
 	const KProtocolRouteResult result = m_protocolRouter.route(channel, strMessage, context);
+	KSessionTraceLogger::write(roleToString(m_role),
+		QStringLiteral("protocol_route"),
+		KProtocolEnvelopeCodec::channelName(channel),
+		strMessage.toUtf8().size(),
+		QStringLiteral("type=%1 routeStatus=%2 handlerStatus=%3")
+			.arg(result.envelope.strType)
+			.arg(static_cast<int>(result.status))
+			.arg(static_cast<int>(result.handlerResult.status)));
 	if (result.status == HandledProtocolRouteStatus)
 	{
-		if (!m_bRouteHandlerRejected && pInvalidCount != nullptr)
+		if (pInvalidCount != nullptr)
 			*pInvalidCount = 0;
 		return;
 	}

@@ -5,6 +5,8 @@
 
 #include <QtCore/QString>
 
+struct KProtocolEnvelope;
+
 enum KAccessMessageType
 {
 	InvalidAccessMessageType,
@@ -26,11 +28,13 @@ struct KAccessMessage
 class KAccessMessageCodec
 {
 public:
-	static constexpr int kProtocolVersion = KProtocolConstraints::kProtocolVersion;
 	static constexpr int kMaximumMessageBytes = KProtocolConstraints::kMaximumAccessMessageBytes;
 
 	static QString encode(const KAccessMessage &message);
 	static bool decode(const QString &strMessage,
+		KAccessMessage *pMessage,
+		QString *pErrorMessage);
+	static bool decode(const KProtocolEnvelope &envelope,
 		KAccessMessage *pMessage,
 		QString *pErrorMessage);
 	static bool isAccessMessage(const QString &strMessage);

@@ -3,6 +3,8 @@
 
 #include <QtCore/QString>
 
+struct KProtocolEnvelope;
+
 enum KWebRtcSignalingMessageType
 {
 	InvalidWebRtcSignalingMessageType,
@@ -25,6 +27,9 @@ class KWebRtcSignalingMessageCodec
 public:
 	static QString encode(const KWebRtcSignalingMessage &message);
 	static bool decode(const QString &strMessage,
+		KWebRtcSignalingMessage *pMessage,
+		QString *pErrorMessage);
+	static bool decode(const KProtocolEnvelope &envelope,
 		KWebRtcSignalingMessage *pMessage,
 		QString *pErrorMessage);
 	static QString typeName(KWebRtcSignalingMessageType type);

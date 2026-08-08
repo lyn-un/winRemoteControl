@@ -1,16 +1,13 @@
 #include "core/protocol/clipboardmessage.h"
 
 #include "core/protocol/protocolconstraints.h"
+#include "core/protocol/protocolenvelope.h"
 
-#include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
-#include <QtCore/QJsonParseError>
 #include <QtCore/QUuid>
 
 namespace
 {
-	constexpr char kType[] = "type";
-	constexpr char kVersion[] = "version";
 	constexpr char kClipboardText[] = "clipboardText";
 	constexpr char kClipboardReady[] = "clipboardReady";
 	constexpr char kClipboardSyncState[] = "clipboardSyncState";
@@ -30,33 +27,18 @@ namespace
 		return !strValue.isEmpty() && !QUuid::fromString(strValue).isNull();
 	}
 
-	bool HasSupportedVersion(const QJsonObject &object)
-	{
-		const QJsonValue value = object.value(QString::fromLatin1(kVersion));
-		if (value.isUndefined())
-			return true;
-		return value.isDouble()
-			&& value.toDouble() == static_cast<double>(value.toInt())
-			&& value.toInt() == KClipboardMessageCodec::kProtocolVersion;
-	}
 }
 
 QString KClipboardMessageCodec::encode(const KClipboardMessage &message)
 {
 	QJsonObject object;
-	object.insert(QString::fromLatin1(kVersion), kProtocolVersion);
-	QString strType = QString::fromLatin1(kClipboardText);
-	if (message.type == ReadyClipboardMessageType)
-		strType = QString::fromLatin1(kClipboardReady);
-	else if (message.type == SyncStateClipboardMessageType)
-		strType = QString::fromLatin1(kClipboardSyncState);
-	object.insert(QString::fromLatin1(kType), strType);
 	object.insert(QString::fromLatin1(kMessageId), message.strMessageId);
 	if (message.type == SyncStateClipboardMessageType)
 		object.insert(QString::fromLatin1(kEnabled), message.bEnabled);
 	else if (message.type == TextClipboardMessageType)
 		object.insert(QString::fromLatin1(kText), message.strText);
-	return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
+	return KProtocolEnvelopeCodec::encode(ClipboardProtocolChannel,
+		typeName(message.type), QString(), 0, object);
 }
 
 QString KClipboardMessageCodec::typeName(KClipboardMessageType type)
@@ -76,23 +58,27 @@ bool KClipboardMessageCodec::decode(const QString &strMessage,
 {
 	if (pMessage == nullptr)
 		return FailDecode(QStringLiteral("Clipboard message output is null"), pErrorMessage);
-	const QByteArray data = strMessage.toUtf8();
-	if (data.size() > KProtocolConstraints::kMaximumClipboardMessageBytes)
-		return FailDecode(QStringLiteral("Clipboard message is too large"), pErrorMessage);
+	KProtocolEnvelope envelope;
+	if (!KProtocolEnvelopeCodec::decode(ClipboardProtocolChannel,
+		strMessage, &envelope, pErrorMessage))
+	{
+		return false;
+	}
+	if (envelope.nVersion != KProtocolConstraints::kEnvelopeSchemaVersion)
+		return FailDecode(QStringLiteral("Unsupported clipboard envelope version"), pErrorMessage);
+	return decode(envelope, pMessage, pErrorMessage);
+}
 
-	QJsonParseError parseError;
-	const QJsonDocument document = QJsonDocument::fromJson(data, &parseError);
-	if (parseError.error != QJsonParseError::NoError || !document.isObject())
-		return FailDecode(QStringLiteral("Clipboard message is not a JSON object"), pErrorMessage);
-
-	const QJsonObject object = document.object();
-	if (!HasSupportedVersion(object))
-		return FailDecode(QStringLiteral("Unsupported clipboard protocol version"), pErrorMessage);
-	const QJsonValue typeValue = object.value(QString::fromLatin1(kType));
+bool KClipboardMessageCodec::decode(const KProtocolEnvelope &envelope,
+	KClipboardMessage *pMessage,
+	QString *pErrorMessage)
+{
+	if (pMessage == nullptr)
+		return FailDecode(QStringLiteral("Clipboard message output is null"), pErrorMessage);
+	const QJsonObject object = envelope.payload;
 	const QJsonValue messageIdValue = object.value(QString::fromLatin1(kMessageId));
-	const QString strType = typeValue.toString();
-	if (!typeValue.isString()
-		|| (strType != QString::fromLatin1(kClipboardText)
+	const QString strType = envelope.strType;
+	if ((strType != QString::fromLatin1(kClipboardText)
 			&& strType != QString::fromLatin1(kClipboardReady)
 			&& strType != QString::fromLatin1(kClipboardSyncState))
 		|| !messageIdValue.isString())

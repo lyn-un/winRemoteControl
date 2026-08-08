@@ -20,13 +20,34 @@ enum KProtocolRouteStatus
 	MalformedProtocolRouteStatus,
 	UnsupportedVersionProtocolRouteStatus,
 	UnknownTypeProtocolRouteStatus,
-	ForbiddenProtocolRouteStatus
+	ForbiddenProtocolRouteStatus,
+	HandlerFailedProtocolRouteStatus
+};
+
+enum KProtocolHandlerStatus
+{
+	ProtocolHandlerSucceeded,
+	ProtocolHandlerDecodeFailed,
+	ProtocolHandlerInvalidState,
+	ProtocolHandlerPermissionDenied,
+	ProtocolHandlerExecutionFailed
+};
+
+struct KProtocolHandlerResult
+{
+	KProtocolHandlerStatus status = ProtocolHandlerExecutionFailed;
+	QString strTechnicalMessage;
+
+	static KProtocolHandlerResult success();
+	static KProtocolHandlerResult failure(KProtocolHandlerStatus status,
+		const QString &strTechnicalMessage);
 };
 
 struct KProtocolRouteResult
 {
 	KProtocolRouteStatus status = MalformedProtocolRouteStatus;
 	KProtocolEnvelope envelope;
+	KProtocolHandlerResult handlerResult;
 	QString strError;
 };
 
@@ -34,7 +55,8 @@ class KProtocolRouter
 {
 public:
 	using Guard = std::function<bool(const KProtocolEnvelope &, const KProtocolRouteContext &)>;
-	using Handler = std::function<void(const KProtocolEnvelope &)>;
+	using Handler = std::function<KProtocolHandlerResult(
+		const KProtocolEnvelope &, const KProtocolRouteContext &)>;
 
 	bool registerHandler(KProtocolChannel channel,
 		const QString &strType,

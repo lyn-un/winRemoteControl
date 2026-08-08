@@ -5,11 +5,16 @@
 
 #include <QtCore/QString>
 
+struct KProtocolEnvelope;
+
 class KWebRtcLatencyProbe
 {
 public:
 	QString createPing();
 	bool handleMessage(const QString &strMessage,
+		KSessionRole role,
+		QString *pResponseMessage);
+	bool handleMessage(const KProtocolEnvelope &envelope,
 		KSessionRole role,
 		QString *pResponseMessage);
 	void reset();
