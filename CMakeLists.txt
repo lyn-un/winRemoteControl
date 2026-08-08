@@ -624,6 +624,33 @@ if(WRC_BUILD_TESTS)
 	)
 	add_test(NAME wrc_capture_pipeline_tests COMMAND wrc_capture_pipeline_tests)
 
+	add_executable(wrc_video_pipeline_benchmark
+		tests/performance/videopipelinebenchmark.cpp
+	)
+	target_include_directories(wrc_video_pipeline_benchmark PRIVATE
+		"${FFMPEG_ROOT}/include"
+	)
+	target_link_libraries(wrc_video_pipeline_benchmark PRIVATE
+		wrc_capture_application
+		wrc_ffmpeg_adapter
+		Qt6::Core
+		Psapi
+	)
+	add_custom_command(TARGET wrc_video_pipeline_benchmark POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			"${FFMPEG_ROOT}/bin/avcodec-62.dll"
+			"${FFMPEG_ROOT}/bin/avutil-60.dll"
+			"${FFMPEG_ROOT}/bin/swscale-9.dll"
+			"${FFMPEG_ROOT}/bin/swresample-6.dll"
+			"$<TARGET_FILE_DIR:wrc_video_pipeline_benchmark>"
+		COMMAND "$<TARGET_FILE:Qt6::windeployqt>"
+			--release
+			--no-translations
+			--no-compiler-runtime
+			"$<TARGET_FILE:wrc_video_pipeline_benchmark>"
+		VERBATIM
+	)
+
 	add_executable(wrc_session_service_tests
 		tests/unit/sessionservicetest.cpp
 	)
@@ -745,6 +772,15 @@ if(WRC_BUILD_TESTS)
 	add_test(NAME wrc_frame_watermark_tests COMMAND wrc_frame_watermark_tests)
 
 	endif() # WRC_BUILD_APP
+
+	# Keep file-writing tests deterministic and inside the build tree. This also
+	# avoids depending on the user profile's temporary-directory permissions.
+	set(WRC_TEST_TEMP_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-temp")
+	file(MAKE_DIRECTORY "${WRC_TEST_TEMP_DIRECTORY}")
+	get_property(WRC_REGISTERED_TESTS DIRECTORY PROPERTY TESTS)
+	set_tests_properties(${WRC_REGISTERED_TESTS} PROPERTIES
+		ENVIRONMENT "TEMP=${WRC_TEST_TEMP_DIRECTORY};TMP=${WRC_TEST_TEMP_DIRECTORY}"
+	)
 endif()
 
 if(WRC_BUILD_APP)

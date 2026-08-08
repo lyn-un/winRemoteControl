@@ -498,7 +498,21 @@ WebView2/React 永远是展示层。
 
 下一项架构工作建议从“阶段 B：协议层提取”开始，而不是先拆最大文件或创建插件框架。它的收益可测试、风险较低，也会为后续会话状态机和其他平台适配建立稳定边界。
 
-## 17. P2 架构与基础能力改造
+## 17. P1 协议路由、可靠命令与输入通道
+
+协议栈固定区分以下版本层次：
+
+- `kEnvelopeSchemaVersion = 1` 是所有 TCP/DataChannel JSON 信封的结构版本。缺少、非整数或未来版本一律拒绝；同一主版本的未知字段忽略，以便向前兼容。
+- `kSessionProtocolMinVersion` / `kSessionProtocolMaxVersion = 2` 是 Session 能力协商版本范围，只用于判断两端业务能力是否存在交集；无交集时明确结束为版本不兼容。
+- 具体功能当前没有额外的独立版本字段；兼容字段仍在 Envelope 1 内增加，破坏兼容的修改必须提升对应 schema 或 Session 协议版本，不能复用含义。
+
+每条消息由 `KProtocolEnvelopeCodec` 唯一一次解析 JSON，Router 将已解析的 `payload` 交给具体 Codec。Guard 只判断角色/状态权限，Codec 只校验字段，Handler 返回 `KProtocolHandlerResult` 表达业务执行结果；最终 `KProtocolRouteResult` 同时包含 route 与 handler 状态，不使用共享旁路标志。
+
+Session 副作用命令使用 UUID `requestId`、`commandResult`、1 秒超时和一次同 ID 重试；接收端缓存最近 128 个结果，重复请求只重发结果而不重复执行。通道关闭或初次发送失败会显式完成全部 pending command，可靠发送队列同时受消息数和字节数限制，溢出发布结构化错误。`startStreaming` 携带可选配置形成单个原子命令，`endSession` 等待 ACK 或超时后再清理。能力交换仍由双方能力响应和 3 秒协商超时确认，不使用高频 ACK。
+
+输入分为两个独立 DataChannel：`input` 为可靠有序通道，承载按键、按钮、滚轮和文本；`input-realtime` 为无序、零重传通道，只承载 MouseMove。实时通道不可用时 MouseMove 回退到可靠通道并继续合并旧坐标；发送和注入端分别维护 pointer/reliable sequence，鼠标乱序不会误删后到的可靠按键。两条输入队列以及 Session、Clipboard 队列各自限流，互不共享无优先级积压。
+
+## 18. P2 架构与基础能力改造
 
 P2 已按独立变更完成：
 
@@ -511,6 +525,27 @@ P2 已按独立变更完成：
 7. **视频内存路径**：采集循环复用同尺寸 BGRA 分配；`SwsContext` 跨帧缓存并在尺寸变化时更新；I420 使用最多四块的有界池，池耗尽时丢弃当前帧而不阻塞或扩容；WebRTC 通过外部 I420 wrapper 持有共享 buffer，取消进入视频源前的 Y/U/V plane copy。
 
 视频优化使用同一套可复现实验口径：在相同分辨率、帧率、画面运动和会话时长下以 `--latency-trace` 运行，比较 `capture_pipeline_stage`、`frame_converted`、`webrtc_frame_delivered`、`source_frame_coalesced`、`video_buffer_pool_drop` 和 `input_roundtrip_stats`。日志分别提供采集/处理/转换/push 耗时、BGRA 容量、I420 池字节数和丢帧数；进程 CPU 与工作集峰值由同一次运行的系统性能计数器记录。不得用不同画面负载的两次运行直接比较。
+
+仓库另提供不进入 CTest 稳定性门禁的合成基准，用同一 BGRA 输入分别执行旧版“逐帧创建 `SwsContext`、六块 plane 分配、再复制 Y/U/V”和新版复用路径：
+
+```powershell
+cmake --build build --config Release --target wrc_video_pipeline_benchmark
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\measure-video-pipeline.ps1 -Width 1280 -Height 720 -Frames 120
+```
+
+2026-08-08 在当前开发机 Release 构建上的一次基准结果如下；绝对耗时只用于本机同负载比较，双机端到端延迟仍以实际会话 trace 为准。
+
+| 指标 | 旧路径 | 复用路径 |
+| --- | ---: | ---: |
+| 墙钟耗时 | 378484 us | 222508 us |
+| 合成帧处理平均耗时 | 3154 us/frame | 1854 us/frame |
+| 进程 CPU 时间 | 187500 us | 46875 us |
+| 单核 CPU 占用率 | 49.5% | 21.1% |
+| 峰值工作集 | 19472384 B | 19656704 B |
+| `SwsContext` 创建次数 | 120 | 1 |
+| 像素 buffer 分配次数 | 480 | 6 |
+| WebRTC 前额外 plane copy | 165888000 B | 0 B |
+| 合成负载丢帧 | 不适用 | 0 / 120 |
 
 本轮明确延期：
 
