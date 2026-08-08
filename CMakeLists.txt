@@ -131,6 +131,7 @@ target_link_libraries(wrc_core PUBLIC
 	Qt6::Core
 )
 
+if(WRC_BUILD_APP)
 add_library(wrc_diagnostics STATIC
 	src/common/latencytracelogger.cpp
 	src/common/latencytracelogger.h
@@ -148,7 +149,6 @@ target_link_libraries(wrc_diagnostics PUBLIC
 	Qt6::Core
 )
 
-if(WRC_BUILD_APP)
 add_library(wrc_windows_adapters STATIC
 	src/adapters/clipboard/clipboardchangefilter.cpp
 	src/adapters/clipboard/clipboardchangefilter.h
