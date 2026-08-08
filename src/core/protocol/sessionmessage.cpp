@@ -7,8 +7,6 @@
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
 
-#include <algorithm>
-
 namespace
 {
 	constexpr char kDeviceInfoRequest[] = "deviceInfoRequest";
@@ -446,56 +444,4 @@ bool KSessionMessageCodec::isCommand(KSessionMessageType type)
 		|| type == StopStreamingSessionMessageType
 		|| type == EndSessionMessageType
 		|| type == StreamConfigSessionMessageType;
-}
-
-bool KSessionMessageCodec::negotiate(const KSessionCapabilities &local,
-	const KSessionCapabilities &remote,
-	KNegotiatedCapabilities *pNegotiated,
-	QString *pErrorMessage)
-{
-	if (pNegotiated == nullptr)
-		return failDecode(QStringLiteral("Negotiated capability output is null"), pErrorMessage);
-	const int nMinimumVersion = std::max(local.nProtocolMinVersion, remote.nProtocolMinVersion);
-	const int nMaximumVersion = std::min(local.nProtocolMaxVersion, remote.nProtocolMaxVersion);
-	if (nMinimumVersion > nMaximumVersion)
-		return failDecode(QStringLiteral("No compatible session protocol version"), pErrorMessage);
-	if (!local.supportedCodecs.contains(QStringLiteral("h264"))
-		|| !remote.supportedCodecs.contains(QStringLiteral("h264")))
-	{
-		return failDecode(QStringLiteral("H.264 is not supported by both peers"), pErrorMessage);
-	}
-	for (const QString &strRequiredChannel : { QStringLiteral("video"), QStringLiteral("session"), QStringLiteral("input") })
-	{
-		if (!local.supportedChannels.contains(strRequiredChannel)
-			|| !remote.supportedChannels.contains(strRequiredChannel))
-		{
-			return failDecode(QStringLiteral("Missing required channel: %1").arg(strRequiredChannel), pErrorMessage);
-		}
-	}
-
-	KNegotiatedCapabilities negotiated;
-	negotiated.bValid = true;
-	negotiated.nProtocolVersion = nMaximumVersion;
-	negotiated.strVideoCodec = QStringLiteral("h264");
-	for (const QString &strChannel : local.supportedChannels)
-	{
-		if (remote.supportedChannels.contains(strChannel))
-			negotiated.channels.append(strChannel);
-	}
-	negotiated.nMaximumWidth = std::min(local.nMaximumWidth, remote.nMaximumWidth);
-	negotiated.nMaximumHeight = std::min(local.nMaximumHeight, remote.nMaximumHeight);
-	negotiated.nMaximumFps = std::min(local.nMaximumFps, remote.nMaximumFps);
-	negotiated.nMaximumBitrateKbps = std::min(local.nMaximumBitrateKbps, remote.nMaximumBitrateKbps);
-	negotiated.bClipboardText = local.bClipboardText && remote.bClipboardText
-		&& negotiated.channels.contains(QStringLiteral("clipboard"));
-	negotiated.bInputRealtime = local.bInputRealtime && remote.bInputRealtime
-		&& negotiated.channels.contains(QStringLiteral("input-realtime"));
-	negotiated.bKeyboard = local.bKeyboard && remote.bKeyboard;
-	negotiated.bUnicodeText = local.bUnicodeText && remote.bUnicodeText;
-	negotiated.bMouseButtons = local.bMouseButtons && remote.bMouseButtons;
-	negotiated.bMouseWheel = local.bMouseWheel && remote.bMouseWheel;
-	*pNegotiated = negotiated;
-	if (pErrorMessage != nullptr)
-		pErrorMessage->clear();
-	return true;
 }

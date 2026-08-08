@@ -101,10 +101,6 @@ public:
 		QString *pErrorMessage);
 	static QString typeName(KSessionMessageType type);
 	static bool isCommand(KSessionMessageType type);
-	static bool negotiate(const KSessionCapabilities &local,
-		const KSessionCapabilities &remote,
-		KNegotiatedCapabilities *pNegotiated,
-		QString *pErrorMessage);
 };
 
 #endif // _WINREMOTECONTROL_CORE_PROTOCOL_SESSIONMESSAGE_H_

@@ -5,6 +5,7 @@
 #include "core/input/inputinjectorinterface.h"
 #include "core/protocol/accessmessage.h"
 #include "core/protocol/protocolconstraints.h"
+#include "core/session/capabilitynegotiator.h"
 #include "core/protocol/webrtcsignalingmessage.h"
 #include "core/session/deviceinfoprovider.h"
 #include "core/transport/signalingtransport.h"
@@ -1309,10 +1310,9 @@ KProtocolHandlerResult KSessionCoordinator::handleCapabilitiesMessage(
 		return KProtocolHandlerResult::failure(ProtocolHandlerInvalidState,
 			QStringLiteral("Capabilities received outside negotiation"));
 	}
-	KNegotiatedCapabilities negotiated;
-	QString strError;
-	if (!KSessionMessageCodec::negotiate(localCapabilities(), message.capabilities,
-			&negotiated, &strError))
+	const KCapabilityNegotiationResult negotiation = KCapabilityNegotiator::negotiate(
+		localCapabilities(), message.capabilities);
+	if (!negotiation.succeeded())
 	{
 		KSessionMessage rejection;
 		rejection.type = CapabilityRejectedSessionMessageType;
@@ -1322,10 +1322,11 @@ KProtocolHandlerResult KSessionCoordinator::handleCapabilitiesMessage(
 			m_sessionStateMachine.shouldKeepListening(), false, false);
 		reportSessionError(ProtocolSessionErrorDomain,
 			IncompatibleProtocolSessionErrorCode, NegotiationSessionErrorStage,
-			false, strError);
-		return KProtocolHandlerResult::failure(ProtocolHandlerExecutionFailed, strError);
+			false, negotiation.strTechnicalMessage);
+		return KProtocolHandlerResult::failure(ProtocolHandlerExecutionFailed,
+			negotiation.strTechnicalMessage);
 	}
-	completeCapabilityNegotiation(negotiated);
+	completeCapabilityNegotiation(negotiation.capabilities);
 	return KProtocolHandlerResult::success();
 }
 

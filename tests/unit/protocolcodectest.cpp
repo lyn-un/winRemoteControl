@@ -633,19 +633,6 @@ namespace
 			&& decoded.capabilities.monitorList.size() == 1,
 			QStringLiteral("session capabilities round-trip"));
 
-		KNegotiatedCapabilities negotiated;
-		check(KSessionMessageCodec::negotiate(source.capabilities, decoded.capabilities,
-				&negotiated, nullptr)
-			&& negotiated.bValid
-			&& negotiated.bClipboardText
-			&& negotiated.bInputRealtime,
-			QStringLiteral("compatible capabilities negotiate required channels"));
-
-		KSessionCapabilities incompatible = decoded.capabilities;
-		incompatible.supportedCodecs = { QStringLiteral("vp9") };
-		check(!KSessionMessageCodec::negotiate(source.capabilities, incompatible,
-				&negotiated, nullptr),
-			QStringLiteral("missing H.264 intersection is rejected"));
 		check(!KSessionMessageCodec::decode(
 			QStringLiteral("{\"version\":1,\"type\":\"capabilities\","
 				"\"protocolMinVersion\":3,\"protocolMaxVersion\":2}"),

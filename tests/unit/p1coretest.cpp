@@ -1,6 +1,7 @@
 #include "core/protocol/protocolrouter.h"
 #include "core/protocol/inputmessage.h"
 #include "core/session/sessionerror.h"
+#include "core/session/capabilitynegotiator.h"
 #include "core/transport/outboundmessagequeue.h"
 #include "session/sessionerrorpresenter.h"
 
@@ -184,6 +185,33 @@ namespace
 			QStringLiteral("presentation maps error code to user text"));
 		Check(error.bRetryable, QStringLiteral("retry policy is independent from user text"));
 	}
+
+	void TestCapabilityNegotiator()
+	{
+		KSessionCapabilities local;
+		local.supportedCodecs = { QStringLiteral("h264") };
+		local.supportedChannels = {
+			QStringLiteral("video"), QStringLiteral("session"), QStringLiteral("input"),
+			QStringLiteral("input-realtime"), QStringLiteral("clipboard")
+		};
+		local.bInputRealtime = true;
+		KSessionCapabilities remote = local;
+		remote.nMaximumWidth = 1280;
+		const KCapabilityNegotiationResult compatible =
+			KCapabilityNegotiator::negotiate(local, remote);
+		Check(compatible.succeeded()
+			&& compatible.capabilities.nMaximumWidth == 1280
+			&& compatible.capabilities.bInputRealtime,
+			QStringLiteral("capability negotiator returns the bounded intersection"));
+
+		remote.supportedCodecs = { QStringLiteral("vp9") };
+		const KCapabilityNegotiationResult incompatible =
+			KCapabilityNegotiator::negotiate(local, remote);
+		Check(!incompatible.succeeded()
+			&& incompatible.status == MissingCodecCapabilityNegotiationStatus
+			&& !incompatible.strTechnicalMessage.isEmpty(),
+			QStringLiteral("capability negotiator returns a structured incompatibility"));
+	}
 }
 
 int main(int argc, char *argv[])
@@ -193,5 +221,6 @@ int main(int argc, char *argv[])
 	TestProtocolEnvelopeValidationAndSingleParse();
 	TestOutboundQueue();
 	TestSessionErrorNames();
+	TestCapabilityNegotiator();
 	return g_nFailures == 0 ? 0 : 1;
 }

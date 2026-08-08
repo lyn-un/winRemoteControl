@@ -70,6 +70,8 @@ target_link_libraries(wrc_protocol PUBLIC
 )
 
 add_library(wrc_core STATIC
+	src/core/session/capabilitynegotiator.cpp
+	src/core/session/capabilitynegotiator.h
 	src/core/clipboard/clipboardadapter.h
 	src/core/devices/recentdevicestore.h
 	src/core/discovery/devicediscoverycontroller.h
