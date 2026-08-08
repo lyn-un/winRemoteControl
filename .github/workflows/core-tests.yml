@@ -1,0 +1,22 @@
+name: Core tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  core-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          cache: true
+      - name: Configure dependency-light targets
+        run: cmake --preset core-tests
+      - name: Build protocol and core tests
+        run: cmake --build --preset core-tests
+      - name: Run core tests
+        run: ctest --preset core-tests

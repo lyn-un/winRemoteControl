@@ -1,0 +1,81 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "dev",
+      "displayName": "Windows development",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/dev",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "$env{QTDIR}",
+        "WRC_BUILD_APP": "ON",
+        "WRC_BUILD_TESTS": "ON",
+        "WRC_ENABLE_WEBRTC": "ON",
+        "WRC_ENABLE_FFMPEG": "ON",
+        "WRC_ENABLE_WEBVIEW2": "ON"
+      }
+    },
+    {
+      "name": "core-tests",
+      "displayName": "Dependency-light core tests",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/core-tests",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "$env{QTDIR}",
+        "WRC_BUILD_APP": "OFF",
+        "WRC_BUILD_TESTS": "ON",
+        "WRC_ENABLE_WEBRTC": "OFF",
+        "WRC_ENABLE_FFMPEG": "OFF",
+        "WRC_ENABLE_WEBVIEW2": "OFF"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Windows release",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build/release"
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "configuration": "Debug"
+    },
+    {
+      "name": "core-tests",
+      "configurePreset": "core-tests",
+      "configuration": "Release"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "core-tests",
+      "configurePreset": "core-tests",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

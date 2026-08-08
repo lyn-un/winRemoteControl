@@ -6,20 +6,44 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
+option(WRC_BUILD_APP "Build the Windows desktop application" ON)
+option(WRC_BUILD_TESTS "Build automated tests" ON)
+option(WRC_ENABLE_WEBRTC "Enable the WebRTC transport adapter" ON)
+option(WRC_ENABLE_FFMPEG "Enable the FFmpeg codec adapter" ON)
+option(WRC_ENABLE_WEBVIEW2 "Enable the WebView2 presentation adapter" ON)
+
 if(NOT CMAKE_CONFIGURATION_TYPES)
 	set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-set(CMAKE_PREFIX_PATH "D:/Qt/6.10.2/msvc2022_64" CACHE PATH "Qt 6 MSVC 2022 path")
+if(NOT CMAKE_PREFIX_PATH AND DEFINED ENV{QTDIR})
+	list(PREPEND CMAKE_PREFIX_PATH "$ENV{QTDIR}")
+endif()
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Gui Network)
+find_package(Qt6 REQUIRED COMPONENTS Core)
+if(WRC_BUILD_APP)
+	if(NOT WIN32)
+		message(FATAL_ERROR "WRC_BUILD_APP currently supports Windows only")
+	endif()
+	if(NOT WRC_ENABLE_WEBRTC OR NOT WRC_ENABLE_FFMPEG OR NOT WRC_ENABLE_WEBVIEW2)
+		message(FATAL_ERROR
+			"The desktop application currently requires WebRTC, FFmpeg and WebView2. "
+			"Disable WRC_BUILD_APP for a dependency-light core build.")
+	endif()
+	find_package(Qt6 REQUIRED COMPONENTS Widgets Gui Network)
+endif()
 
 include(CTest)
+set(BUILD_TESTING ${WRC_BUILD_TESTS} CACHE BOOL "Build tests" FORCE)
 
-set(WEBVIEW2_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2")
-set(FFMPEG_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ffmpeg")
-set(WEBRTC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/webrtc/src")
-set(WEBRTC_OUT "${WEBRTC_ROOT}/out/wrc_release_x64_msvcstl")
+set(WEBVIEW2_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2"
+	CACHE PATH "WebView2 SDK root")
+set(FFMPEG_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ffmpeg"
+	CACHE PATH "FFmpeg SDK root")
+set(WEBRTC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/webrtc/src"
+	CACHE PATH "WebRTC source root")
+set(WEBRTC_OUT "${WEBRTC_ROOT}/out/wrc_release_x64_msvcstl"
+	CACHE PATH "WebRTC build output root")
 
 add_library(wrc_foundation INTERFACE)
 
@@ -107,6 +131,24 @@ target_link_libraries(wrc_core PUBLIC
 	Qt6::Core
 )
 
+add_library(wrc_diagnostics STATIC
+	src/common/latencytracelogger.cpp
+	src/common/latencytracelogger.h
+	src/common/sessiontracelogger.cpp
+	src/common/sessiontracelogger.h
+	src/common/traceoptions.cpp
+	src/common/traceoptions.h
+)
+
+target_include_directories(wrc_diagnostics PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_diagnostics PUBLIC
+	Qt6::Core
+)
+
+if(WRC_BUILD_APP)
 add_library(wrc_windows_adapters STATIC
 	src/adapters/clipboard/clipboardchangefilter.cpp
 	src/adapters/clipboard/clipboardchangefilter.h
@@ -136,24 +178,6 @@ target_link_libraries(wrc_windows_adapters PUBLIC
 	Qt6::Gui
 	user32
 )
-
-add_library(wrc_diagnostics STATIC
-	src/common/latencytracelogger.cpp
-	src/common/latencytracelogger.h
-	src/common/sessiontracelogger.cpp
-	src/common/sessiontracelogger.h
-	src/common/traceoptions.cpp
-	src/common/traceoptions.h
-)
-
-target_include_directories(wrc_diagnostics PUBLIC
-	"${CMAKE_CURRENT_SOURCE_DIR}/src"
-)
-
-target_link_libraries(wrc_diagnostics PUBLIC
-	Qt6::Core
-)
-
 add_library(wrc_session_application STATIC
 	src/input/inputinjector.cpp
 	src/input/inputinjector.h
@@ -523,25 +547,9 @@ target_link_libraries(winRemoteControl PRIVATE
 	ole32
 )
 
-if(BUILD_TESTING)
-	add_executable(wrc_input_injector_tests
-		tests/unit/inputinjectortest.cpp
-	)
-	target_link_libraries(wrc_input_injector_tests PRIVATE
-		wrc_session_application
-		Qt6::Core
-	)
-	add_test(NAME wrc_input_injector_tests COMMAND wrc_input_injector_tests)
+endif() # WRC_BUILD_APP
 
-	add_executable(wrc_capture_pipeline_tests
-		tests/unit/capturepipelinetest.cpp
-	)
-	target_link_libraries(wrc_capture_pipeline_tests PRIVATE
-		wrc_capture_application
-		Qt6::Core
-	)
-	add_test(NAME wrc_capture_pipeline_tests COMMAND wrc_capture_pipeline_tests)
-
+if(WRC_BUILD_TESTS)
 	add_executable(wrc_protocol_tests
 		tests/unit/protocolcodectest.cpp
 	)
@@ -550,6 +558,15 @@ if(BUILD_TESTING)
 		Qt6::Core
 	)
 	add_test(NAME wrc_protocol_tests COMMAND wrc_protocol_tests)
+
+	add_executable(wrc_protocol_robustness_tests
+		tests/unit/protocolrobustnesstest.cpp
+	)
+	target_link_libraries(wrc_protocol_robustness_tests PRIVATE
+		wrc_protocol
+		Qt6::Core
+	)
+	add_test(NAME wrc_protocol_robustness_tests COMMAND wrc_protocol_robustness_tests)
 
 	add_executable(wrc_session_state_tests
 		tests/unit/sessionstatemachinetest.cpp
@@ -568,6 +585,44 @@ if(BUILD_TESTING)
 		Qt6::Core
 	)
 	add_test(NAME wrc_network_stats_tests COMMAND wrc_network_stats_tests)
+
+	add_executable(wrc_p1_core_tests
+		tests/unit/p1coretest.cpp
+	)
+	target_link_libraries(wrc_p1_core_tests PRIVATE
+		wrc_core
+		wrc_protocol
+		Qt6::Core
+	)
+	add_test(NAME wrc_p1_core_tests COMMAND wrc_p1_core_tests)
+	set_tests_properties(
+		wrc_protocol_tests
+		wrc_protocol_robustness_tests
+		wrc_session_state_tests
+		wrc_network_stats_tests
+		wrc_p1_core_tests
+		PROPERTIES ENVIRONMENT_MODIFICATION
+			"PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+	)
+
+	if(WRC_BUILD_APP)
+	add_executable(wrc_input_injector_tests
+		tests/unit/inputinjectortest.cpp
+	)
+	target_link_libraries(wrc_input_injector_tests PRIVATE
+		wrc_session_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_input_injector_tests COMMAND wrc_input_injector_tests)
+
+	add_executable(wrc_capture_pipeline_tests
+		tests/unit/capturepipelinetest.cpp
+	)
+	target_link_libraries(wrc_capture_pipeline_tests PRIVATE
+		wrc_capture_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_capture_pipeline_tests COMMAND wrc_capture_pipeline_tests)
 
 	add_executable(wrc_session_service_tests
 		tests/unit/sessionservicetest.cpp
@@ -689,18 +744,10 @@ if(BUILD_TESTING)
 	)
 	add_test(NAME wrc_frame_watermark_tests COMMAND wrc_frame_watermark_tests)
 
-	add_executable(wrc_p1_core_tests
-		tests/unit/p1coretest.cpp
-	)
-	target_link_libraries(wrc_p1_core_tests PRIVATE
-		wrc_core
-		wrc_protocol
-		wrc_session_application
-		Qt6::Core
-	)
-	add_test(NAME wrc_p1_core_tests COMMAND wrc_p1_core_tests)
+	endif() # WRC_BUILD_APP
 endif()
 
+if(WRC_BUILD_APP)
 set(WEBVIEW2_LOADER "${WEBVIEW2_ROOT}/build/native/x64/WebView2Loader.dll")
 set(FRONTEND_DIST "${CMAKE_CURRENT_SOURCE_DIR}/frontend/dist")
 set(FFMPEG_DLLS
@@ -722,10 +769,11 @@ add_custom_command(TARGET winRemoteControl POST_BUILD
 	COMMAND ${CMAKE_COMMAND} -E copy_if_different
 		${FFMPEG_DLLS}
 		"$<TARGET_FILE_DIR:winRemoteControl>"
-	COMMAND "D:/Qt/6.10.2/msvc2022_64/bin/windeployqt.exe"
+	COMMAND "$<TARGET_FILE:Qt6::windeployqt>"
 		--release
 		--no-translations
 		--no-compiler-runtime
 		"$<TARGET_FILE:winRemoteControl>"
 	VERBATIM
 )
+endif() # WRC_BUILD_APP

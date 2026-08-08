@@ -81,12 +81,16 @@ namespace
 	class KFakeRemotePeerTransport final : public KRemotePeerTransport
 	{
 	public:
-		bool initialize(KSessionRole role, quint64 nGeneration, QString *) override
+		bool initialize(KSessionRole role, quint64 nGeneration, QString *pErrorMessage) override
 		{
 			initializedRole = role;
 			m_nGeneration = nGeneration;
 			++nInitializeCount;
-			return true;
+			if (bInitializeSucceeds)
+				return true;
+			if (pErrorMessage != nullptr)
+				*pErrorMessage = QStringLiteral("injected initialization failure");
+			return false;
 		}
 
 		void requestShutdown(quint64 nGeneration) override
@@ -238,6 +242,7 @@ namespace
 		int nStreamConfigCount = 0;
 		bool bSessionSendSucceeds = true;
 		bool bInputRealtimeEnabled = false;
+		bool bInitializeSucceeds = true;
 	};
 
 	quint16 reserveLocalPort()
@@ -626,6 +631,27 @@ namespace
 			QStringLiteral("disabled remote access refuses to start listening"));
 	}
 
+	void testInitializationFailureRollsBackTransport()
+	{
+		auto spPeer = std::make_unique<KFakeRemotePeerTransport>();
+		KFakeRemotePeerTransport *pPeer = spPeer.get();
+		pPeer->bInitializeSucceeds = false;
+		KSessionCoordinator service(std::make_unique<KFakeDeviceInfoProvider>(),
+			std::make_unique<KFakeInputInjector>(),
+			std::move(spPeer),
+			std::make_unique<KTcpSignalingTransport>());
+		KSessionError sessionError;
+		QObject::connect(&service, &KSessionCoordinator::sessionErrorOccurred,
+			[&sessionError](const KSessionError &error) { sessionError = error; });
+
+		service.startSignalingServer(reserveLocalPort());
+		check(pPeer->nInitializeCount == 1 && pPeer->nShutdownCount == 1,
+			QStringLiteral("failed peer initialization requests resource rollback"));
+		check(service.isIdle()
+			&& sessionError.code == InitializationFailedSessionErrorCode,
+			QStringLiteral("failed initialization leaves the session idle with a structured error"));
+	}
+
 	void testSignalingReceiveBoundaries()
 	{
 		KTcpSignalingTransport transport;
@@ -693,6 +719,7 @@ int main(int argc, char *argv[])
 	testRecoveryAndSecureRetry();
 	testDenyPolicyRejectsBeforeOffer();
 	testDisabledRemoteAccessCannotListen();
+	testInitializationFailureRollsBackTransport();
 	testSignalingReceiveBoundaries();
 	if (g_nFailureCount == 0)
 		qInfo() << "All session service tests passed";

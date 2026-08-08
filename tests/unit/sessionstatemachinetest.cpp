@@ -3,6 +3,9 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDebug>
 
+#include <functional>
+#include <vector>
+
 namespace
 {
 	int g_nFailureCount = 0;
@@ -160,6 +163,51 @@ namespace
 		check(!KSessionStateMachine::roleFromString(QStringLiteral("unknown"), &role),
 			QStringLiteral("unknown role string is rejected"));
 	}
+
+	void testTableDrivenTransitions()
+	{
+		struct KTransitionCase
+		{
+			const char *pDescription = nullptr;
+			std::function<void(KSessionStateMachine &)> prepare;
+			std::function<bool(KSessionStateMachine &)> transition;
+			bool bExpectedResult = false;
+			KSessionState expectedState = IdleSessionState;
+		};
+		const std::vector<KTransitionCase> cases = {
+			{ "idle cannot stop", {},
+				[](KSessionStateMachine &machine) { return machine.beginStopping(); },
+				false, IdleSessionState },
+			{ "idle controller can connect", {},
+				[](KSessionStateMachine &machine) { return machine.beginConnecting(); },
+				true, ConnectingSessionState },
+			{ "listener cannot reconnect",
+				[](KSessionStateMachine &machine) { machine.beginListening(); },
+				[](KSessionStateMachine &machine) { return machine.beginReconnecting(); },
+				false, ListeningSessionState },
+			{ "connected session can reconnect",
+				[](KSessionStateMachine &machine)
+				{
+					machine.beginConnecting();
+					machine.beginAwaitingApproval();
+					machine.approveConnection();
+					machine.markConnected();
+				},
+				[](KSessionStateMachine &machine) { return machine.beginReconnecting(); },
+				true, ReconnectingSessionState }
+		};
+
+		for (const KTransitionCase &transitionCase : cases)
+		{
+			KSessionStateMachine stateMachine;
+			if (transitionCase.prepare)
+				transitionCase.prepare(stateMachine);
+			const bool bResult = transitionCase.transition(stateMachine);
+			check(bResult == transitionCase.bExpectedResult
+				&& stateMachine.state() == transitionCase.expectedState,
+				QString::fromLatin1(transitionCase.pDescription));
+		}
+	}
 }
 
 int main(int nArgc, char *pArgv[])
@@ -169,6 +217,7 @@ int main(int nArgc, char *pArgv[])
 	testControlledLifecycleAndGeneration();
 	testInterruptionRestore();
 	testInvalidTransitionsAndRoleChanges();
+	testTableDrivenTransitions();
 	testEndReasonNames();
 
 	if (g_nFailureCount == 0)

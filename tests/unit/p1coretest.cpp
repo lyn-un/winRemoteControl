@@ -3,7 +3,6 @@
 #include "core/session/sessionerror.h"
 #include "core/session/capabilitynegotiator.h"
 #include "core/transport/outboundmessagequeue.h"
-#include "session/sessionerrorpresenter.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDebug>
@@ -181,8 +180,6 @@ namespace
 			QStringLiteral("error code name is stable"));
 		Check(KSessionError::stageName(error.stage) == QStringLiteral("connecting"),
 			QStringLiteral("error stage name is stable"));
-		Check(KSessionErrorPresenter::userMessage(error).contains(QStringLiteral("超时")),
-			QStringLiteral("presentation maps error code to user text"));
 		Check(error.bRetryable, QStringLiteral("retry policy is independent from user text"));
 	}
 

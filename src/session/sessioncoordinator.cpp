@@ -887,7 +887,10 @@ bool KSessionCoordinator::initializePeer(KSessionRole role, QString *pErrorMessa
 {
 	m_bDeviceInfoRequested = false;
 	++m_nActivePeerGeneration;
-	return m_spRemotePeerTransport->initialize(role, m_nActivePeerGeneration, pErrorMessage);
+	if (m_spRemotePeerTransport->initialize(role, m_nActivePeerGeneration, pErrorMessage))
+		return true;
+	m_spRemotePeerTransport->requestShutdown(m_nActivePeerGeneration);
+	return false;
 }
 
 void KSessionCoordinator::wirePeer()
