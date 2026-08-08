@@ -163,9 +163,13 @@ add_library(wrc_session_application STATIC
 	src/session/sessioncoordinator.h
 	src/session/sessioncommanddispatcher.cpp
 	src/session/sessioncommanddispatcher.h
+	src/session/recoverycontroller.cpp
+	src/session/recoverycontroller.h
 	src/session/sessioncontroller.h
 	src/session/sessionerrorpresenter.cpp
 	src/session/sessionerrorpresenter.h
+	src/session/shutdowncoordinator.cpp
+	src/session/shutdowncoordinator.h
 )
 
 target_include_directories(wrc_session_application PUBLIC
@@ -594,6 +598,26 @@ if(BUILD_TESTING)
 	)
 	add_test(NAME wrc_session_command_dispatcher_tests
 		COMMAND wrc_session_command_dispatcher_tests)
+
+	add_executable(wrc_shutdown_coordinator_tests
+		tests/unit/shutdowncoordinatortest.cpp
+	)
+	target_link_libraries(wrc_shutdown_coordinator_tests PRIVATE
+		wrc_session_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_shutdown_coordinator_tests
+		COMMAND wrc_shutdown_coordinator_tests)
+
+	add_executable(wrc_recovery_controller_tests
+		tests/unit/recoverycontrollertest.cpp
+	)
+	target_link_libraries(wrc_recovery_controller_tests PRIVATE
+		wrc_session_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_recovery_controller_tests
+		COMMAND wrc_recovery_controller_tests)
 
 	add_executable(wrc_lan_discovery_tests
 		tests/unit/landiscoveryservicetest.cpp

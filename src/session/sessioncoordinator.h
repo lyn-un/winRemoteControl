@@ -14,7 +14,6 @@
 #include "core/transport/remotepeertransport.h"
 #include "session/sessioncontroller.h"
 
-#include <QtCore/QElapsedTimer>
 #include <QtCore/QObject>
 #include <QtCore/QString>
 
@@ -24,8 +23,10 @@ class IKDeviceInfoProvider;
 class IKInputInjector;
 class KInputInjector;
 class KAccessApprovalController;
+class KRecoveryController;
 class KSessionCommandDispatcher;
 class KSignalingTransport;
+class KShutdownCoordinator;
 class QTimer;
 
 class KSessionCoordinator : public KSessionController
@@ -94,9 +95,10 @@ private:
 		bool bReportError);
 	void handleCaptureShutdownFinished(quint64 nGeneration);
 	void handlePeerShutdownFinished(quint64 nGeneration);
-	void tryFinishStopping();
-	void finishStopping();
-	void handleStopWatchdog();
+	void finishStopping(quint64 nGeneration);
+	void handleStopWatchdog(quint64 nGeneration,
+		bool bCapturePending,
+		bool bPeerPending);
 	void executePendingRequest();
 	void resetInputTraceState();
 	void handleRemoteFrame(const KDecodedVideoFrame &frame);
@@ -136,7 +138,7 @@ private:
 	void handlePeerConnectionInterrupted();
 	void handlePeerConnectionRestored();
 	void handlePeerConnectionTerminated(const QString &strReason);
-	void handleReconnectTimeout();
+	void handleReconnectTimeout(quint64 nGeneration);
 	void sendDeviceInfoMessage();
 	void updateListeningAvailability(bool bAvailable, quint16 nPort = 0);
 	void publishSessionState();
@@ -149,13 +151,14 @@ private:
 	KSessionStateMachine m_sessionStateMachine;
 	KProtocolRouter m_protocolRouter;
 	KSessionCommandDispatcher *m_pSessionCommandDispatcher = nullptr;
+	KRecoveryController *m_pRecoveryController = nullptr;
+	KShutdownCoordinator *m_pShutdownCoordinator = nullptr;
 	bool m_bDeviceInfoRequested = false;
 	bool m_bInputChannelOpen = false;
 	bool m_bClipboardChannelOpen = false;
 	bool m_bSessionChannelOpen = false;
 	bool m_bCaptureActive = false;
 	quint64 m_nLastInjectedInputSeq = 0;
-	quint64 m_nReconnectGeneration = 0;
 	quint64 m_nActivePeerGeneration = 0;
 	qint64 m_nLastInjectedInputMs = -1;
 	bool m_bSignalingConnected = false;
@@ -163,7 +166,6 @@ private:
 	quint16 m_nListeningPort = 0;
 	quint16 m_nLastConnectionPort = 0;
 	QString m_strLastConnectionHost;
-	QElapsedTimer m_reconnectElapsedTimer;
 	KApplicationSettings m_applicationSettings;
 	KAccessApprovalController *m_pAccessApprovalController = nullptr;
 	int m_nInvalidSignalingMessages = 0;
@@ -172,11 +174,7 @@ private:
 	std::unique_ptr<KSignalingTransport> m_spSignalingTransport;
 	KSignalingTransport *m_pSignaling = nullptr;
 	KInputInjector *m_pInputInjector = nullptr;
-	QTimer *m_pReconnectTimer = nullptr;
-	QTimer *m_pStopWatchdogTimer = nullptr;
 	QTimer *m_pCapabilityTimer = nullptr;
-	bool m_bCaptureShutdownPending = false;
-	bool m_bPeerShutdownPending = false;
 	bool m_bStopKeepListening = false;
 	bool m_bStopReportError = false;
 	bool m_bStopRecovering = false;

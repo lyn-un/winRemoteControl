@@ -1,7 +1,9 @@
 #include "session/sessioncoordinator.h"
 
 #include "session/accessapprovalcontroller.h"
+#include "session/recoverycontroller.h"
 #include "session/sessioncommanddispatcher.h"
+#include "session/shutdowncoordinator.h"
 #include "common/latencytracelogger.h"
 #include "common/sessiontracelogger.h"
 #include "core/input/inputinjectorinterface.h"
@@ -64,24 +66,24 @@ KSessionCoordinator::KSessionCoordinator(
 	, m_spSignalingTransport(std::move(spSignalingTransport))
 	, m_pSignaling(m_spSignalingTransport.get())
 	, m_pInputInjector(new KInputInjector(std::move(spInputInjector), this))
-	, m_pReconnectTimer(new QTimer(this))
 	, m_pAccessApprovalController(new KAccessApprovalController(this))
 	, m_pSessionCommandDispatcher(new KSessionCommandDispatcher(this))
-	, m_pStopWatchdogTimer(new QTimer(this))
+	, m_pRecoveryController(new KRecoveryController(this))
+	, m_pShutdownCoordinator(new KShutdownCoordinator(this))
 	, m_pCapabilityTimer(new QTimer(this))
 {
 	Q_ASSERT(m_spRemotePeerTransport != nullptr);
 	Q_ASSERT(m_pSignaling != nullptr);
 	initializeProtocolRoutes();
 	initializeSessionHandlers();
-	m_pReconnectTimer->setSingleShot(true);
-	m_pStopWatchdogTimer->setSingleShot(true);
 	m_pCapabilityTimer->setSingleShot(true);
-	connect(m_pReconnectTimer, &QTimer::timeout,
-		this, &KSessionCoordinator::handleReconnectTimeout);
 	connect(m_pAccessApprovalController, &KAccessApprovalController::timedOut,
 		this, &KSessionCoordinator::handleApprovalTimeout);
-	connect(m_pStopWatchdogTimer, &QTimer::timeout,
+	connect(m_pRecoveryController, &KRecoveryController::timedOut,
+		this, &KSessionCoordinator::handleReconnectTimeout);
+	connect(m_pShutdownCoordinator, &KShutdownCoordinator::finished,
+		this, &KSessionCoordinator::finishStopping);
+	connect(m_pShutdownCoordinator, &KShutdownCoordinator::watchdogExpired,
 		this, &KSessionCoordinator::handleStopWatchdog);
 	connect(m_pCapabilityTimer, &QTimer::timeout,
 		this, &KSessionCoordinator::handleCapabilityTimeout);
@@ -740,12 +742,10 @@ void KSessionCoordinator::continueStoppingTeardown()
 			strReason,
 			-1,
 			QStringLiteral("costMs=%1")
-				.arg(m_reconnectElapsedTimer.isValid() ? m_reconnectElapsedTimer.elapsed() : -1));
+				.arg(m_pRecoveryController->elapsedMs()));
 	}
-	m_pReconnectTimer->stop();
+	m_pRecoveryController->clear();
 	m_pCapabilityTimer->stop();
-	m_nReconnectGeneration = 0;
-	m_reconnectElapsedTimer.invalidate();
 	m_bSignalingConnected = false;
 	clearApprovalState(strReason);
 	m_bDeviceInfoRequested = false;
@@ -757,9 +757,7 @@ void KSessionCoordinator::continueStoppingTeardown()
 	m_negotiatedCapabilities = KNegotiatedCapabilities();
 	emit sessionCapabilitiesChanged(m_negotiatedCapabilities);
 	m_pSessionCommandDispatcher->clear();
-	m_bCaptureShutdownPending = m_bCaptureActive;
-	m_bPeerShutdownPending = true;
-	m_pStopWatchdogTimer->start(3000);
+	m_pShutdownCoordinator->begin(nGeneration, m_bCaptureActive, true, 3000);
 	if (m_bCaptureActive)
 		emit stopCaptureRequested(nGeneration);
 	m_bCaptureActive = false;
@@ -772,49 +770,47 @@ void KSessionCoordinator::handleCaptureShutdownFinished(quint64 nGeneration)
 {
 	if (nGeneration != m_nStoppingGeneration || !m_sessionStateMachine.isStopping())
 		return;
-	m_bCaptureShutdownPending = false;
-	tryFinishStopping();
+	m_pShutdownCoordinator->completeCapture(nGeneration);
 }
 
 void KSessionCoordinator::handlePeerShutdownFinished(quint64 nGeneration)
 {
 	if (nGeneration != m_nStoppingGeneration || !m_sessionStateMachine.isStopping())
 		return;
-	m_bPeerShutdownPending = false;
-	tryFinishStopping();
+	m_pShutdownCoordinator->completePeer(nGeneration);
 }
 
-void KSessionCoordinator::tryFinishStopping()
+void KSessionCoordinator::handleStopWatchdog(quint64 nGeneration,
+	bool bCapturePending,
+	bool bPeerPending)
 {
-	if (m_bCaptureShutdownPending || m_bPeerShutdownPending)
+	if (!m_sessionStateMachine.isStopping()
+		|| nGeneration != m_nStoppingGeneration)
+	{
 		return;
-	finishStopping();
-}
-
-void KSessionCoordinator::handleStopWatchdog()
-{
-	if (!m_sessionStateMachine.isStopping())
-		return;
+	}
 	KSessionTraceLogger::write(roleToString(m_stopRole),
 		QStringLiteral("session_stop_watchdog"),
 		QStringLiteral("timeout"),
 		-1,
 		QStringLiteral("generation=%1 capturePending=%2 peerPending=%3")
-			.arg(m_nStoppingGeneration)
-			.arg(m_bCaptureShutdownPending ? 1 : 0)
-			.arg(m_bPeerShutdownPending ? 1 : 0));
+			.arg(nGeneration)
+			.arg(bCapturePending ? 1 : 0)
+			.arg(bPeerPending ? 1 : 0));
 }
 
-void KSessionCoordinator::finishStopping()
+void KSessionCoordinator::finishStopping(quint64 nGeneration)
 {
-	m_pStopWatchdogTimer->stop();
+	if (!m_sessionStateMachine.isStopping()
+		|| nGeneration != m_nStoppingGeneration)
+	{
+		return;
+	}
 	const bool bKeepListening = m_bStopKeepListening;
 	const bool bReportError = m_bStopReportError;
 	const bool bRecovering = m_bStopRecovering;
 	const KSessionRole role = m_stopRole;
 	const QString strReason = m_strStopReason;
-	m_bCaptureShutdownPending = false;
-	m_bPeerShutdownPending = false;
 	m_bStopTeardownStarted = false;
 
 	bool bListening = false;
@@ -1817,15 +1813,14 @@ void KSessionCoordinator::handlePeerConnectionInterrupted()
 
 	m_pInputInjector->releaseAllInputs();
 	publishSessionState();
-	m_nReconnectGeneration = m_sessionStateMachine.generation();
-	m_reconnectElapsedTimer.start();
-	m_pReconnectTimer->start(kReconnectTimeoutMs);
+	const quint64 nGeneration = m_sessionStateMachine.generation();
+	m_pRecoveryController->begin(nGeneration, kReconnectTimeoutMs);
 	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 		QStringLiteral("session_recovery_start"),
 		QStringLiteral("ice_disconnected"),
 		-1,
 		QStringLiteral("generation=%1 signalingAvailable=%2 timeoutMs=%3")
-			.arg(m_nReconnectGeneration)
+			.arg(nGeneration)
 			.arg(m_bSignalingConnected ? 1 : 0)
 			.arg(kReconnectTimeoutMs));
 
@@ -1852,12 +1847,8 @@ void KSessionCoordinator::handlePeerConnectionRestored()
 	if (!m_sessionStateMachine.restore())
 		return;
 
-	const qint64 nCostMs = m_reconnectElapsedTimer.isValid()
-		? m_reconnectElapsedTimer.elapsed()
-		: -1;
-	m_pReconnectTimer->stop();
-	m_nReconnectGeneration = 0;
-	m_reconnectElapsedTimer.invalidate();
+	const qint64 nCostMs = m_pRecoveryController->complete(
+		m_sessionStateMachine.generation());
 	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 		QStringLiteral("session_recovery_success"),
 		QStringLiteral("restored"),
@@ -1878,11 +1869,14 @@ void KSessionCoordinator::handlePeerConnectionTerminated(const QString &strReaso
 		true);
 }
 
-void KSessionCoordinator::handleReconnectTimeout()
+void KSessionCoordinator::handleReconnectTimeout(quint64 nGeneration)
 {
 	if (!m_sessionStateMachine.isReconnecting()
-		|| m_nReconnectGeneration != m_sessionStateMachine.generation())
+		|| !m_pRecoveryController->isActive(nGeneration)
+		|| nGeneration != m_sessionStateMachine.generation())
+	{
 		return;
+	}
 
 	finishSession(DisconnectTimeoutSessionEndReason,
 		QString(),
