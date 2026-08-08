@@ -12,6 +12,7 @@ struct KProtocolRouteContext
 	int nRole = 0;
 	int nState = 0;
 	quint64 nGeneration = 0;
+	bool bRealtimeInput = false;
 };
 
 enum KProtocolRouteStatus

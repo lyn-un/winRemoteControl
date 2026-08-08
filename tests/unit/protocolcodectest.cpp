@@ -615,8 +615,9 @@ namespace
 		source.capabilities.supportedCodecs = { QStringLiteral("h264") };
 		source.capabilities.supportedChannels = {
 			QStringLiteral("video"), QStringLiteral("session"), QStringLiteral("input"),
-			QStringLiteral("clipboard")
+			QStringLiteral("input-realtime"), QStringLiteral("clipboard")
 		};
+		source.capabilities.bInputRealtime = true;
 		KMonitorCapability monitor;
 		monitor.strId = QStringLiteral("default");
 		monitor.nWidth = 1920;
@@ -636,7 +637,8 @@ namespace
 		check(KSessionMessageCodec::negotiate(source.capabilities, decoded.capabilities,
 				&negotiated, nullptr)
 			&& negotiated.bValid
-			&& negotiated.bClipboardText,
+			&& negotiated.bClipboardText
+			&& negotiated.bInputRealtime,
 			QStringLiteral("compatible capabilities negotiate required channels"));
 
 		KSessionCapabilities incompatible = decoded.capabilities;

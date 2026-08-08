@@ -41,6 +41,7 @@ namespace
 	constexpr char kMaximumFps[] = "maximumFps";
 	constexpr char kMaximumBitrateKbps[] = "maximumBitrateKbps";
 	constexpr char kClipboardText[] = "clipboardText";
+	constexpr char kInputRealtime[] = "inputRealtime";
 	constexpr char kKeyboard[] = "keyboard";
 	constexpr char kUnicodeText[] = "unicodeText";
 	constexpr char kMouseButtons[] = "mouseButtons";
@@ -69,6 +70,17 @@ namespace
 		if (value.isUndefined())
 			return true;
 		return readRequiredInt(object, pName, pValue);
+	}
+
+	bool readOptionalBool(const QJsonObject &object, const char *pName, bool *pValue)
+	{
+		const QJsonValue value = object.value(QString::fromLatin1(pName));
+		if (value.isUndefined())
+			return true;
+		if (!value.isBool())
+			return false;
+		*pValue = value.toBool();
+		return true;
 	}
 
 	bool failDecode(const QString &strError, QString *pErrorMessage)
@@ -180,6 +192,7 @@ QString KSessionMessageCodec::encode(const KSessionMessage &message)
 		object.insert(QString::fromLatin1(kMaximumFps), capabilities.nMaximumFps);
 		object.insert(QString::fromLatin1(kMaximumBitrateKbps), capabilities.nMaximumBitrateKbps);
 		object.insert(QString::fromLatin1(kClipboardText), capabilities.bClipboardText);
+		object.insert(QString::fromLatin1(kInputRealtime), capabilities.bInputRealtime);
 		object.insert(QString::fromLatin1(kKeyboard), capabilities.bKeyboard);
 		object.insert(QString::fromLatin1(kUnicodeText), capabilities.bUnicodeText);
 		object.insert(QString::fromLatin1(kMouseButtons), capabilities.bMouseButtons);
@@ -336,6 +349,7 @@ bool KSessionMessageCodec::decode(const KProtocolEnvelope &envelope,
 			|| capabilities.nMaximumBitrateKbps < KProtocolConstraints::kMinimumStreamBitrateKbps
 			|| capabilities.nMaximumBitrateKbps > KProtocolConstraints::kMaximumStreamBitrateKbps
 			|| !readRequiredBool(object, kClipboardText, &capabilities.bClipboardText)
+			|| !readOptionalBool(object, kInputRealtime, &capabilities.bInputRealtime)
 			|| !readRequiredBool(object, kKeyboard, &capabilities.bKeyboard)
 			|| !readRequiredBool(object, kUnicodeText, &capabilities.bUnicodeText)
 			|| !readRequiredBool(object, kMouseButtons, &capabilities.bMouseButtons)
@@ -474,6 +488,8 @@ bool KSessionMessageCodec::negotiate(const KSessionCapabilities &local,
 	negotiated.nMaximumBitrateKbps = std::min(local.nMaximumBitrateKbps, remote.nMaximumBitrateKbps);
 	negotiated.bClipboardText = local.bClipboardText && remote.bClipboardText
 		&& negotiated.channels.contains(QStringLiteral("clipboard"));
+	negotiated.bInputRealtime = local.bInputRealtime && remote.bInputRealtime
+		&& negotiated.channels.contains(QStringLiteral("input-realtime"));
 	negotiated.bKeyboard = local.bKeyboard && remote.bKeyboard;
 	negotiated.bUnicodeText = local.bUnicodeText && remote.bUnicodeText;
 	negotiated.bMouseButtons = local.bMouseButtons && remote.bMouseButtons;

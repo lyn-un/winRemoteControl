@@ -55,6 +55,7 @@ public:
 	void sendInputMessage(const KInputMessage &message) override;
 	void sendClipboardMessage(const KClipboardMessage &message) override;
 	bool sendSessionMessage(const KSessionMessage &message) override;
+	void setInputRealtimeEnabled(bool bEnabled) override;
 	void setStreamConfig(const KStreamConfig &config) override;
 
 private:
@@ -77,23 +78,28 @@ private:
 	bool createFactory(QString *pErrorMessage);
 	bool createPeerConnection(QString *pErrorMessage);
 	bool createInputDataChannel(QString *pErrorMessage);
+	bool createRealtimeInputDataChannel(QString *pErrorMessage);
 	bool createSessionDataChannel(QString *pErrorMessage);
 	bool createClipboardDataChannel(QString *pErrorMessage);
 	bool addLocalVideoTrack(QString *pErrorMessage);
 	bool addRemoteVideoReceiver(QString *pErrorMessage);
 	void handleInputChannelChanged(bool bOpen);
+	void handleRealtimeInputChannelChanged(bool bOpen);
 	void handleSessionChannelChanged(bool bOpen);
 	void handleClipboardChannelChanged(bool bOpen);
 	void handleInputChannelMessage(const QString &strMessage);
+	void handleRealtimeInputChannelMessage(const QString &strMessage);
 	void handleSessionChannelMessage(const QString &strMessage);
 	void handleClipboardChannelMessage(const QString &strMessage);
-	KProtocolHandlerResult decodeInputMessage(const KProtocolEnvelope &envelope);
+	KProtocolHandlerResult decodeInputMessage(const KProtocolEnvelope &envelope,
+		bool bRealtimeInput);
 	KProtocolHandlerResult decodeSessionMessage(const KProtocolEnvelope &envelope);
 	KProtocolHandlerResult decodeClipboardMessage(const KProtocolEnvelope &envelope);
 	KProtocolHandlerResult handleLatencyMessage(const KProtocolEnvelope &envelope);
 	void routeDataMessage(KProtocolChannel channel,
 		const QString &strMessage,
-		std::atomic_int *pInvalidCount);
+		std::atomic_int *pInvalidCount,
+		bool bRealtimeInput = false);
 	void handleProtocolReject(const QString &strChannel,
 		int nMessageBytes,
 		const QString &strError,
@@ -112,6 +118,7 @@ private:
 	void resetStatsHistory();
 	void sendLatencyPing();
 	void flushInputQueue();
+	void flushRealtimeInputQueue();
 	void flushSessionQueue();
 	void flushClipboardQueue();
 	bool enqueueInputMessage(const QString &strPayload, bool bMouseMove);
@@ -129,6 +136,7 @@ private:
 	webrtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> m_spFactory;
 	webrtc::scoped_refptr<webrtc::PeerConnectionInterface> m_spPeerConnection;
 	KWebRtcDataChannel *m_pInputDataChannel = nullptr;
+	KWebRtcDataChannel *m_pRealtimeInputDataChannel = nullptr;
 	KWebRtcDataChannel *m_pSessionDataChannel = nullptr;
 	KWebRtcDataChannel *m_pClipboardDataChannel = nullptr;
 	KWebRtcRemoteFrameProcessor *m_pRemoteFrameProcessor = nullptr;
@@ -139,10 +147,13 @@ private:
 	KNetworkStatsTracker m_networkStatsTracker;
 	std::atomic_int m_nInvalidSignalingMessages = 0;
 	std::atomic_int m_nInvalidInputMessages = 0;
+	std::atomic_int m_nInvalidRealtimeInputMessages = 0;
 	std::atomic_int m_nInvalidSessionMessages = 0;
 	std::atomic_int m_nInvalidClipboardMessages = 0;
 	std::atomic_bool m_bProtocolTerminationPending = false;
+	std::atomic_bool m_bInputRealtimeEnabled = false;
 	KOutboundMessageQueue m_inputSendQueue { 256, 64 * 1024 };
+	KOutboundMessageQueue m_realtimeInputSendQueue { 2, 4 * 1024 };
 	KOutboundMessageQueue m_sessionSendQueue { 32, 512 * 1024 };
 	KOutboundMessageQueue m_clipboardSendQueue { 8, 1024 * 1024 };
 	KProtocolRouter m_protocolRouter;

@@ -144,6 +144,11 @@ namespace
 			++nStreamConfigCount;
 		}
 
+		void setInputRealtimeEnabled(bool bEnabled) override
+		{
+			bInputRealtimeEnabled = bEnabled;
+		}
+
 		void openSessionChannel()
 		{
 			emit sessionChannelChanged(m_nGeneration, true);
@@ -182,8 +187,9 @@ namespace
 			message.capabilities.supportedCodecs = { QStringLiteral("h264") };
 			message.capabilities.supportedChannels = {
 				QStringLiteral("video"), QStringLiteral("session"), QStringLiteral("input"),
-				QStringLiteral("clipboard")
+				QStringLiteral("input-realtime"), QStringLiteral("clipboard")
 			};
+			message.capabilities.bInputRealtime = true;
 			deliverSessionMessage(message);
 		}
 
@@ -231,6 +237,7 @@ namespace
 		int nSentSessionCount = 0;
 		int nStreamConfigCount = 0;
 		bool bSessionSendSucceeds = true;
+		bool bInputRealtimeEnabled = false;
 	};
 
 	quint16 reserveLocalPort()
@@ -333,6 +340,8 @@ namespace
 			QStringLiteral("incoming session pauses discovery availability"));
 		pTransport->openSessionChannel();
 		pTransport->deliverDefaultCapabilities();
+		check(pTransport->bInputRealtimeEnabled,
+			QStringLiteral("capability negotiation enables realtime pointer input"));
 		pTransport->openInputChannel();
 
 		KSessionMessage deviceInfoRequest;

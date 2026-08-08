@@ -54,10 +54,26 @@ int main(int argc, char *argv[])
 
 	bool bSuccess = require(pPlatformInjector->nInjectCount == 1,
 		"duplicate and descending input sequence was not discarded");
+
+	KInputMessage pointerMessage;
+	pointerMessage.type = MouseMoveInputMessageType;
+	pointerMessage.nSequence = 100;
+	injector.handleInputMessage(pointerMessage);
+	message.nSequence = 3;
+	injector.handleInputMessage(message);
+	bSuccess &= require(pPlatformInjector->nInjectCount == 3,
+		"a larger pointer sequence discarded a reliable key event");
+	pointerMessage.nSequence = 102;
+	injector.handleInputMessage(pointerMessage);
+	pointerMessage.nSequence = 101;
+	injector.handleInputMessage(pointerMessage);
+	bSuccess &= require(pPlatformInjector->nInjectCount == 4,
+		"out-of-order pointer input did not keep only the latest sequence");
+
 	injector.releaseAllInputs();
 	message.nSequence = 1;
 	injector.handleInputMessage(message);
-	bSuccess &= require(pPlatformInjector->nInjectCount == 2,
+	bSuccess &= require(pPlatformInjector->nInjectCount == 5,
 		"input sequence did not reset after releasing the session");
 	return bSuccess ? 0 : 1;
 }

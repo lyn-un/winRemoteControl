@@ -234,6 +234,8 @@ void KSessionViewModel::handleSessionStateChanged(KSessionState state)
 		m_bEnterDesktopAfterReconnect = false;
 		m_remoteScreenSize = QSize();
 		m_inputFeedbackTracker.reset();
+		m_nPointerInputSequence = 0;
+		m_nReliableInputSequence = 0;
 	}
 }
 
@@ -291,7 +293,10 @@ void KSessionViewModel::sendInputMessage(KInputMessage message, bool bTrace)
 	if (m_pSessionController == nullptr)
 		return;
 
-	message.nSequence = ++m_nInputSequence;
+	if (message.type == MouseMoveInputMessageType)
+		message.nSequence = ++m_nPointerInputSequence * 2;
+	else
+		message.nSequence = ++m_nReliableInputSequence * 2 - 1;
 	message.bTrace = bTrace;
 
 	if (bTrace)

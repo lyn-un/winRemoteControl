@@ -1251,6 +1251,7 @@ void KSessionCoordinator::completeCapabilityNegotiation(
 	m_bCapabilitiesReceived = true;
 	m_pCapabilityTimer->stop();
 	m_negotiatedCapabilities = capabilities;
+	m_spRemotePeerTransport->setInputRealtimeEnabled(capabilities.bInputRealtime);
 	if (!m_sessionStateMachine.markConnected())
 		return;
 	publishSessionState();
@@ -1284,8 +1285,9 @@ KSessionCapabilities KSessionCoordinator::localCapabilities() const
 	capabilities.supportedCodecs = { QStringLiteral("h264") };
 	capabilities.supportedChannels = {
 		QStringLiteral("video"), QStringLiteral("session"), QStringLiteral("input"),
-		QStringLiteral("clipboard")
+		QStringLiteral("input-realtime"), QStringLiteral("clipboard")
 	};
+	capabilities.bInputRealtime = true;
 	capabilities.nMaximumWidth = KProtocolConstraints::kMaximumStreamWidth;
 	capabilities.nMaximumHeight = KProtocolConstraints::kMaximumStreamHeight;
 	capabilities.nMaximumFps = KProtocolConstraints::kMaximumStreamFps;

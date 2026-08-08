@@ -109,6 +109,16 @@ namespace
 			== EnqueuedOutboundMessage, QStringLiteral("reliable input evicts coalescible move"));
 		Check(overflowQueue.enqueue({ QStringLiteral("key-3"), QString(), true })
 			== OverflowOutboundMessage, QStringLiteral("reliable-only overflow is explicit"));
+
+		KOutboundMessageQueue realtimeQueue(1, 32);
+		KOutboundMessageQueue reliableQueue(2, 64);
+		realtimeQueue.enqueue({ QStringLiteral("move-1"), QStringLiteral("mouseMove"), false });
+		Check(realtimeQueue.enqueue({ QStringLiteral("move-2"),
+			QStringLiteral("mouseMove"), false }) == CoalescedOutboundMessage,
+			QStringLiteral("realtime pointer queue keeps only the newest move"));
+		Check(reliableQueue.enqueue({ QStringLiteral("key-down"), QString(), true })
+			== EnqueuedOutboundMessage,
+			QStringLiteral("realtime pointer pressure does not block reliable input"));
 	}
 
 	void TestProtocolEnvelopeValidationAndSingleParse()

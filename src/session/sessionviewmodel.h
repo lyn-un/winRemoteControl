@@ -91,7 +91,8 @@ private:
 
 	KCaptureController *m_pCaptureController = nullptr;
 	KSessionController *m_pSessionController = nullptr;
-	quint64 m_nInputSequence = 0;
+	quint64 m_nPointerInputSequence = 0;
+	quint64 m_nReliableInputSequence = 0;
 	bool m_bEnterDesktopAfterReconnect = false;
 	KSessionState m_lastSessionState = IdleSessionState;
 	QSize m_remoteScreenSize;

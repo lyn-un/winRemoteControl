@@ -43,6 +43,7 @@ struct KSessionCapabilities
 	int nMaximumFps = 60;
 	int nMaximumBitrateKbps = 20000;
 	bool bClipboardText = true;
+	bool bInputRealtime = false;
 	bool bKeyboard = true;
 	bool bUnicodeText = true;
 	bool bMouseButtons = true;
@@ -61,6 +62,7 @@ struct KNegotiatedCapabilities
 	int nMaximumFps = 0;
 	int nMaximumBitrateKbps = 0;
 	bool bClipboardText = false;
+	bool bInputRealtime = false;
 	bool bKeyboard = false;
 	bool bUnicodeText = false;
 	bool bMouseButtons = false;

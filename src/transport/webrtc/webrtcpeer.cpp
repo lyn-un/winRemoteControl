@@ -74,6 +74,7 @@ namespace
 	constexpr char kStreamId[] = "wrc-stream";
 	constexpr char kVideoLabel[] = "wrc-screen";
 	constexpr char kInputChannelLabel[] = "input";
+	constexpr char kRealtimeInputChannelLabel[] = "input-realtime";
 	constexpr char kSessionChannelLabel[] = "session";
 	constexpr char kClipboardChannelLabel[] = "clipboard";
 	constexpr int kStatsPollingIntervalMs = 1000;
@@ -83,6 +84,8 @@ namespace
 	constexpr quint64 kVideoTraceFrameInterval = 30;
 	constexpr quint64 kInputLowWatermarkBytes = 1024;
 	constexpr quint64 kInputHighWatermarkBytes = 4 * 1024;
+	constexpr quint64 kRealtimeInputLowWatermarkBytes = 256;
+	constexpr quint64 kRealtimeInputHighWatermarkBytes = 1024;
 	constexpr quint64 kClipboardLowWatermarkBytes = 128 * 1024;
 	constexpr quint64 kClipboardHighWatermarkBytes = 512 * 1024;
 	constexpr char kPlayoutDelayUri[] = "http://www.webrtc.org/experiments/rtp-hdrext/playout-delay";
@@ -305,6 +308,8 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 	: KRemotePeerTransport(pParent)
 	, m_pInputDataChannel(new KWebRtcDataChannel(
 		KProtocolConstraints::kMaximumInputMessageBytes, this))
+	, m_pRealtimeInputDataChannel(new KWebRtcDataChannel(
+		KProtocolConstraints::kMaximumInputMessageBytes, this))
 	, m_pSessionDataChannel(new KWebRtcDataChannel(
 		KProtocolConstraints::kMaximumSessionMessageBytes, this))
 	, m_pClipboardDataChannel(new KWebRtcDataChannel(
@@ -329,8 +334,8 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 	{
 		m_protocolRouter.registerHandler(InputProtocolChannel,
 			KInputMessageCodec::typeName(type), allowControlledInput,
-			[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
-			{ return decodeInputMessage(envelope); });
+			[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &context)
+			{ return decodeInputMessage(envelope, context.bRealtimeInput); });
 	}
 	for (const QString &strType : { QStringLiteral("latencyPing"), QStringLiteral("latencyPong") })
 	{
@@ -374,6 +379,8 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 
 	m_pInputDataChannel->setBufferWatermarks(
 		kInputLowWatermarkBytes, kInputHighWatermarkBytes);
+	m_pRealtimeInputDataChannel->setBufferWatermarks(
+		kRealtimeInputLowWatermarkBytes, kRealtimeInputHighWatermarkBytes);
 	m_pClipboardDataChannel->setBufferWatermarks(
 		kClipboardLowWatermarkBytes, kClipboardHighWatermarkBytes);
 	connect(m_pInputDataChannel, &KWebRtcDataChannel::openChanged,
@@ -388,6 +395,18 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 		});
 	connect(m_pInputDataChannel, &KWebRtcDataChannel::lowWatermarkReached,
 		this, &KWebRtcPeer::flushInputQueue);
+	connect(m_pRealtimeInputDataChannel, &KWebRtcDataChannel::openChanged,
+		this, &KWebRtcPeer::handleRealtimeInputChannelChanged);
+	connect(m_pRealtimeInputDataChannel, &KWebRtcDataChannel::textMessageReceived,
+		this, &KWebRtcPeer::handleRealtimeInputChannelMessage);
+	connect(m_pRealtimeInputDataChannel, &KWebRtcDataChannel::messageRejected,
+		this, [this](int nMessageBytes, const QString &strReason)
+		{
+			handleProtocolReject(QStringLiteral("input-realtime"), nMessageBytes,
+				strReason, &m_nInvalidRealtimeInputMessages);
+		});
+	connect(m_pRealtimeInputDataChannel, &KWebRtcDataChannel::lowWatermarkReached,
+		this, &KWebRtcPeer::flushRealtimeInputQueue);
 	connect(m_pSessionDataChannel, &KWebRtcDataChannel::openChanged,
 		this, &KWebRtcPeer::handleSessionChannelChanged);
 	connect(m_pSessionDataChannel, &KWebRtcDataChannel::textMessageReceived,
@@ -444,6 +463,8 @@ bool KWebRtcPeer::initialize(KSessionRole role, quint64 nGeneration, QString *pE
 		return false;
 	if (m_role == ControllerSessionRole && !createInputDataChannel(pErrorMessage))
 		return false;
+	if (m_role == ControllerSessionRole && !createRealtimeInputDataChannel(pErrorMessage))
+		return false;
 	if (m_role == ControllerSessionRole && !createSessionDataChannel(pErrorMessage))
 		return false;
 	if (m_role == ControllerSessionRole && !createClipboardDataChannel(pErrorMessage))
@@ -469,13 +490,17 @@ void KWebRtcPeer::requestShutdown(quint64 nGeneration)
 
 	stopStatsPolling();
 	m_inputSendQueue.clear();
+	m_realtimeInputSendQueue.clear();
 	m_clipboardSendQueue.clear();
 	m_nInvalidSignalingMessages = 0;
 	m_nInvalidInputMessages = 0;
+	m_nInvalidRealtimeInputMessages = 0;
 	m_nInvalidSessionMessages = 0;
 	m_nInvalidClipboardMessages = 0;
 	m_bProtocolTerminationPending = false;
+	m_bInputRealtimeEnabled = false;
 	m_pInputDataChannel->clear();
+	m_pRealtimeInputDataChannel->clear();
 	m_pSessionDataChannel->clear();
 	m_pClipboardDataChannel->clear();
 
@@ -587,6 +612,23 @@ void KWebRtcPeer::sendInputMessage(const KInputMessage &message)
 {
 	const QString strPayload = KInputMessageCodec::encode(message);
 	const bool bMouseMove = message.type == MouseMoveInputMessageType;
+	if (bMouseMove
+		&& m_bInputRealtimeEnabled
+		&& m_pRealtimeInputDataChannel->isOpen())
+	{
+		KOutboundMessage queuedMessage {
+			strPayload, QStringLiteral("mouseMove"), false
+		};
+		if (!m_realtimeInputSendQueue.isEmpty()
+			|| m_pRealtimeInputDataChannel->isBackpressured())
+		{
+			m_realtimeInputSendQueue.enqueue(queuedMessage);
+			return;
+		}
+		if (!m_pRealtimeInputDataChannel->sendText(strPayload))
+			m_realtimeInputSendQueue.enqueue(queuedMessage);
+		return;
+	}
 	if (!m_inputSendQueue.isEmpty() || m_pInputDataChannel->isBackpressured())
 	{
 		enqueueInputMessage(strPayload, bMouseMove);
@@ -594,6 +636,17 @@ void KWebRtcPeer::sendInputMessage(const KInputMessage &message)
 	}
 	if (!m_pInputDataChannel->sendText(strPayload))
 		enqueueInputMessage(strPayload, bMouseMove);
+}
+
+void KWebRtcPeer::setInputRealtimeEnabled(bool bEnabled)
+{
+	m_bInputRealtimeEnabled = bEnabled;
+	if (!bEnabled)
+	{
+		m_realtimeInputSendQueue.clear();
+		return;
+	}
+	flushRealtimeInputQueue();
 }
 
 void KWebRtcPeer::sendLatencyPing()
@@ -648,6 +701,24 @@ void KWebRtcPeer::flushInputQueue()
 		if (!m_pInputDataChannel->sendText(message.strPayload))
 		{
 			m_inputSendQueue.prepend(message);
+			return;
+		}
+	}
+}
+
+void KWebRtcPeer::flushRealtimeInputQueue()
+{
+	while (m_bInputRealtimeEnabled
+		&& m_pRealtimeInputDataChannel->isOpen()
+		&& !m_pRealtimeInputDataChannel->isBackpressured()
+		&& !m_realtimeInputSendQueue.isEmpty())
+	{
+		KOutboundMessage message;
+		if (!m_realtimeInputSendQueue.takeFirst(&message))
+			return;
+		if (!m_pRealtimeInputDataChannel->sendText(message.strPayload))
+		{
+			m_realtimeInputSendQueue.prepend(message);
 			return;
 		}
 	}
@@ -926,6 +997,8 @@ void KWebRtcPeer::OnDataChannel(webrtc::scoped_refptr<webrtc::DataChannelInterfa
 		return;
 	if (channel->label() == kInputChannelLabel)
 		m_pInputDataChannel->setChannel(channel);
+	else if (channel->label() == kRealtimeInputChannelLabel)
+		m_pRealtimeInputDataChannel->setChannel(channel);
 	else if (channel->label() == kSessionChannelLabel)
 		m_pSessionDataChannel->setChannel(channel);
 	else if (channel->label() == kClipboardChannelLabel)
@@ -1008,6 +1081,19 @@ void KWebRtcPeer::handleInputChannelChanged(bool bOpen)
 	}
 }
 
+void KWebRtcPeer::handleRealtimeInputChannelChanged(bool bOpen)
+{
+	KSessionTraceLogger::write(roleToString(m_role),
+		QStringLiteral("channel"), QStringLiteral("input-realtime"), -1,
+		QStringLiteral("open=%1 enabled=%2")
+			.arg(bOpen ? 1 : 0)
+			.arg(m_bInputRealtimeEnabled ? 1 : 0));
+	if (bOpen)
+		flushRealtimeInputQueue();
+	else
+		m_realtimeInputSendQueue.clear();
+}
+
 void KWebRtcPeer::handleSessionChannelChanged(bool bOpen)
 {
 	emit sessionChannelChanged(m_nGeneration.load(), bOpen);
@@ -1064,6 +1150,12 @@ void KWebRtcPeer::handleInputChannelMessage(const QString &strMessage)
 	routeDataMessage(InputProtocolChannel, strMessage, &m_nInvalidInputMessages);
 }
 
+void KWebRtcPeer::handleRealtimeInputChannelMessage(const QString &strMessage)
+{
+	routeDataMessage(InputProtocolChannel, strMessage,
+		&m_nInvalidRealtimeInputMessages, true);
+}
+
 KProtocolHandlerResult KWebRtcPeer::handleLatencyMessage(const KProtocolEnvelope &envelope)
 {
 	QString strResponse;
@@ -1082,22 +1174,36 @@ KProtocolHandlerResult KWebRtcPeer::handleLatencyMessage(const KProtocolEnvelope
 		QStringLiteral("Invalid latency message"));
 }
 
-KProtocolHandlerResult KWebRtcPeer::decodeInputMessage(const KProtocolEnvelope &envelope)
+KProtocolHandlerResult KWebRtcPeer::decodeInputMessage(const KProtocolEnvelope &envelope,
+	bool bRealtimeInput)
 {
 	KInputMessage message;
 	QString strError;
 	if (!KInputMessageCodec::decode(envelope, &message, &strError))
 		return KProtocolHandlerResult::failure(ProtocolHandlerDecodeFailed, strError);
+	if (bRealtimeInput && message.type != MouseMoveInputMessageType)
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerPermissionDenied,
+			QStringLiteral("Only mouse movement is allowed on the realtime input channel"));
+	}
+	if (bRealtimeInput && !m_bInputRealtimeEnabled)
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerInvalidState,
+			QStringLiteral("Realtime input was not negotiated"));
+	}
+	message.bRealtime = bRealtimeInput;
 	emit inputMessageReceived(m_nGeneration.load(), message);
 	return KProtocolHandlerResult::success();
 }
 
 void KWebRtcPeer::routeDataMessage(KProtocolChannel channel,
 	const QString &strMessage,
-	std::atomic_int *pInvalidCount)
+	std::atomic_int *pInvalidCount,
+	bool bRealtimeInput)
 {
 	KProtocolRouteContext context;
 	context.nRole = static_cast<int>(m_role);
+	context.bRealtimeInput = bRealtimeInput;
 	const KProtocolRouteResult result = m_protocolRouter.route(channel, strMessage, context);
 	KSessionTraceLogger::write(roleToString(m_role),
 		QStringLiteral("protocol_route"),
@@ -1113,7 +1219,10 @@ void KWebRtcPeer::routeDataMessage(KProtocolChannel channel,
 			*pInvalidCount = 0;
 		return;
 	}
-	handleProtocolReject(KProtocolEnvelopeCodec::channelName(channel),
+	const QString strDiagnosticChannel = bRealtimeInput
+		? QStringLiteral("input-realtime")
+		: KProtocolEnvelopeCodec::channelName(channel);
+	handleProtocolReject(strDiagnosticChannel,
 		strMessage.toUtf8().size(), result.strError, pInvalidCount);
 }
 
@@ -1267,6 +1376,27 @@ bool KWebRtcPeer::createInputDataChannel(QString *pErrorMessage)
 	}
 
 	m_pInputDataChannel->setChannel(result.value());
+	return true;
+}
+
+bool KWebRtcPeer::createRealtimeInputDataChannel(QString *pErrorMessage)
+{
+	webrtc::DataChannelInit init;
+	init.ordered = false;
+	init.maxRetransmits = 0;
+	webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::DataChannelInterface>> result =
+		m_spPeerConnection->CreateDataChannelOrError(kRealtimeInputChannelLabel, &init);
+	if (!result.ok())
+	{
+		if (pErrorMessage != nullptr)
+		{
+			*pErrorMessage = rtcErrorMessage(
+				QStringLiteral("Create realtime input DataChannel failed"), result.error());
+		}
+		return false;
+	}
+
+	m_pRealtimeInputDataChannel->setChannel(result.value());
 	return true;
 }
 

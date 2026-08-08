@@ -42,10 +42,12 @@ KInputInjector::~KInputInjector()
 
 void KInputInjector::handleInputMessage(const KInputMessage &message)
 {
-	if (message.nSequence > 0 && message.nSequence <= m_nLastSequence)
+	quint64 &nLastSequence = message.type == MouseMoveInputMessageType
+		? m_nLastPointerSequence : m_nLastReliableSequence;
+	if (message.nSequence > 0 && message.nSequence <= nLastSequence)
 		return;
 	if (message.nSequence > 0)
-		m_nLastSequence = message.nSequence;
+		nLastSequence = message.nSequence;
 	const bool bTrace = message.bTrace
 		|| ((message.type == KeyInputMessageType || message.type == TextInputMessageType)
 			&& KLatencyTraceLogger::isEnabled());
@@ -89,7 +91,8 @@ void KInputInjector::releaseAllKeys()
 
 void KInputInjector::releaseAllInputs()
 {
-	m_nLastSequence = 0;
+	m_nLastPointerSequence = 0;
+	m_nLastReliableSequence = 0;
 	if (m_spInputInjector == nullptr)
 		return;
 

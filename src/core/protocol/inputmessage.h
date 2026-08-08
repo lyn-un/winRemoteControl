@@ -40,6 +40,7 @@ struct KInputMessage
 	bool bExtended = false;
 	bool bAutoRepeat = false;
 	bool bTrace = false;
+	bool bRealtime = false;
 	quint64 nSequence = 0;
 };
 

@@ -56,8 +56,14 @@ void KInputFeedbackTracker::handleRendered(quint64 nSeq)
 	const bool bFoundSentTrace = sentTraceIt != m_sentTraces.constEnd();
 	const KPendingInputTrace sentTrace =
 		bFoundSentTrace ? sentTraceIt.value() : KPendingInputTrace();
-	while (!m_sentTraces.isEmpty() && m_sentTraces.firstKey() <= nSeq)
-		m_sentTraces.erase(m_sentTraces.begin());
+	for (auto iterator = m_sentTraces.begin(); iterator != m_sentTraces.end();)
+	{
+		const bool bSameSequenceSpace = iterator.key() % 2 == nSeq % 2;
+		if (bSameSequenceSpace && iterator.key() <= nSeq)
+			iterator = m_sentTraces.erase(iterator);
+		else
+			++iterator;
+	}
 
 	if (!bFoundSentTrace)
 		return;
