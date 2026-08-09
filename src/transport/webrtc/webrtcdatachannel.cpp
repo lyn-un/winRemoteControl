@@ -1,35 +1,46 @@
 #include "transport/webrtc/webrtcdatachannel.h"
 
+#include "transport/webrtc/webrtccallbackgate.h"
+
 #include <QtCore/QByteArray>
+#include <QtCore/QThread>
 
 #include <string>
 #include <utility>
 
 KWebRtcDataChannel::KWebRtcDataChannel(int nMaximumMessageBytes, QObject *pParent)
 	: QObject(pParent)
+	, m_spCallbackGate(std::make_shared<KWebRtcCallbackGate>())
 	, m_nMaximumMessageBytes(nMaximumMessageBytes)
 {
 }
 
 KWebRtcDataChannel::~KWebRtcDataChannel()
 {
+	m_spCallbackGate->close();
 	clear();
 }
 
 void KWebRtcDataChannel::setChannel(
 	webrtc::scoped_refptr<webrtc::DataChannelInterface> spChannel)
 {
+	Q_ASSERT(QThread::currentThread() == thread());
 	clear();
 	m_spChannel = std::move(spChannel);
 	if (m_spChannel == nullptr)
 		return;
 
+	const quint64 nChannelGeneration = m_nChannelGeneration.fetch_add(1) + 1;
+	m_spCallbackGate->open(this, nChannelGeneration);
 	m_spChannel->RegisterObserver(this);
 	emit openChanged(isOpen());
 }
 
 void KWebRtcDataChannel::clear()
 {
+	Q_ASSERT(QThread::currentThread() == thread());
+	m_spCallbackGate->close();
+	m_nChannelGeneration.fetch_add(1);
 	const bool bWasOpen = isOpen();
 	if (m_spChannel != nullptr)
 		m_spChannel->UnregisterObserver();
@@ -47,6 +58,7 @@ bool KWebRtcDataChannel::isOpen() const
 
 bool KWebRtcDataChannel::sendText(const QString &strMessage)
 {
+	Q_ASSERT(QThread::currentThread() == thread());
 	if (!isOpen())
 		return false;
 
@@ -65,6 +77,7 @@ bool KWebRtcDataChannel::sendText(const QString &strMessage)
 
 void KWebRtcDataChannel::setBufferWatermarks(quint64 nLowBytes, quint64 nHighBytes)
 {
+	Q_ASSERT(QThread::currentThread() == thread());
 	m_nLowWatermarkBytes = nLowBytes;
 	m_nHighWatermarkBytes = qMax(nLowBytes, nHighBytes);
 }
@@ -81,31 +94,71 @@ bool KWebRtcDataChannel::isBackpressured() const
 
 void KWebRtcDataChannel::OnStateChange()
 {
-	emit openChanged(isOpen());
+	const quint64 nChannelGeneration = m_nChannelGeneration.load();
+	m_spCallbackGate->post(nChannelGeneration,
+		[nChannelGeneration](QObject *pTarget)
+		{
+			static_cast<KWebRtcDataChannel *>(pTarget)
+				->handleStateChange(nChannelGeneration);
+		});
 }
 
 void KWebRtcDataChannel::OnMessage(const webrtc::DataBuffer &buffer)
 {
-	if (buffer.binary)
-	{
-		emit messageRejected(static_cast<int>(buffer.data.size()),
-			QStringLiteral("Binary DataChannel message is not supported"));
-		return;
-	}
-	if (buffer.data.size() > static_cast<size_t>(m_nMaximumMessageBytes))
-	{
-		emit messageRejected(static_cast<int>(buffer.data.size()),
-			QStringLiteral("DataChannel message is too large"));
-		return;
-	}
-
-	const char *pData = reinterpret_cast<const char *>(buffer.data.data());
-	emit textMessageReceived(
-		QString::fromUtf8(pData, static_cast<int>(buffer.data.size())));
+	const quint64 nChannelGeneration = m_nChannelGeneration.load();
+	const QByteArray data(reinterpret_cast<const char *>(buffer.data.data()),
+		static_cast<qsizetype>(buffer.data.size()));
+	m_spCallbackGate->post(nChannelGeneration,
+		[nChannelGeneration, bBinary = buffer.binary, data](QObject *pTarget)
+		{
+			static_cast<KWebRtcDataChannel *>(pTarget)
+				->handleMessage(nChannelGeneration, bBinary, data);
+		});
 }
 
 void KWebRtcDataChannel::OnBufferedAmountChange(uint64_t)
 {
+	const quint64 nChannelGeneration = m_nChannelGeneration.load();
+	m_spCallbackGate->post(nChannelGeneration,
+		[nChannelGeneration](QObject *pTarget)
+		{
+			static_cast<KWebRtcDataChannel *>(pTarget)
+				->handleBufferedAmountChange(nChannelGeneration);
+		});
+}
+
+void KWebRtcDataChannel::handleStateChange(quint64 nChannelGeneration)
+{
+	if (nChannelGeneration != m_nChannelGeneration.load())
+		return;
+	emit openChanged(isOpen());
+}
+
+void KWebRtcDataChannel::handleMessage(quint64 nChannelGeneration,
+	bool bBinary,
+	const QByteArray &data)
+{
+	if (nChannelGeneration != m_nChannelGeneration.load())
+		return;
+	if (bBinary)
+	{
+		emit messageRejected(data.size(),
+			QStringLiteral("Binary DataChannel message is not supported"));
+		return;
+	}
+	if (data.size() > m_nMaximumMessageBytes)
+	{
+		emit messageRejected(data.size(),
+			QStringLiteral("DataChannel message is too large"));
+		return;
+	}
+	emit textMessageReceived(QString::fromUtf8(data));
+}
+
+void KWebRtcDataChannel::handleBufferedAmountChange(quint64 nChannelGeneration)
+{
+	if (nChannelGeneration != m_nChannelGeneration.load())
+		return;
 	const quint64 nBufferedBytes = bufferedAmount();
 	const bool bReachedLowWatermark = m_bBackpressured
 		&& nBufferedBytes <= m_nLowWatermarkBytes;

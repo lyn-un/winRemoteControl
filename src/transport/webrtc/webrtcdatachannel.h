@@ -1,11 +1,17 @@
 #ifndef _WINREMOTECONTROL_WEBRTCDATACHANNEL_H_
 #define _WINREMOTECONTROL_WEBRTCDATACHANNEL_H_
 
+#include <QtCore/QByteArray>
 #include <QtCore/QObject>
 #include <QtCore/QString>
 
 #include <api/data_channel_interface.h>
 #include <api/scoped_refptr.h>
+
+#include <atomic>
+#include <memory>
+
+class KWebRtcCallbackGate;
 
 class KWebRtcDataChannel final : public QObject, public webrtc::DataChannelObserver
 {
@@ -37,8 +43,15 @@ private:
 	void OnStateChange() override;
 	void OnMessage(const webrtc::DataBuffer &buffer) override;
 	void OnBufferedAmountChange(uint64_t nPreviousAmount) override;
+	void handleStateChange(quint64 nChannelGeneration);
+	void handleMessage(quint64 nChannelGeneration,
+		bool bBinary,
+		const QByteArray &data);
+	void handleBufferedAmountChange(quint64 nChannelGeneration);
 
 	webrtc::scoped_refptr<webrtc::DataChannelInterface> m_spChannel;
+	std::shared_ptr<KWebRtcCallbackGate> m_spCallbackGate;
+	std::atomic<quint64> m_nChannelGeneration = 0;
 	int m_nMaximumMessageBytes = 0;
 	quint64 m_nLowWatermarkBytes = 0;
 	quint64 m_nHighWatermarkBytes = 0;

@@ -348,6 +348,8 @@ target_link_libraries(wrc_ffmpeg_adapter PUBLIC
 )
 
 add_library(wrc_webrtc_adapter STATIC
+	src/transport/webrtc/webrtccallbackgate.cpp
+	src/transport/webrtc/webrtccallbackgate.h
 	src/transport/webrtc/webrtcpeer.cpp
 	src/transport/webrtc/webrtcpeer.h
 	src/transport/webrtc/webrtcdatachannel.cpp
@@ -595,12 +597,26 @@ if(WRC_BUILD_TESTS)
 		Qt6::Core
 	)
 	add_test(NAME wrc_p1_core_tests COMMAND wrc_p1_core_tests)
+
+	add_executable(wrc_webrtc_callback_gate_tests
+		tests/unit/webrtccallbackgatetest.cpp
+		src/transport/webrtc/webrtccallbackgate.cpp
+	)
+	target_include_directories(wrc_webrtc_callback_gate_tests PRIVATE
+		"${CMAKE_CURRENT_SOURCE_DIR}/src"
+	)
+	target_link_libraries(wrc_webrtc_callback_gate_tests PRIVATE
+		Qt6::Core
+	)
+	add_test(NAME wrc_webrtc_callback_gate_tests
+		COMMAND wrc_webrtc_callback_gate_tests)
 	set_tests_properties(
 		wrc_protocol_tests
 		wrc_protocol_robustness_tests
 		wrc_session_state_tests
 		wrc_network_stats_tests
 		wrc_p1_core_tests
+		wrc_webrtc_callback_gate_tests
 		PROPERTIES ENVIRONMENT_MODIFICATION
 			"PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
 	)

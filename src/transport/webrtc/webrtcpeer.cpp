@@ -5,6 +5,7 @@
 #include "core/protocol/protocolconstraints.h"
 #include "core/protocol/webrtcsignalingmessage.h"
 #include "transport/webrtc/webrtcdatachannel.h"
+#include "transport/webrtc/webrtccallbackgate.h"
 #include "transport/webrtc/webrtch264decoder.h"
 #include "transport/webrtc/webrtch264encoder.h"
 #include "transport/webrtc/webrtclatencyprobe.h"
@@ -43,28 +44,25 @@
 class KStatsCallback : public webrtc::RTCStatsCollectorCallback
 {
 public:
-	explicit KStatsCallback(KWebRtcPeer *pPeer)
-		: m_pPeer(pPeer)
+	KStatsCallback(std::shared_ptr<KWebRtcCallbackGate> spCallbackGate,
+		quint64 nGeneration)
+		: m_spCallbackGate(std::move(spCallbackGate))
+		, m_nGeneration(nGeneration)
 	{
 	}
 
 	void OnStatsDelivered(const webrtc::scoped_refptr<const webrtc::RTCStatsReport> &spReport) override
 	{
-		const QPointer<KWebRtcPeer> pPeer = m_pPeer;
-		if (!pPeer)
-			return;
-
-		QMetaObject::invokeMethod(pPeer,
-			[pPeer, spReport]()
+		m_spCallbackGate->post(m_nGeneration,
+			[spReport](QObject *pTarget)
 			{
-				if (pPeer)
-					pPeer->handleStatsReport(spReport);
-			},
-			Qt::QueuedConnection);
+				static_cast<KWebRtcPeer *>(pTarget)->handleStatsReport(spReport);
+			});
 	}
 
 private:
-	QPointer<KWebRtcPeer> m_pPeer;
+	std::shared_ptr<KWebRtcCallbackGate> m_spCallbackGate;
+	quint64 m_nGeneration = 0;
 };
 
 namespace
@@ -199,18 +197,27 @@ namespace
 	class KSetDescriptionObserver : public webrtc::SetSessionDescriptionObserver
 	{
 	public:
-		using SuccessCallback = std::function<void()>;
-		using FailureCallback = std::function<void(webrtc::RTCError)>;
+		using SuccessCallback = std::function<void(KWebRtcPeer *)>;
+		using FailureCallback = std::function<void(KWebRtcPeer *, webrtc::RTCError)>;
 
-		static webrtc::scoped_refptr<KSetDescriptionObserver> create(SuccessCallback successCallback = {},
+		static webrtc::scoped_refptr<KSetDescriptionObserver> create(
+			std::shared_ptr<KWebRtcCallbackGate> spCallbackGate,
+			quint64 nGeneration,
+			SuccessCallback successCallback = {},
 			FailureCallback failureCallback = {})
 		{
-			return webrtc::make_ref_counted<KSetDescriptionObserver>(std::move(successCallback),
+			return webrtc::make_ref_counted<KSetDescriptionObserver>(
+				std::move(spCallbackGate), nGeneration, std::move(successCallback),
 				std::move(failureCallback));
 		}
 
-		KSetDescriptionObserver(SuccessCallback successCallback, FailureCallback failureCallback)
-			: m_successCallback(std::move(successCallback))
+		KSetDescriptionObserver(std::shared_ptr<KWebRtcCallbackGate> spCallbackGate,
+			quint64 nGeneration,
+			SuccessCallback successCallback,
+			FailureCallback failureCallback)
+			: m_spCallbackGate(std::move(spCallbackGate))
+			, m_nGeneration(nGeneration)
+			, m_successCallback(std::move(successCallback))
 			, m_failureCallback(std::move(failureCallback))
 		{
 		}
@@ -218,17 +225,31 @@ namespace
 		void OnSuccess() override
 		{
 			if (m_successCallback)
-				m_successCallback();
+			{
+				m_spCallbackGate->post(m_nGeneration,
+					[callback = m_successCallback](QObject *pTarget)
+					{
+						callback(static_cast<KWebRtcPeer *>(pTarget));
+					});
+			}
 		}
 
 		void OnFailure(webrtc::RTCError error) override
 		{
 			if (m_failureCallback)
-				m_failureCallback(error);
+			{
+				m_spCallbackGate->post(m_nGeneration,
+					[callback = m_failureCallback, error](QObject *pTarget)
+					{
+						callback(static_cast<KWebRtcPeer *>(pTarget), error);
+					});
+			}
 			RTC_LOG(LS_WARNING) << error.message();
 		}
 
 	private:
+		std::shared_ptr<KWebRtcCallbackGate> m_spCallbackGate;
+		quint64 m_nGeneration = 0;
 		SuccessCallback m_successCallback;
 		FailureCallback m_failureCallback;
 	};
@@ -237,30 +258,48 @@ namespace
 class KCreateSessionDescriptionObserver : public webrtc::CreateSessionDescriptionObserver
 {
 public:
-	static webrtc::scoped_refptr<KCreateSessionDescriptionObserver> create(KWebRtcPeer *pPeer)
+	static webrtc::scoped_refptr<KCreateSessionDescriptionObserver> create(
+		std::shared_ptr<KWebRtcCallbackGate> spCallbackGate,
+		quint64 nGeneration)
 	{
-		return webrtc::make_ref_counted<KCreateSessionDescriptionObserver>(pPeer);
+		return webrtc::make_ref_counted<KCreateSessionDescriptionObserver>(
+			std::move(spCallbackGate), nGeneration);
 	}
 
-	explicit KCreateSessionDescriptionObserver(KWebRtcPeer *pPeer)
-		: m_pPeer(pPeer)
+	KCreateSessionDescriptionObserver(std::shared_ptr<KWebRtcCallbackGate> spCallbackGate,
+		quint64 nGeneration)
+		: m_spCallbackGate(std::move(spCallbackGate))
+		, m_nGeneration(nGeneration)
 	{
 	}
 
 	void OnSuccess(webrtc::SessionDescriptionInterface *pDescription) override
 	{
-		if (m_pPeer != nullptr)
-			m_pPeer->handleLocalDescription(pDescription);
+		auto spDescription = std::make_shared<std::unique_ptr<webrtc::SessionDescriptionInterface>>(
+			pDescription);
+		m_spCallbackGate->post(m_nGeneration,
+			[spDescription](QObject *pTarget)
+			{
+				std::unique_ptr<webrtc::SessionDescriptionInterface> upDescription =
+					std::move(*spDescription);
+				static_cast<KWebRtcPeer *>(pTarget)
+					->handleLocalDescription(upDescription.release());
+			});
 	}
 
 	void OnFailure(webrtc::RTCError error) override
 	{
-		if (m_pPeer != nullptr)
-			m_pPeer->handleLocalDescriptionFailure(error);
+		m_spCallbackGate->post(m_nGeneration,
+			[error](QObject *pTarget)
+			{
+				static_cast<KWebRtcPeer *>(pTarget)
+					->handleLocalDescriptionFailure(error);
+			});
 	}
 
 private:
-	KWebRtcPeer *m_pPeer = nullptr;
+	std::shared_ptr<KWebRtcCallbackGate> m_spCallbackGate;
+	quint64 m_nGeneration = 0;
 };
 
 class KWebRtcVideoSource : public webrtc::VideoTrackSource
@@ -288,6 +327,7 @@ private:
 
 KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 	: KRemotePeerTransport(pParent)
+	, m_spCallbackGate(std::make_shared<KWebRtcCallbackGate>())
 	, m_pInputDataChannel(new KWebRtcDataChannel(
 		KProtocolConstraints::kMaximumInputMessageBytes, this))
 	, m_pRealtimeInputDataChannel(new KWebRtcDataChannel(
@@ -439,6 +479,7 @@ bool KWebRtcPeer::initialize(KSessionRole role, quint64 nGeneration, QString *pE
 		return false;
 	}
 	m_nGeneration = nGeneration;
+	m_spCallbackGate->open(this, nGeneration);
 	m_bProtocolTerminationPending = false;
 	m_role = role;
 	if (!createFactory(pErrorMessage))
@@ -467,11 +508,22 @@ quint64 KWebRtcPeer::generation() const
 	return m_nGeneration.load();
 }
 
+bool KWebRtcPeer::postCallback(quint64 nGeneration,
+	std::function<void(KWebRtcPeer *)> callback)
+{
+	return m_spCallbackGate->post(nGeneration,
+		[callback = std::move(callback)](QObject *pTarget)
+		{
+			callback(static_cast<KWebRtcPeer *>(pTarget));
+		});
+}
+
 void KWebRtcPeer::requestShutdown(quint64 nGeneration)
 {
 	if (m_bShutdownPending.exchange(true))
 		return;
 
+	m_spCallbackGate->close();
 	stopStatsPolling();
 	m_inputSendQueue.clear();
 	m_realtimeInputSendQueue.clear();
@@ -548,7 +600,8 @@ void KWebRtcPeer::createOffer()
 {
 	if (!m_spPeerConnection)
 		return;
-	m_spPeerConnection->CreateOffer(KCreateSessionDescriptionObserver::create(this).get(),
+	m_spPeerConnection->CreateOffer(KCreateSessionDescriptionObserver::create(
+		m_spCallbackGate, m_nGeneration.load()).get(),
 		webrtc::PeerConnectionInterface::RTCOfferAnswerOptions());
 }
 
@@ -558,7 +611,8 @@ void KWebRtcPeer::restartIce()
 		return;
 
 	m_spPeerConnection->RestartIce();
-	m_spPeerConnection->CreateOffer(KCreateSessionDescriptionObserver::create(this).get(),
+	m_spPeerConnection->CreateOffer(KCreateSessionDescriptionObserver::create(
+		m_spCallbackGate, m_nGeneration.load()).get(),
 		webrtc::PeerConnectionInterface::RTCOfferAnswerOptions());
 }
 
@@ -857,7 +911,8 @@ void KWebRtcPeer::requestStats()
 	sendLatencyPing();
 
 	webrtc::scoped_refptr<KStatsCallback> spCallback =
-		webrtc::make_ref_counted<KStatsCallback>(this);
+		webrtc::make_ref_counted<KStatsCallback>(m_spCallbackGate,
+			m_nGeneration.load());
 	webrtc::scoped_refptr<webrtc::PeerConnectionInterface> spPeerConnection = m_spPeerConnection;
 	m_spSignalingThread->PostTask(
 		[spPeerConnection, spCallback]()
@@ -950,8 +1005,17 @@ void KWebRtcPeer::OnSignalingChange(webrtc::PeerConnectionInterface::SignalingSt
 }
 
 void KWebRtcPeer::OnAddTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver,
-	const std::vector<webrtc::scoped_refptr<webrtc::MediaStreamInterface>> &)
+	const std::vector<webrtc::scoped_refptr<webrtc::MediaStreamInterface>> &streams)
 {
+	if (QThread::currentThread() != thread())
+	{
+		postCallback(m_nGeneration.load(),
+			[receiver, streams](KWebRtcPeer *pPeer)
+			{
+				pPeer->OnAddTrack(receiver, streams);
+			});
+		return;
+	}
 	if (!receiver || !receiver->track()
 		|| receiver->track()->kind() != webrtc::MediaStreamTrackInterface::kVideoKind)
 	{
@@ -967,8 +1031,17 @@ void KWebRtcPeer::OnAddTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterface>
 	startStatsPolling(QStringLiteral("remote_video_track"));
 }
 
-void KWebRtcPeer::OnRemoveTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterface>)
+void KWebRtcPeer::OnRemoveTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver)
 {
+	if (QThread::currentThread() != thread())
+	{
+		postCallback(m_nGeneration.load(),
+			[receiver](KWebRtcPeer *pPeer)
+			{
+				pPeer->OnRemoveTrack(receiver);
+			});
+		return;
+	}
 	if (m_spRemoteVideoTrack)
 		m_spRemoteVideoTrack->RemoveSink(this);
 	m_spRemoteVideoTrack = nullptr;
@@ -977,6 +1050,15 @@ void KWebRtcPeer::OnRemoveTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterfa
 
 void KWebRtcPeer::OnDataChannel(webrtc::scoped_refptr<webrtc::DataChannelInterface> channel)
 {
+	if (QThread::currentThread() != thread())
+	{
+		postCallback(m_nGeneration.load(),
+			[channel](KWebRtcPeer *pPeer)
+			{
+				pPeer->OnDataChannel(channel);
+			});
+		return;
+	}
 	if (!channel)
 		return;
 	if (channel->label() == kInputChannelLabel)
@@ -995,6 +1077,15 @@ void KWebRtcPeer::OnRenegotiationNeeded()
 
 void KWebRtcPeer::OnIceConnectionChange(webrtc::PeerConnectionInterface::IceConnectionState new_state)
 {
+	if (QThread::currentThread() != thread())
+	{
+		postCallback(m_nGeneration.load(),
+			[new_state](KWebRtcPeer *pPeer)
+			{
+				pPeer->OnIceConnectionChange(new_state);
+			});
+		return;
+	}
 	emit stateChanged(m_nGeneration.load(), stringViewToQString(webrtc::PeerConnectionInterface::AsString(new_state)));
 	if (new_state == webrtc::PeerConnectionInterface::kIceConnectionConnected
 		|| new_state == webrtc::PeerConnectionInterface::kIceConnectionCompleted)
@@ -1033,7 +1124,13 @@ void KWebRtcPeer::OnIceCandidate(const webrtc::IceCandidate *pCandidate)
 	message.strSdpMid = QString::fromStdString(pCandidate->sdp_mid());
 	message.nSdpMLineIndex = pCandidate->sdp_mline_index();
 	message.strCandidate = QString::fromStdString(pCandidate->ToString());
-	emit signalingMessageReady(m_nGeneration.load(), KWebRtcSignalingMessageCodec::encode(message));
+	const quint64 nGeneration = m_nGeneration.load();
+	postCallback(nGeneration,
+		[message, nGeneration](KWebRtcPeer *pPeer)
+		{
+			emit pPeer->signalingMessageReady(nGeneration,
+				KWebRtcSignalingMessageCodec::encode(message));
+		});
 }
 
 void KWebRtcPeer::OnIceConnectionReceivingChange(bool)
@@ -1253,13 +1350,16 @@ void KWebRtcPeer::handleLocalDescription(webrtc::SessionDescriptionInterface *pD
 
 	sendSessionDescription(pDescription);
 	m_spPeerConnection->SetLocalDescription(KSetDescriptionObserver::create(
-			[this]()
+			m_spCallbackGate,
+			m_nGeneration.load(),
+			[](KWebRtcPeer *pPeer)
 			{
-				emit stateChanged(m_nGeneration.load(), QStringLiteral("LocalDescriptionSet"));
+				emit pPeer->stateChanged(pPeer->m_nGeneration.load(),
+					QStringLiteral("LocalDescriptionSet"));
 			},
-			[this](webrtc::RTCError error)
+			[](KWebRtcPeer *pPeer, webrtc::RTCError error)
 			{
-				handleLocalDescriptionFailure(error);
+				pPeer->handleLocalDescriptionFailure(error);
 			})
 			.get(),
 		pDescription);
@@ -1275,7 +1375,8 @@ void KWebRtcPeer::handleRemoteDescriptionSuccess(webrtc::SdpType sdpType)
 	emit stateChanged(m_nGeneration.load(), QStringLiteral("RemoteDescriptionSet"));
 	if (sdpType == webrtc::SdpType::kOffer && m_spPeerConnection)
 	{
-		m_spPeerConnection->CreateAnswer(KCreateSessionDescriptionObserver::create(this).get(),
+		m_spPeerConnection->CreateAnswer(KCreateSessionDescriptionObserver::create(
+			m_spCallbackGate, m_nGeneration.load()).get(),
 			webrtc::PeerConnectionInterface::RTCOfferAnswerOptions());
 	}
 }
@@ -1500,13 +1601,15 @@ void KWebRtcPeer::handleSessionDescription(const QString &strType, const QString
 
 	const webrtc::SdpType value = sdpType.value();
 	m_spPeerConnection->SetRemoteDescription(KSetDescriptionObserver::create(
-			[this, value]()
+			m_spCallbackGate,
+			m_nGeneration.load(),
+			[value](KWebRtcPeer *pPeer)
 			{
-				handleRemoteDescriptionSuccess(value);
+				pPeer->handleRemoteDescriptionSuccess(value);
 			},
-			[this](webrtc::RTCError error)
+			[](KWebRtcPeer *pPeer, webrtc::RTCError error)
 			{
-				handleRemoteDescriptionFailure(error);
+				pPeer->handleRemoteDescriptionFailure(error);
 			})
 			.get(),
 		spDescription.release());

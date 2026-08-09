@@ -20,11 +20,13 @@
 
 #include <memory>
 #include <atomic>
+#include <functional>
 #include <vector>
 
 class KWebRtcVideoSource;
 class KCreateSessionDescriptionObserver;
 class KWebRtcDataChannel;
+class KWebRtcCallbackGate;
 class KWebRtcLatencyProbe;
 class KWebRtcRemoteFrameProcessor;
 namespace webrtc
@@ -124,10 +126,13 @@ private:
 	bool enqueueInputMessage(const QString &strPayload, bool bMouseMove);
 	static QString rtcErrorMessage(const QString &strPrefix, const webrtc::RTCError &error);
 	void clearPeerObjects();
+	bool postCallback(quint64 nGeneration,
+		std::function<void(KWebRtcPeer *)> callback);
 
 	KSessionRole m_role = ControllerSessionRole;
 	std::atomic<quint64> m_nGeneration = 0;
 	std::atomic_bool m_bShutdownPending = false;
+	std::shared_ptr<KWebRtcCallbackGate> m_spCallbackGate;
 	class QThread *m_pTeardownThread = nullptr;
 	class QTimer *m_pStatsTimer = nullptr;
 	std::unique_ptr<webrtc::Thread> m_spNetworkThread;
