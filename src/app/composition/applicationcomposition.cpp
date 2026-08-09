@@ -8,6 +8,8 @@
 #include "adapters/settings/qsettingsrecentdevicestore.h"
 #include "adapters/settings/qsettingsapplicationstore.h"
 #include "app/remotedesktopwindow.h"
+#include "app/remoteterminalwindow.h"
+#include "adapters/windows/terminal/windowspseudoconsole.h"
 #include "capture/captureservice.h"
 #include "core/discovery/devicediscoverycontroller.h"
 #include "discovery/landiscoveryservice.h"
@@ -18,6 +20,7 @@
 #include "session/sessioncoordinator.h"
 #include "settings/applicationsettingsservice.h"
 #include "clipboard/clipboardsyncservice.h"
+#include "terminal/terminalsessionservice.h"
 #include "ui_bridge/webviewwidget.h"
 #include "ui_bridge/devicediscoveryviewmodel.h"
 #include "common/sessiontracelogger.h"
@@ -93,8 +96,14 @@ KApplicationComposition::KApplicationComposition(QObject *pParent)
 		std::make_unique<KQtClipboardAdapter>(),
 		m_pSessionService,
 		this))
+	, m_pTerminalSessionService(new KTerminalSessionService(
+		std::make_unique<KWindowsPseudoConsole>(),
+		m_pSessionService,
+		this))
 	, m_pShutdownDeadlineTimer(new QTimer(this))
 {
+	m_pSessionService->setTerminalCapabilityAvailable(
+		m_pTerminalSessionService->isHostSupported());
 	m_pShutdownDeadlineTimer->setSingleShot(true);
 	m_pShutdownDeadlineTimer->setInterval(kApplicationShutdownDeadlineMs);
 	connect(m_pShutdownDeadlineTimer, &QTimer::timeout,
@@ -102,6 +111,8 @@ KApplicationComposition::KApplicationComposition(QObject *pParent)
 	m_pRecentDeviceService->initialize();
 	m_pApplicationSettingsService->initialize();
 	m_pSessionService->applyApplicationSettings(m_pApplicationSettingsService->settings());
+	m_pTerminalSessionService->setApprovalTimeoutSeconds(
+		m_pApplicationSettingsService->settings().nApprovalTimeoutSeconds);
 	wireServices();
 }
 
@@ -142,6 +153,10 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		m_pRecentDeviceService, &KRecentDeviceService::connectDevice);
 	connect(pWebViewWidget, &KWebViewWidget::removeRecentDeviceRequested,
 		m_pRecentDeviceService, &KRecentDeviceService::removeDevice);
+	connect(pWebViewWidget, &KWebViewWidget::openRecentDeviceTerminalRequested,
+		m_pRecentDeviceService, &KRecentDeviceService::openTerminalDevice);
+	connect(pWebViewWidget, &KWebViewWidget::respondTerminalAccessRequestRequested,
+		m_pTerminalSessionService, &KTerminalSessionService::respondIncomingRequest);
 	connect(pWebViewWidget, &KWebViewWidget::requestApplicationSettingsRequested,
 		m_pApplicationSettingsService, &KApplicationSettingsService::requestSettings);
 	connect(pWebViewWidget, &KWebViewWidget::updateApplicationSettingsRequested,
@@ -191,6 +206,36 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		pWebViewWidget, &KWebViewWidget::sendIncomingAccessRequest);
 	connect(m_pSessionService, &KSessionCoordinator::incomingAccessRequestCleared,
 		pWebViewWidget, &KWebViewWidget::sendIncomingAccessRequestCleared);
+	connect(m_pTerminalSessionService, &KTerminalSessionService::stateChanged,
+		pWebViewWidget, &KWebViewWidget::sendTerminalStateChanged);
+	connect(m_pTerminalSessionService, &KTerminalSessionService::incomingRequest,
+		pWebViewWidget, &KWebViewWidget::sendIncomingTerminalRequest);
+	connect(m_pTerminalSessionService, &KTerminalSessionService::incomingRequestCleared,
+		pWebViewWidget, &KWebViewWidget::sendIncomingTerminalRequestCleared);
+	connect(m_pTerminalSessionService, &KTerminalSessionService::terminalError,
+		pWebViewWidget, &KWebViewWidget::sendTerminalError);
+}
+
+void KApplicationComposition::wireRemoteTerminalWindow(KRemoteTerminalWindow *pWindow)
+{
+	Q_ASSERT(pWindow != nullptr);
+	connect(pWindow, &KRemoteTerminalWindow::terminalCloseRequested,
+		m_pTerminalSessionService, &KTerminalSessionService::closeTerminal);
+	KWebViewWidget *pWebViewWidget = pWindow->webViewWidget();
+	connect(pWebViewWidget, &KWebViewWidget::terminalInputRequested,
+		m_pTerminalSessionService, &KTerminalSessionService::sendInput);
+	connect(pWebViewWidget, &KWebViewWidget::terminalResizeRequested,
+		m_pTerminalSessionService, &KTerminalSessionService::resizeTerminal);
+	connect(pWebViewWidget, &KWebViewWidget::closeTerminalRequested,
+		m_pTerminalSessionService, &KTerminalSessionService::closeTerminal);
+	connect(pWebViewWidget, &KWebViewWidget::requestTerminalStateRequested,
+		m_pTerminalSessionService, &KTerminalSessionService::requestState);
+	connect(m_pTerminalSessionService, &KTerminalSessionService::stateChanged,
+		pWebViewWidget, &KWebViewWidget::sendTerminalStateChanged);
+	connect(m_pTerminalSessionService, &KTerminalSessionService::outputReady,
+		pWebViewWidget, &KWebViewWidget::sendTerminalOutput);
+	connect(m_pTerminalSessionService, &KTerminalSessionService::terminalError,
+		pWebViewWidget, &KWebViewWidget::sendTerminalError);
 }
 
 void KApplicationComposition::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWindow)
@@ -289,6 +334,7 @@ void KApplicationComposition::shutdown()
 	m_bSessionShutdownPending = !m_pSessionService->isIdle();
 	m_bCaptureShutdownPending = true;
 	m_pClipboardSyncService->shutdown();
+	m_pTerminalSessionService->shutdown();
 	m_pDiscoveryService->stop();
 	m_pSessionService->disconnectSession();
 	m_pCaptureService->stopCapture();
@@ -345,6 +391,9 @@ void KApplicationComposition::wireServices()
 		});
 	connect(m_pApplicationSettingsService, &KApplicationSettingsService::settingsChanged,
 		m_pSessionService, &KSessionCoordinator::applyApplicationSettings);
+	connect(m_pApplicationSettingsService, &KApplicationSettingsService::settingsChanged,
+		this, [this](const KApplicationSettings &settings)
+		{ m_pTerminalSessionService->setApprovalTimeoutSeconds(settings.nApprovalTimeoutSeconds); });
 	connect(m_pCaptureService, &KCaptureService::webRtcFrameReady,
 		m_pSessionService,
 		[m_pSessionService = m_pSessionService](quint64 nGeneration, const KVideoFrame &frame)
@@ -373,6 +422,10 @@ void KApplicationComposition::wireServices()
 		m_pRecentDeviceService, &KRecentDeviceService::connectEndpoint);
 	connect(m_pRecentDeviceService, &KRecentDeviceService::connectEndpointRequested,
 		m_pSessionViewModel, &KSessionViewModel::connectSignaling);
+	connect(m_pRecentDeviceService, &KRecentDeviceService::terminalEndpointRequested,
+		m_pTerminalSessionService, &KTerminalSessionService::openTerminalForEndpoint);
+	connect(m_pTerminalSessionService, &KTerminalSessionService::focusWindowRequested,
+		this, [this]() { emit terminalWindowRequested(); });
 	connect(m_pSessionViewModel, &KSessionViewModel::sessionChannelChanged,
 		m_pRecentDeviceService, &KRecentDeviceService::setSessionChannelOpen);
 	connect(m_pSessionService, &KSessionCoordinator::incomingAccessObserved,

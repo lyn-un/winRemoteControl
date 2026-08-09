@@ -28,6 +28,7 @@ public slots:
 	void connectEndpoint(const QString &strHost, quint16 nPort);
 	void connectDevice(const QString &strDeviceId);
 	void removeDevice(const QString &strDeviceId);
+	void openTerminalDevice(const QString &strDeviceId);
 	void prepareIncomingConnection(const QString &strDeviceName, const QString &strSourceAddress);
 	void setSessionChannelOpen(bool bOpen);
 	void setRemoteDeviceName(const QString &strDeviceName);
@@ -36,6 +37,7 @@ signals:
 	void devicesChanged(const QVector<KRecentDevice> &devices);
 	void recentDeviceError(const QString &strError);
 	void connectEndpointRequested(const QString &strHost, quint16 nPort);
+	void terminalEndpointRequested(const QString &strHost, quint16 nPort);
 
 private:
 	static constexpr int kMaximumRecentDevices = 8;

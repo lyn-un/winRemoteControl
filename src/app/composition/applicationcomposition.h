@@ -13,6 +13,8 @@ class KDeviceDiscoveryViewModel;
 class KRecentDeviceService;
 class KApplicationSettingsService;
 class KClipboardSyncService;
+class KTerminalSessionService;
+class KRemoteTerminalWindow;
 class QTimer;
 
 class KApplicationComposition : public QObject
@@ -29,6 +31,7 @@ public:
 	KSessionViewModel *sessionViewModel() const;
 	void wireDashboard(KWebViewWidget *pWebViewWidget);
 	void wireRemoteDesktopWindow(KRemoteDesktopWindow *pWindow);
+	void wireRemoteTerminalWindow(KRemoteTerminalWindow *pWindow);
 	void enterRemoteDesktop();
 	void leaveRemoteDesktop();
 	void disconnectSession();
@@ -36,6 +39,7 @@ public:
 
 signals:
 	void shutdownFinished();
+	void terminalWindowRequested();
 
 private:
 	void wireServices();
@@ -50,6 +54,7 @@ private:
 	KRecentDeviceService *m_pRecentDeviceService = nullptr;
 	KApplicationSettingsService *m_pApplicationSettingsService = nullptr;
 	KClipboardSyncService *m_pClipboardSyncService = nullptr;
+	KTerminalSessionService *m_pTerminalSessionService = nullptr;
 	QTimer *m_pShutdownDeadlineTimer = nullptr;
 	bool m_bShutdown = false;
 	bool m_bShutdownFinished = false;

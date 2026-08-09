@@ -80,6 +80,8 @@ add_library(wrc_protocol STATIC
 	src/core/protocol/inputmessage.h
 	src/core/protocol/sessionmessage.cpp
 	src/core/protocol/sessionmessage.h
+	src/core/protocol/terminalmessage.cpp
+	src/core/protocol/terminalmessage.h
 	src/core/protocol/webrtcsignalingmessage.cpp
 	src/core/protocol/webrtcsignalingmessage.h
 )
@@ -121,6 +123,8 @@ add_library(wrc_core STATIC
 	src/core/transport/outboundmessagequeue.h
 	src/core/transport/peerinitializationresult.cpp
 	src/core/transport/peerinitializationresult.h
+	src/core/terminal/terminalhost.h
+	src/core/terminal/terminalstate.h
 )
 
 target_include_directories(wrc_core PUBLIC
@@ -243,6 +247,43 @@ add_library(wrc_settings_application STATIC
 add_library(wrc_clipboard_application STATIC
 	src/clipboard/clipboardsyncservice.cpp
 	src/clipboard/clipboardsyncservice.h
+)
+
+add_library(wrc_terminal_application STATIC
+	src/terminal/terminalsessionservice.cpp
+	src/terminal/terminalsessionservice.h
+)
+
+target_include_directories(wrc_terminal_application PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_terminal_application PUBLIC
+	wrc_core
+	wrc_session_application
+	wrc_diagnostics
+	Qt6::Core
+)
+
+add_library(wrc_windows_terminal_adapter STATIC
+	src/adapters/windows/terminal/windowspseudoconsole.cpp
+	src/adapters/windows/terminal/windowspseudoconsole.h
+)
+
+target_compile_definitions(wrc_windows_terminal_adapter PRIVATE
+	UNICODE
+	_UNICODE
+	WIN32_LEAN_AND_MEAN
+	NOMINMAX
+)
+
+target_include_directories(wrc_windows_terminal_adapter PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_windows_terminal_adapter PUBLIC
+	wrc_core
+	Qt6::Core
 )
 
 target_include_directories(wrc_clipboard_application PUBLIC
@@ -470,6 +511,8 @@ target_link_libraries(wrc_capture_application PUBLIC
 add_library(wrc_qt_presentation STATIC
 	src/app/remotedesktopwindow.cpp
 	src/app/remotedesktopwindow.h
+	src/app/remoteterminalwindow.cpp
+	src/app/remoteterminalwindow.h
 	src/render/videorenderwidget.cpp
 	src/render/videorenderwidget.h
 	src/session/inputfeedbacktracker.cpp
@@ -498,6 +541,7 @@ target_link_libraries(wrc_qt_presentation PUBLIC
 	wrc_core
 	wrc_session_application
 	wrc_clipboard_application
+	wrc_terminal_application
 	wrc_diagnostics
 	Qt6::Widgets
 	Qt6::Gui
@@ -542,6 +586,7 @@ target_link_libraries(winRemoteControl PRIVATE
 	wrc_udp_discovery_adapter
 	wrc_webrtc_adapter
 	wrc_windows_adapters
+	wrc_windows_terminal_adapter
 	wrc_capture_application
 	wrc_windows_capture_adapter
 	wrc_qt_presentation
@@ -769,6 +814,25 @@ if(WRC_BUILD_TESTS)
 		Qt6::Core
 	)
 	add_test(NAME wrc_clipboard_sync_tests COMMAND wrc_clipboard_sync_tests)
+
+	add_executable(wrc_terminal_session_tests
+		tests/unit/terminalsessionservicetest.cpp
+	)
+	target_link_libraries(wrc_terminal_session_tests PRIVATE
+		wrc_terminal_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_terminal_session_tests COMMAND wrc_terminal_session_tests)
+
+	add_executable(wrc_windows_pseudoconsole_tests
+		tests/unit/windowspseudoconsoletest.cpp
+	)
+	target_link_libraries(wrc_windows_pseudoconsole_tests PRIVATE
+		wrc_windows_terminal_adapter
+		Qt6::Core
+	)
+	add_test(NAME wrc_windows_pseudoconsole_tests
+		COMMAND wrc_windows_pseudoconsole_tests)
 
 	add_executable(wrc_clipboard_change_filter_tests
 		tests/unit/clipboardchangefiltertest.cpp

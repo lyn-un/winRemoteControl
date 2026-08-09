@@ -146,6 +146,21 @@ namespace
 			++nSentClipboardCount;
 		}
 
+		KSessionMessageSendStatus sendTerminalControlMessage(
+			const KTerminalMessage &message) override
+		{
+			lastTerminalMessage = message;
+			return SessionMessageAccepted;
+		}
+
+		bool sendTerminalData(const QByteArray &data) override
+		{
+			lastTerminalData = data;
+			return true;
+		}
+
+		bool terminalBackpressured() const override { return false; }
+
 		KSessionMessageSendStatus sendSessionMessage(
 			const KSessionMessage &message) override
 		{
@@ -245,6 +260,8 @@ namespace
 		QVector<KSessionMessage> sentSessionMessages;
 		KInputMessage lastSentInputMessage;
 		KClipboardMessage lastSentClipboardMessage;
+		KTerminalMessage lastTerminalMessage;
+		QByteArray lastTerminalData;
 		KVideoFrame lastVideoFrame;
 		KStreamConfig lastStreamConfig;
 		QString strLastSignalingMessage;

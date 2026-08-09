@@ -93,6 +93,23 @@ void KRecentDeviceService::removeDevice(const QString &strDeviceId)
 	emit devicesChanged(m_devices);
 }
 
+void KRecentDeviceService::openTerminalDevice(const QString &strDeviceId)
+{
+	const int nIndex = findDeviceById(strDeviceId);
+	if (nIndex < 0)
+	{
+		emit recentDeviceError(QStringLiteral("最近设备记录不存在"));
+		return;
+	}
+	const KRecentDevice device = m_devices.at(nIndex);
+	if (device.bIncoming || device.nSignalingPort == 0)
+	{
+		emit recentDeviceError(QStringLiteral("接入记录不能用于发起远程终端"));
+		return;
+	}
+	emit terminalEndpointRequested(device.strHost, device.nSignalingPort);
+}
+
 void KRecentDeviceService::prepareIncomingConnection(
 	const QString &strDeviceName,
 	const QString &strSourceAddress)

@@ -99,6 +99,7 @@ namespace
 	constexpr char kRealtimeInputChannelLabel[] = "input-realtime";
 	constexpr char kSessionChannelLabel[] = "session";
 	constexpr char kClipboardChannelLabel[] = "clipboard";
+	constexpr char kTerminalChannelLabel[] = "terminal";
 	constexpr int kStatsPollingIntervalMs = 1000;
 	constexpr int kBitsPerKilobit = 1000;
 	constexpr int kReceiverMaxFrameRateFps = 60;
@@ -112,6 +113,8 @@ namespace
 	constexpr quint64 kSessionHighWatermarkBytes = 256 * 1024;
 	constexpr quint64 kClipboardLowWatermarkBytes = 128 * 1024;
 	constexpr quint64 kClipboardHighWatermarkBytes = 512 * 1024;
+	constexpr quint64 kTerminalLowWatermarkBytes = 128 * 1024;
+	constexpr quint64 kTerminalHighWatermarkBytes = 256 * 1024;
 	constexpr char kPlayoutDelayUri[] = "http://www.webrtc.org/experiments/rtp-hdrext/playout-delay";
 
 	static int secondsToMs(double fSeconds)
@@ -362,6 +365,7 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 		KProtocolConstraints::kMaximumSessionMessageBytes, this))
 	, m_pClipboardDataChannel(new KWebRtcDataChannel(
 		KProtocolConstraints::kMaximumClipboardMessageBytes, this))
+	, m_pTerminalDataChannel(new KWebRtcDataChannel(64 * 1024, this))
 	, m_pRemoteFrameProcessor(new KWebRtcRemoteFrameProcessor(this))
 	, m_spLatencyProbe(std::make_unique<KWebRtcLatencyProbe>())
 {
@@ -424,6 +428,16 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 			[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
 			{ return decodeClipboardMessage(envelope); });
 	}
+	for (KTerminalMessageType type : { OpenRequestTerminalMessageType,
+		ApprovalPendingTerminalMessageType, AcceptedTerminalMessageType,
+		RejectedTerminalMessageType, ResizeTerminalMessageType,
+		CloseTerminalMessageType, ExitedTerminalMessageType, ErrorTerminalMessageType })
+	{
+		m_protocolRouter.registerHandler(SessionProtocolChannel,
+			KTerminalMessageCodec::typeName(type), allowMessage,
+			[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
+			{ return decodeTerminalMessage(envelope); });
+	}
 
 	m_pInputDataChannel->setBufferWatermarks(
 		kInputLowWatermarkBytes, kInputHighWatermarkBytes);
@@ -433,6 +447,8 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 		kSessionLowWatermarkBytes, kSessionHighWatermarkBytes);
 	m_pClipboardDataChannel->setBufferWatermarks(
 		kClipboardLowWatermarkBytes, kClipboardHighWatermarkBytes);
+	m_pTerminalDataChannel->setBufferWatermarks(
+		kTerminalLowWatermarkBytes, kTerminalHighWatermarkBytes);
 	connect(m_pInputDataChannel, &KWebRtcDataChannel::openChanged,
 		this, &KWebRtcPeer::handleInputChannelChanged);
 	connect(m_pInputDataChannel, &KWebRtcDataChannel::textMessageReceived,
@@ -481,6 +497,19 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 		});
 	connect(m_pClipboardDataChannel, &KWebRtcDataChannel::lowWatermarkReached,
 		this, &KWebRtcPeer::flushClipboardQueue);
+	connect(m_pTerminalDataChannel, &KWebRtcDataChannel::openChanged,
+		this, &KWebRtcPeer::handleTerminalChannelChanged);
+	connect(m_pTerminalDataChannel, &KWebRtcDataChannel::binaryMessageReceived,
+		this, [this](const QByteArray &data)
+		{ emit terminalDataReceived(m_nGeneration.load(), data); });
+	connect(m_pTerminalDataChannel, &KWebRtcDataChannel::messageRejected,
+		this, [this](int nMessageBytes, const QString &strReason)
+		{
+			handleProtocolReject(QStringLiteral("terminal"), nMessageBytes,
+				strReason, &m_nInvalidTerminalMessages);
+		});
+	connect(m_pTerminalDataChannel, &KWebRtcDataChannel::lowWatermarkReached,
+		this, [this]() { emit terminalLowWatermarkReached(m_nGeneration.load()); });
 	connect(m_pRemoteFrameProcessor, &KWebRtcRemoteFrameProcessor::frameReady,
 		this, [this](const KDecodedVideoFrame &frame)
 		{ emit remoteFrameReady(m_nGeneration.load(), frame); });
@@ -580,6 +609,13 @@ KPeerInitializationResult KWebRtcPeer::initialize(KSessionRole role,
 		return failInitialization(ClipboardChannelPeerInitializationStage,
 			strError.isEmpty() ? QStringLiteral("Injected clipboard channel failure") : strError);
 	}
+	if (m_role == ControllerSessionRole
+		&& (shouldFailInitializationAt(TerminalChannelPeerInitializationStage)
+			|| !createTerminalDataChannel(&strError)))
+	{
+		return failInitialization(TerminalChannelPeerInitializationStage,
+			strError.isEmpty() ? QStringLiteral("Injected terminal channel failure") : strError);
+	}
 	if (m_role == ControlledSessionRole
 		&& (shouldFailInitializationAt(LocalVideoTrackPeerInitializationStage)
 			|| !addLocalVideoTrack(&strError)))
@@ -643,18 +679,21 @@ void KWebRtcPeer::requestShutdown(quint64 nGeneration)
 	stopStatsPolling();
 	m_inputSendQueue.clear();
 	m_realtimeInputSendQueue.clear();
+	m_sessionSendQueue.clear();
 	m_clipboardSendQueue.clear();
 	m_nInvalidSignalingMessages = 0;
 	m_nInvalidInputMessages = 0;
 	m_nInvalidRealtimeInputMessages = 0;
 	m_nInvalidSessionMessages = 0;
 	m_nInvalidClipboardMessages = 0;
+	m_nInvalidTerminalMessages = 0;
 	m_bProtocolTerminationPending = false;
 	m_bInputRealtimeEnabled = false;
 	m_pInputDataChannel->clear();
 	m_pRealtimeInputDataChannel->clear();
 	m_pSessionDataChannel->clear();
 	m_pClipboardDataChannel->clear();
+	m_pTerminalDataChannel->clear();
 
 	if (m_spPeerConnection)
 		m_spPeerConnection->Close();
@@ -836,6 +875,34 @@ void KWebRtcPeer::sendClipboardMessage(const KClipboardMessage &message)
 	}
 	if (!m_pClipboardDataChannel->sendText(queuedMessage.strPayload))
 		m_clipboardSendQueue.enqueue(queuedMessage);
+}
+
+KRemotePeerTransport::KSessionMessageSendStatus
+KWebRtcPeer::sendTerminalControlMessage(const KTerminalMessage &message)
+{
+	KOutboundMessage queuedMessage;
+	queuedMessage.strPayload = KTerminalMessageCodec::encode(message);
+	queuedMessage.bReliable = true;
+	if (!m_pSessionDataChannel->isOpen())
+		return SessionMessageChannelUnavailable;
+	if (!m_sessionSendQueue.isEmpty() || m_pSessionDataChannel->isBackpressured())
+	{
+		return m_sessionSendQueue.enqueue(queuedMessage) == OverflowOutboundMessage
+			? SessionMessageQueueOverflow : SessionMessageAccepted;
+	}
+	if (m_pSessionDataChannel->sendText(queuedMessage.strPayload))
+		return SessionMessageAccepted;
+	return SessionMessageTransportFailed;
+}
+
+bool KWebRtcPeer::sendTerminalData(const QByteArray &data)
+{
+	return m_pTerminalDataChannel->sendBinary(data);
+}
+
+bool KWebRtcPeer::terminalBackpressured() const
+{
+	return m_pTerminalDataChannel->isBackpressured();
 }
 
 bool KWebRtcPeer::enqueueInputMessage(const QString &strPayload, bool bMouseMove)
@@ -1193,6 +1260,8 @@ void KWebRtcPeer::OnDataChannel(webrtc::scoped_refptr<webrtc::DataChannelInterfa
 		m_pSessionDataChannel->setChannel(channel);
 	else if (channel->label() == kClipboardChannelLabel)
 		m_pClipboardDataChannel->setChannel(channel);
+	else if (channel->label() == kTerminalChannelLabel)
+		m_pTerminalDataChannel->setChannel(channel);
 }
 
 void KWebRtcPeer::OnRenegotiationNeeded()
@@ -1320,6 +1389,11 @@ void KWebRtcPeer::handleClipboardChannelChanged(bool bOpen)
 		m_clipboardSendQueue.clear();
 }
 
+void KWebRtcPeer::handleTerminalChannelChanged(bool bOpen)
+{
+	emit terminalChannelChanged(m_nGeneration.load(), bOpen);
+}
+
 void KWebRtcPeer::handleSessionChannelMessage(const QString &strMessage)
 {
 	routeDataMessage(SessionProtocolChannel, strMessage, &m_nInvalidSessionMessages);
@@ -1332,6 +1406,16 @@ KProtocolHandlerResult KWebRtcPeer::decodeSessionMessage(const KProtocolEnvelope
 	if (!KSessionMessageCodec::decode(envelope, &message, &strError))
 		return KProtocolHandlerResult::failure(ProtocolHandlerDecodeFailed, strError);
 	emit sessionMessageReceived(m_nGeneration.load(), message);
+	return KProtocolHandlerResult::success();
+}
+
+KProtocolHandlerResult KWebRtcPeer::decodeTerminalMessage(const KProtocolEnvelope &envelope)
+{
+	KTerminalMessage message;
+	QString strError;
+	if (!KTerminalMessageCodec::decode(envelope, &message, &strError))
+		return KProtocolHandlerResult::failure(ProtocolHandlerDecodeFailed, strError);
+	emit terminalControlMessageReceived(m_nGeneration.load(), message);
 	return KProtocolHandlerResult::success();
 }
 
@@ -1652,6 +1736,25 @@ bool KWebRtcPeer::createClipboardDataChannel(QString *pErrorMessage)
 	}
 
 	m_pClipboardDataChannel->setChannel(result.value());
+	return true;
+}
+
+bool KWebRtcPeer::createTerminalDataChannel(QString *pErrorMessage)
+{
+	webrtc::DataChannelInit init;
+	init.ordered = true;
+	webrtc::RTCErrorOr<webrtc::scoped_refptr<webrtc::DataChannelInterface>> result =
+		m_spPeerConnection->CreateDataChannelOrError(kTerminalChannelLabel, &init);
+	if (!result.ok())
+	{
+		if (pErrorMessage != nullptr)
+		{
+			*pErrorMessage = rtcErrorMessage(
+				QStringLiteral("Create terminal DataChannel failed"), result.error());
+		}
+		return false;
+	}
+	m_pTerminalDataChannel->setChannel(result.value());
 	return true;
 }
 

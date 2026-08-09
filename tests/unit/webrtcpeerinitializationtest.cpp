@@ -115,6 +115,7 @@ int main(int nArgc, char *pArgv[])
 		RealtimeInputChannelPeerInitializationStage,
 		SessionChannelPeerInitializationStage,
 		ClipboardChannelPeerInitializationStage,
+		TerminalChannelPeerInitializationStage,
 		RemoteVideoReceiverPeerInitializationStage
 	};
 	quint64 nGeneration = 1;

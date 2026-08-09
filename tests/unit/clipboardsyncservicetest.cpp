@@ -89,11 +89,15 @@ namespace
 		void respondIncomingAccessRequest(const QString &, bool) override {}
 		quint64 sessionGeneration() const override { return 1; }
 		bool isIdle() const override { return false; }
+		bool matchesCurrentEndpoint(const QString &, quint16) const override { return false; }
 
 		void sendClipboardMessage(const KClipboardMessage &message) override
 		{
 			vecSentMessages.append(message);
 		}
+		bool sendTerminalControlMessage(const KTerminalMessage &) override { return false; }
+		bool sendTerminalData(const QByteArray &) override { return false; }
+		bool isTerminalBackpressured() const override { return false; }
 
 		void changeState(const QString &strState)
 		{

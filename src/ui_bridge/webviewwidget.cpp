@@ -272,6 +272,65 @@ void KWebViewWidget::sendSessionCapabilitiesChanged(
 	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
 }
 
+void KWebViewWidget::sendTerminalStateChanged(
+	KTerminalState state,
+	bool bAvailable,
+	const QString &strStatus,
+	const QString &strDeviceName,
+	const QString &strDeviceSource)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("terminalStateChanged"));
+	object.insert(QStringLiteral("state"), TerminalStateName(state));
+	object.insert(QStringLiteral("available"), bAvailable);
+	object.insert(QStringLiteral("status"), strStatus);
+	object.insert(QStringLiteral("deviceName"), strDeviceName);
+	object.insert(QStringLiteral("deviceSource"), strDeviceSource);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendTerminalOutput(const QByteArray &data)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("terminalOutput"));
+	object.insert(QStringLiteral("dataBase64"), QString::fromLatin1(data.toBase64()));
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendIncomingTerminalRequest(
+	const QString &strRequestId,
+	const QString &strDeviceName,
+	const QString &strDeviceSource,
+	qint64 nExpiresAtMs)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("incomingTerminalAccessRequest"));
+	object.insert(QStringLiteral("requestId"), strRequestId);
+	object.insert(QStringLiteral("deviceName"), strDeviceName);
+	object.insert(QStringLiteral("sourceAddress"), strDeviceSource);
+	object.insert(QStringLiteral("expiresAtMs"), QString::number(nExpiresAtMs));
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendIncomingTerminalRequestCleared(
+	const QString &strRequestId,
+	const QString &strReason)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("incomingTerminalAccessRequestCleared"));
+	object.insert(QStringLiteral("requestId"), strRequestId);
+	object.insert(QStringLiteral("reason"), strReason);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendTerminalError(const QString &strError)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("terminalError"));
+	object.insert(QStringLiteral("message"), strError);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
 void KWebViewWidget::resizeEvent(QResizeEvent *pEvent)
 {
 	QWidget::resizeEvent(pEvent);
@@ -430,6 +489,37 @@ void KWebViewWidget::handleWebMessage(const QString &strMessage)
 	else if (strCommand == QStringLiteral("removeRecentDevice"))
 		emit removeRecentDeviceRequested(
 			document.object().value(QStringLiteral("deviceId")).toString());
+	else if (strCommand == QStringLiteral("openRecentDeviceTerminal"))
+		emit openRecentDeviceTerminalRequested(
+			document.object().value(QStringLiteral("deviceId")).toString());
+	else if (strCommand == QStringLiteral("respondTerminalAccessRequest"))
+	{
+		const QJsonObject object = document.object();
+		emit respondTerminalAccessRequestRequested(
+			object.value(QStringLiteral("requestId")).toString(),
+			object.value(QStringLiteral("accepted")).toBool(false));
+	}
+	else if (strCommand == QStringLiteral("sendTerminalInput"))
+	{
+		const QByteArray encoded = document.object()
+			.value(QStringLiteral("dataBase64")).toString().toLatin1();
+		const QByteArray::FromBase64Result result = QByteArray::fromBase64Encoding(
+			encoded, QByteArray::AbortOnBase64DecodingErrors);
+		if (result && result.decoded.size() <= 64 * 1024)
+			emit terminalInputRequested(result.decoded);
+	}
+	else if (strCommand == QStringLiteral("resizeTerminal"))
+	{
+		const QJsonObject object = document.object();
+		const int nColumns = object.value(QStringLiteral("columns")).toInt();
+		const int nRows = object.value(QStringLiteral("rows")).toInt();
+		if (nColumns >= 20 && nColumns <= 400 && nRows >= 5 && nRows <= 200)
+			emit terminalResizeRequested(nColumns, nRows);
+	}
+	else if (strCommand == QStringLiteral("closeTerminal"))
+		emit closeTerminalRequested();
+	else if (strCommand == QStringLiteral("requestTerminalState"))
+		emit requestTerminalStateRequested();
 	else if (strCommand == QStringLiteral("requestApplicationSettings"))
 		emit requestApplicationSettingsRequested();
 	else if (strCommand == QStringLiteral("updateApplicationSettings"))

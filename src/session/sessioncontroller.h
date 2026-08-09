@@ -8,6 +8,7 @@
 #include "core/protocol/inputmessage.h"
 #include "core/protocol/clipboardmessage.h"
 #include "core/protocol/sessionmessage.h"
+#include "core/protocol/terminalmessage.h"
 #include "core/settings/applicationsettings.h"
 #include "core/session/sessionerror.h"
 #include "core/session/sessionstatemachine.h"
@@ -43,6 +44,9 @@ public slots:
 	virtual void pushVideoFrame(const KVideoFrame &frame) = 0;
 	virtual void sendInputMessage(const KInputMessage &message) = 0;
 	virtual void sendClipboardMessage(const KClipboardMessage &message) = 0;
+	virtual bool sendTerminalControlMessage(const KTerminalMessage &message) = 0;
+	virtual bool sendTerminalData(const QByteArray &data) = 0;
+	virtual bool isTerminalBackpressured() const = 0;
 	virtual void sendStreamConfig(const KStreamConfig &config) = 0;
 	virtual void handleCaptureFailure() = 0;
 	virtual void applyApplicationSettings(const KApplicationSettings &settings) = 0;
@@ -51,6 +55,7 @@ public slots:
 public:
 	virtual quint64 sessionGeneration() const = 0;
 	virtual bool isIdle() const = 0;
+	virtual bool matchesCurrentEndpoint(const QString &strHost, quint16 nPort) const = 0;
 
 signals:
 	void listeningAvailabilityChanged(bool bAvailable, quint16 nPort);
@@ -72,6 +77,10 @@ signals:
 	void inputChannelChanged(bool bOpen);
 	void clipboardMessageReceived(const KClipboardMessage &message);
 	void clipboardChannelChanged(bool bOpen);
+	void terminalControlMessageReceived(const KTerminalMessage &message);
+	void terminalDataReceived(const QByteArray &data);
+	void terminalChannelChanged(bool bOpen);
+	void terminalLowWatermarkReached();
 	void sessionChannelChanged(bool bOpen);
 	void sessionCapabilitiesChanged(const KNegotiatedCapabilities &capabilities);
 	void inputTraceUpdated(quint64 nSeq, qint64 nInjectedMs);

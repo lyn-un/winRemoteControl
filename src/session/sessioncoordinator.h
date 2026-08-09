@@ -43,6 +43,8 @@ public:
 	~KSessionCoordinator() override;
 	quint64 sessionGeneration() const override;
 	bool isIdle() const override;
+	bool matchesCurrentEndpoint(const QString &strHost, quint16 nPort) const override;
+	void setTerminalCapabilityAvailable(bool bAvailable);
 
 	KSessionCoordinator(const KSessionCoordinator &) = delete;
 	KSessionCoordinator &operator=(const KSessionCoordinator &) = delete;
@@ -60,6 +62,9 @@ public slots:
 	void pushVideoFrame(const KVideoFrame &frame) override;
 	void sendInputMessage(const KInputMessage &message) override;
 	void sendClipboardMessage(const KClipboardMessage &message) override;
+	bool sendTerminalControlMessage(const KTerminalMessage &message) override;
+	bool sendTerminalData(const QByteArray &data) override;
+	bool isTerminalBackpressured() const override;
 	void sendStreamConfig(const KStreamConfig &config) override;
 	void handleCaptureFailure() override;
 	void applyApplicationSettings(const KApplicationSettings &settings) override;
@@ -160,6 +165,8 @@ private:
 	bool m_bDeviceInfoRequested = false;
 	bool m_bInputChannelOpen = false;
 	bool m_bClipboardChannelOpen = false;
+	bool m_bTerminalChannelOpen = false;
+	bool m_bTerminalCapabilityAvailable = false;
 	bool m_bSessionChannelOpen = false;
 	bool m_bCaptureActive = false;
 	quint64 m_nLastInjectedInputSeq = 0;

@@ -151,6 +151,21 @@ bool KSessionCoordinator::isIdle() const
 	return m_sessionStateMachine.state() == IdleSessionState;
 }
 
+bool KSessionCoordinator::matchesCurrentEndpoint(
+	const QString &strHost,
+	quint16 nPort) const
+{
+	return m_sessionStateMachine.role() == ControllerSessionRole
+		&& m_sessionStateMachine.state() != IdleSessionState
+		&& m_strLastConnectionHost.compare(strHost, Qt::CaseInsensitive) == 0
+		&& m_nLastConnectionPort == nPort;
+}
+
+void KSessionCoordinator::setTerminalCapabilityAvailable(bool bAvailable)
+{
+	m_bTerminalCapabilityAvailable = bAvailable;
+}
+
 void KSessionCoordinator::initializeProtocolRoutes()
 {
 	const KProtocolRouter::Guard controllerAwaitingApproval =
@@ -596,6 +611,32 @@ void KSessionCoordinator::sendClipboardMessage(const KClipboardMessage &message)
 	m_spRemotePeerTransport->sendClipboardMessage(message);
 }
 
+bool KSessionCoordinator::sendTerminalControlMessage(const KTerminalMessage &message)
+{
+	if (!m_bCapabilitiesReceived
+		|| !m_negotiatedCapabilities.channels.contains(QStringLiteral("terminal")))
+	{
+		return false;
+	}
+	return m_spRemotePeerTransport->sendTerminalControlMessage(message)
+		== KRemotePeerTransport::SessionMessageAccepted;
+}
+
+bool KSessionCoordinator::sendTerminalData(const QByteArray &data)
+{
+	if (!m_bTerminalChannelOpen
+		|| !m_negotiatedCapabilities.channels.contains(QStringLiteral("terminal")))
+	{
+		return false;
+	}
+	return m_spRemotePeerTransport->sendTerminalData(data);
+}
+
+bool KSessionCoordinator::isTerminalBackpressured() const
+{
+	return m_spRemotePeerTransport->terminalBackpressured();
+}
+
 QString KSessionCoordinator::sendSessionMessage(KSessionMessage message)
 {
 	return m_pSessionCommandDispatcher->send(std::move(message),
@@ -842,6 +883,7 @@ void KSessionCoordinator::continueStoppingTeardown()
 	m_nInvalidSignalingMessages = 0;
 	m_bInputChannelOpen = false;
 	m_bClipboardChannelOpen = false;
+	m_bTerminalChannelOpen = false;
 	m_bSessionChannelOpen = false;
 	m_bCapabilitiesReceived = false;
 	m_negotiatedCapabilities = KNegotiatedCapabilities();
@@ -1144,6 +1186,33 @@ void KSessionCoordinator::wirePeer()
 			if (nGeneration == m_nActivePeerGeneration)
 				handleClipboardChannelChanged(bOpen);
 		});
+	connect(pTransport, &KRemotePeerTransport::terminalControlMessageReceived,
+		this, [this](quint64 nGeneration, const KTerminalMessage &message)
+		{
+			if (nGeneration == m_nActivePeerGeneration)
+				emit terminalControlMessageReceived(message);
+		});
+	connect(pTransport, &KRemotePeerTransport::terminalDataReceived,
+		this, [this](quint64 nGeneration, const QByteArray &data)
+		{
+			if (nGeneration == m_nActivePeerGeneration)
+				emit terminalDataReceived(data);
+		});
+	connect(pTransport, &KRemotePeerTransport::terminalChannelChanged,
+		this, [this](quint64 nGeneration, bool bOpen)
+		{
+			if (nGeneration != m_nActivePeerGeneration)
+				return;
+			m_bTerminalChannelOpen = bOpen;
+			emit terminalChannelChanged(bOpen
+				&& m_negotiatedCapabilities.channels.contains(QStringLiteral("terminal")));
+		});
+	connect(pTransport, &KRemotePeerTransport::terminalLowWatermarkReached,
+		this, [this](quint64 nGeneration)
+		{
+			if (nGeneration == m_nActivePeerGeneration)
+				emit terminalLowWatermarkReached();
+		});
 	connect(pTransport, &KRemotePeerTransport::sessionMessageReceived,
 		this, [this](quint64 nGeneration, const KSessionMessage &message)
 		{
@@ -1349,6 +1418,8 @@ void KSessionCoordinator::completeCapabilityNegotiation(
 	publishSessionState();
 	emit sessionCapabilitiesChanged(capabilities);
 	emit clipboardChannelChanged(m_bClipboardChannelOpen && capabilities.bClipboardText);
+	emit terminalChannelChanged(m_bTerminalChannelOpen
+		&& capabilities.channels.contains(QStringLiteral("terminal")));
 	if (m_sessionStateMachine.role() == ControllerSessionRole)
 	{
 		if (m_bDeviceInfoRequested)
@@ -1379,6 +1450,8 @@ KSessionCapabilities KSessionCoordinator::localCapabilities() const
 		QStringLiteral("video"), QStringLiteral("session"), QStringLiteral("input"),
 		QStringLiteral("input-realtime"), QStringLiteral("clipboard")
 	};
+	if (m_bTerminalCapabilityAvailable)
+		capabilities.supportedChannels.append(QStringLiteral("terminal"));
 	capabilities.bInputRealtime = true;
 	capabilities.nMaximumWidth = KProtocolConstraints::kMaximumStreamWidth;
 	capabilities.nMaximumHeight = KProtocolConstraints::kMaximumStreamHeight;

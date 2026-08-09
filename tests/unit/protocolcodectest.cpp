@@ -4,6 +4,7 @@
 #include "core/protocol/landiscoverymessage.h"
 #include "core/protocol/protocolconstraints.h"
 #include "core/protocol/sessionmessage.h"
+#include "core/protocol/terminalmessage.h"
 #include "core/protocol/webrtcsignalingmessage.h"
 
 #include <QtCore/QCoreApplication>
@@ -639,6 +640,45 @@ namespace
 			&decoded, nullptr),
 			QStringLiteral("invalid capability version range is rejected"));
 	}
+
+	void testTerminalMessages()
+	{
+		KTerminalMessage source;
+		source.type = OpenRequestTerminalMessageType;
+		source.strRequestId = QStringLiteral("550e8400-e29b-41d4-a716-446655440000");
+		source.nColumns = 120;
+		source.nRows = 40;
+		KTerminalMessage decoded;
+		check(KTerminalMessageCodec::decode(
+				KTerminalMessageCodec::encode(source), &decoded, nullptr)
+			&& decoded.type == OpenRequestTerminalMessageType
+			&& decoded.nColumns == 120 && decoded.nRows == 40,
+			QStringLiteral("terminal open request round-trips"));
+
+		source.type = ErrorTerminalMessageType;
+		source.strErrorCode = QStringLiteral("output_overflow");
+		check(KTerminalMessageCodec::decode(
+				KTerminalMessageCodec::encode(source), &decoded, nullptr)
+			&& decoded.strErrorCode == source.strErrorCode,
+			QStringLiteral("terminal error round-trips"));
+
+		check(!KTerminalMessageCodec::decode(
+			QStringLiteral("{\"version\":1,\"type\":\"terminalResize\","
+				"\"requestId\":\"550e8400-e29b-41d4-a716-446655440000\","
+				"\"columns\":401,\"rows\":40}"), &decoded, nullptr),
+			QStringLiteral("terminal size outside bounds is rejected"));
+		check(!KTerminalMessageCodec::decode(
+			QStringLiteral("{\"version\":1,\"channel\":\"session\","
+				"\"type\":\"terminalOpenRequest\",\"requestId\":\"not-a-uuid\","
+				"\"payload\":{\"columns\":100,\"rows\":30}}"), &decoded, nullptr),
+			QStringLiteral("terminal message rejects invalid request id"));
+		check(!KTerminalMessageCodec::decode(
+			QStringLiteral("{\"version\":1,\"channel\":\"session\","
+				"\"type\":\"terminalUnknown\","
+				"\"requestId\":\"550e8400-e29b-41d4-a716-446655440000\","
+				"\"payload\":{}}"), &decoded, nullptr),
+			QStringLiteral("terminal message rejects unknown control type"));
+	}
 }
 
 int main(int nArgc, char *pArgv[])
@@ -665,6 +705,7 @@ int main(int nArgc, char *pArgv[])
 	testProtocolVersionsAndUnknownFields();
 	testWebRtcSignalingMessages();
 	testSessionCapabilities();
+	testTerminalMessages();
 
 	if (g_nFailureCount == 0)
 		qInfo() << "All protocol codec tests passed";

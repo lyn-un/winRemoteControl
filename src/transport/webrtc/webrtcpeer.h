@@ -57,6 +57,10 @@ public:
 	void pushVideoFrame(const KVideoFrame &frame) override;
 	void sendInputMessage(const KInputMessage &message) override;
 	void sendClipboardMessage(const KClipboardMessage &message) override;
+	KSessionMessageSendStatus sendTerminalControlMessage(
+		const KTerminalMessage &message) override;
+	bool sendTerminalData(const QByteArray &data) override;
+	bool terminalBackpressured() const override;
 	KSessionMessageSendStatus sendSessionMessage(const KSessionMessage &message) override;
 	void setInputRealtimeEnabled(bool bEnabled) override;
 	void setStreamConfig(const KStreamConfig &config) override;
@@ -97,12 +101,14 @@ private:
 	bool createRealtimeInputDataChannel(QString *pErrorMessage);
 	bool createSessionDataChannel(QString *pErrorMessage);
 	bool createClipboardDataChannel(QString *pErrorMessage);
+	bool createTerminalDataChannel(QString *pErrorMessage);
 	bool addLocalVideoTrack(QString *pErrorMessage);
 	bool addRemoteVideoReceiver(QString *pErrorMessage);
 	void handleInputChannelChanged(bool bOpen);
 	void handleRealtimeInputChannelChanged(bool bOpen);
 	void handleSessionChannelChanged(bool bOpen);
 	void handleClipboardChannelChanged(bool bOpen);
+	void handleTerminalChannelChanged(bool bOpen);
 	void handleInputChannelMessage(const QString &strMessage);
 	void handleRealtimeInputChannelMessage(const QString &strMessage);
 	void handleSessionChannelMessage(const QString &strMessage);
@@ -111,6 +117,7 @@ private:
 		bool bRealtimeInput);
 	KProtocolHandlerResult decodeSessionMessage(const KProtocolEnvelope &envelope);
 	KProtocolHandlerResult decodeClipboardMessage(const KProtocolEnvelope &envelope);
+	KProtocolHandlerResult decodeTerminalMessage(const KProtocolEnvelope &envelope);
 	KProtocolHandlerResult handleLatencyMessage(const KProtocolEnvelope &envelope);
 	void routeDataMessage(KProtocolChannel channel,
 		const QString &strMessage,
@@ -160,6 +167,7 @@ private:
 	KWebRtcDataChannel *m_pRealtimeInputDataChannel = nullptr;
 	KWebRtcDataChannel *m_pSessionDataChannel = nullptr;
 	KWebRtcDataChannel *m_pClipboardDataChannel = nullptr;
+	KWebRtcDataChannel *m_pTerminalDataChannel = nullptr;
 	KWebRtcRemoteFrameProcessor *m_pRemoteFrameProcessor = nullptr;
 	std::unique_ptr<KWebRtcLatencyProbe> m_spLatencyProbe;
 	webrtc::scoped_refptr<KWebRtcVideoSource> m_spVideoSource;
@@ -171,6 +179,7 @@ private:
 	std::atomic_int m_nInvalidRealtimeInputMessages = 0;
 	std::atomic_int m_nInvalidSessionMessages = 0;
 	std::atomic_int m_nInvalidClipboardMessages = 0;
+	std::atomic_int m_nInvalidTerminalMessages = 0;
 	std::atomic_bool m_bProtocolTerminationPending = false;
 	std::atomic_bool m_bInputRealtimeEnabled = false;
 	KOutboundMessageQueue m_inputSendQueue { 256, 64 * 1024 };

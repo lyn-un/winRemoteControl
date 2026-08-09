@@ -28,6 +28,7 @@ public:
 	void clear();
 	bool isOpen() const;
 	bool sendText(const QString &strMessage);
+	bool sendBinary(const QByteArray &data);
 	void setBufferWatermarks(quint64 nLowBytes, quint64 nHighBytes);
 	quint64 bufferedAmount() const;
 	bool isBackpressured() const;
@@ -35,6 +36,7 @@ public:
 signals:
 	void openChanged(bool bOpen);
 	void textMessageReceived(const QString &strMessage);
+	void binaryMessageReceived(const QByteArray &data);
 	void messageRejected(int nMessageBytes, const QString &strReason);
 	void bufferedAmountChanged(quint64 nBufferedBytes);
 	void lowWatermarkReached();

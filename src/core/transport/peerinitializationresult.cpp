@@ -49,6 +49,8 @@ QString KPeerInitializationResult::stageName(KPeerInitializationStage stage)
 		return QStringLiteral("SessionChannel");
 	case ClipboardChannelPeerInitializationStage:
 		return QStringLiteral("ClipboardChannel");
+	case TerminalChannelPeerInitializationStage:
+		return QStringLiteral("TerminalChannel");
 	case LocalVideoTrackPeerInitializationStage:
 		return QStringLiteral("LocalVideoTrack");
 	case RemoteVideoReceiverPeerInitializationStage:

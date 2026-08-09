@@ -20,6 +20,7 @@ enum KPeerInitializationStage
 	RealtimeInputChannelPeerInitializationStage,
 	SessionChannelPeerInitializationStage,
 	ClipboardChannelPeerInitializationStage,
+	TerminalChannelPeerInitializationStage,
 	LocalVideoTrackPeerInitializationStage,
 	RemoteVideoReceiverPeerInitializationStage
 };

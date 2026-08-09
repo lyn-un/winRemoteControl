@@ -8,6 +8,7 @@
 #include "core/settings/applicationsettings.h"
 #include "core/session/sessionerror.h"
 #include "core/protocol/sessionmessage.h"
+#include "core/terminal/terminalstate.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QPoint>
@@ -67,6 +68,19 @@ public slots:
 		const QString &strStatus);
 	void sendClipboardSyncError(const QString &strError);
 	void sendSessionCapabilitiesChanged(const KNegotiatedCapabilities &capabilities);
+	void sendTerminalStateChanged(KTerminalState state,
+		bool bAvailable,
+		const QString &strStatus,
+		const QString &strDeviceName,
+		const QString &strDeviceSource);
+	void sendTerminalOutput(const QByteArray &data);
+	void sendIncomingTerminalRequest(const QString &strRequestId,
+		const QString &strDeviceName,
+		const QString &strDeviceSource,
+		qint64 nExpiresAtMs);
+	void sendIncomingTerminalRequestCleared(const QString &strRequestId,
+		const QString &strReason);
+	void sendTerminalError(const QString &strError);
 
 signals:
 	void startCaptureRequested();
@@ -82,6 +96,12 @@ signals:
 	void requestRecentDevicesRequested();
 	void connectRecentDeviceRequested(const QString &strDeviceId);
 	void removeRecentDeviceRequested(const QString &strDeviceId);
+	void openRecentDeviceTerminalRequested(const QString &strDeviceId);
+	void respondTerminalAccessRequestRequested(const QString &strRequestId, bool bAccepted);
+	void terminalInputRequested(const QByteArray &data);
+	void terminalResizeRequested(int nColumns, int nRows);
+	void closeTerminalRequested();
+	void requestTerminalStateRequested();
 	void requestApplicationSettingsRequested();
 	void updateApplicationSettingsRequested(bool bRemoteAccessEnabled,
 		const QString &strApprovalMode,

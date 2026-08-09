@@ -8,6 +8,7 @@
 #include "core/protocol/inputmessage.h"
 #include "core/protocol/clipboardmessage.h"
 #include "core/protocol/sessionmessage.h"
+#include "core/protocol/terminalmessage.h"
 #include "core/protocol/webrtcsignalingmessage.h"
 #include "core/session/sessionstatemachine.h"
 #include "core/transport/peerinitializationresult.h"
@@ -45,6 +46,10 @@ public:
 		SessionMessageTransportFailed
 	};
 
+	virtual KSessionMessageSendStatus sendTerminalControlMessage(
+		const KTerminalMessage &message) = 0;
+	virtual bool sendTerminalData(const QByteArray &data) = 0;
+	virtual bool terminalBackpressured() const = 0;
 	virtual KSessionMessageSendStatus sendSessionMessage(
 		const KSessionMessage &message) = 0;
 	virtual void setInputRealtimeEnabled(bool bEnabled) = 0;
@@ -65,6 +70,10 @@ signals:
 	void inputChannelChanged(quint64 nGeneration, bool bOpen);
 	void clipboardMessageReceived(quint64 nGeneration, const KClipboardMessage &message);
 	void clipboardChannelChanged(quint64 nGeneration, bool bOpen);
+	void terminalControlMessageReceived(quint64 nGeneration, const KTerminalMessage &message);
+	void terminalDataReceived(quint64 nGeneration, const QByteArray &data);
+	void terminalChannelChanged(quint64 nGeneration, bool bOpen);
+	void terminalLowWatermarkReached(quint64 nGeneration);
 	void sessionMessageReceived(quint64 nGeneration, const KSessionMessage &message);
 	void sessionChannelChanged(quint64 nGeneration, bool bOpen);
 	void connectionInterrupted(quint64 nGeneration);

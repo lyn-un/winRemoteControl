@@ -2,6 +2,7 @@
 
 #include "app/composition/applicationcomposition.h"
 #include "app/remotedesktopwindow.h"
+#include "app/remoteterminalwindow.h"
 #include "ui_bridge/webviewwidget.h"
 
 #include <QtCore/QCoreApplication>
@@ -43,11 +44,13 @@ void KMainWindow::closeEvent(QCloseEvent *pEvent)
 		{
 			m_bClosePending = true;
 			closeRemoteDesktopWindow();
+			closeRemoteTerminalWindow();
 			m_pComposition->shutdown();
 		}
 		return;
 	}
 	closeRemoteDesktopWindow();
+	closeRemoteTerminalWindow();
 	QMainWindow::closeEvent(pEvent);
 }
 
@@ -56,6 +59,31 @@ void KMainWindow::initConnections()
 	m_pComposition->wireDashboard(m_pWebViewWidget);
 	connect(m_pWebViewWidget, &KWebViewWidget::enterDesktopRequested,
 		this, &KMainWindow::openRemoteDesktopWindow);
+	connect(m_pComposition, &KApplicationComposition::terminalWindowRequested,
+		this, &KMainWindow::openRemoteTerminalWindow);
+}
+
+void KMainWindow::openRemoteTerminalWindow()
+{
+	if (m_pRemoteTerminalWindow == nullptr)
+	{
+		m_pRemoteTerminalWindow = new KRemoteTerminalWindow(this);
+		connect(m_pRemoteTerminalWindow, &KRemoteTerminalWindow::terminalCloseRequested,
+			this, &KMainWindow::closeRemoteTerminalWindow);
+		m_pComposition->wireRemoteTerminalWindow(m_pRemoteTerminalWindow);
+		m_pRemoteTerminalWindow->loadFrontend(m_strFrontendPath);
+	}
+	m_pRemoteTerminalWindow->show();
+	m_pRemoteTerminalWindow->raise();
+	m_pRemoteTerminalWindow->activateWindow();
+}
+
+void KMainWindow::closeRemoteTerminalWindow()
+{
+	if (m_pRemoteTerminalWindow == nullptr)
+		return;
+	m_pRemoteTerminalWindow->deleteLater();
+	m_pRemoteTerminalWindow = nullptr;
 }
 
 void KMainWindow::openRemoteDesktopWindow()

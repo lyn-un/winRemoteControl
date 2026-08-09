@@ -75,6 +75,22 @@ bool KWebRtcDataChannel::sendText(const QString &strMessage)
 	return bSent;
 }
 
+bool KWebRtcDataChannel::sendBinary(const QByteArray &data)
+{
+	Q_ASSERT(QThread::currentThread() == thread());
+	if (!isOpen() || data.isEmpty() || data.size() > m_nMaximumMessageBytes)
+		return false;
+	webrtc::DataBuffer buffer(webrtc::CopyOnWriteBuffer(
+		reinterpret_cast<const uint8_t *>(data.constData()),
+		static_cast<size_t>(data.size())), true);
+	const bool bSent = m_spChannel->Send(buffer);
+	const quint64 nBufferedBytes = bufferedAmount();
+	if (m_nHighWatermarkBytes > 0 && nBufferedBytes >= m_nHighWatermarkBytes)
+		m_bBackpressured = true;
+	emit bufferedAmountChanged(nBufferedBytes);
+	return bSent;
+}
+
 void KWebRtcDataChannel::setBufferWatermarks(quint64 nLowBytes, quint64 nHighBytes)
 {
 	Q_ASSERT(QThread::currentThread() == thread());
@@ -142,8 +158,13 @@ void KWebRtcDataChannel::handleMessage(quint64 nChannelGeneration,
 		return;
 	if (bBinary)
 	{
-		emit messageRejected(data.size(),
-			QStringLiteral("Binary DataChannel message is not supported"));
+		if (data.size() > m_nMaximumMessageBytes)
+		{
+			emit messageRejected(data.size(),
+				QStringLiteral("DataChannel message is too large"));
+			return;
+		}
+		emit binaryMessageReceived(data);
 		return;
 	}
 	if (data.size() > m_nMaximumMessageBytes)
