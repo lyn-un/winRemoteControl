@@ -69,6 +69,30 @@ namespace
 {
 	constexpr unsigned long kDestructorShutdownTimeoutMs = 2000;
 
+	class KPeerInitializationGuard
+	{
+	public:
+		explicit KPeerInitializationGuard(std::function<void()> rollback)
+			: m_rollback(std::move(rollback))
+		{
+		}
+
+		~KPeerInitializationGuard()
+		{
+			if (!m_bCommitted)
+				m_rollback();
+		}
+
+		void commit()
+		{
+			m_bCommitted = true;
+		}
+
+	private:
+		std::function<void()> m_rollback;
+		bool m_bCommitted = false;
+	};
+
 	constexpr char kStreamId[] = "wrc-stream";
 	constexpr char kVideoLabel[] = "wrc-screen";
 	constexpr char kInputChannelLabel[] = "input";
@@ -495,37 +519,103 @@ KWebRtcPeer::~KWebRtcPeer()
 	m_pTeardownThread = nullptr;
 }
 
-bool KWebRtcPeer::initialize(KSessionRole role, quint64 nGeneration, QString *pErrorMessage)
+KPeerInitializationResult KWebRtcPeer::initialize(KSessionRole role,
+	quint64 nGeneration)
 {
-	if (m_bShutdownPending || m_spPeerConnection || m_spFactory)
-	{
-		if (pErrorMessage != nullptr)
-			*pErrorMessage = QStringLiteral("WebRTC peer is still shutting down");
-		return false;
-	}
+	if (m_lifecycleState != IdleWebRtcPeerLifecycleState)
+		return KPeerInitializationResult::rejected(
+			QStringLiteral("WebRTC peer is not idle"));
+
+	m_lifecycleState = InitializingWebRtcPeerLifecycleState;
 	m_nGeneration = nGeneration;
 	m_spCallbackGate->open(this, nGeneration);
 	m_bProtocolTerminationPending = false;
 	m_role = role;
-	if (!createFactory(pErrorMessage))
-		return false;
-	if (!createPeerConnection(pErrorMessage))
-		return false;
-	if (m_role == ControllerSessionRole && !createInputDataChannel(pErrorMessage))
-		return false;
-	if (m_role == ControllerSessionRole && !createRealtimeInputDataChannel(pErrorMessage))
-		return false;
-	if (m_role == ControllerSessionRole && !createSessionDataChannel(pErrorMessage))
-		return false;
-	if (m_role == ControllerSessionRole && !createClipboardDataChannel(pErrorMessage))
-		return false;
-	if (m_role == ControlledSessionRole && !addLocalVideoTrack(pErrorMessage))
-		return false;
-	if (m_role == ControllerSessionRole && !addRemoteVideoReceiver(pErrorMessage))
-		return false;
+	KPeerInitializationGuard guard(
+		[this, nGeneration]() { requestShutdown(nGeneration); });
+	QString strError;
+	if (shouldFailInitializationAt(ThreadsPeerInitializationStage)
+		|| !createThreads(&strError))
+	{
+		return failInitialization(ThreadsPeerInitializationStage,
+			strError.isEmpty() ? QStringLiteral("Injected WebRTC thread failure") : strError);
+	}
+	if (shouldFailInitializationAt(FactoryPeerInitializationStage)
+		|| !createFactory(&strError))
+	{
+		return failInitialization(FactoryPeerInitializationStage,
+			strError.isEmpty() ? QStringLiteral("Injected WebRTC factory failure") : strError);
+	}
+	if (shouldFailInitializationAt(PeerConnectionPeerInitializationStage)
+		|| !createPeerConnection(&strError))
+	{
+		return failInitialization(PeerConnectionPeerInitializationStage,
+			strError.isEmpty() ? QStringLiteral("Injected PeerConnection failure") : strError);
+	}
+	if (m_role == ControllerSessionRole
+		&& (shouldFailInitializationAt(InputChannelPeerInitializationStage)
+			|| !createInputDataChannel(&strError)))
+	{
+		return failInitialization(InputChannelPeerInitializationStage,
+			strError.isEmpty() ? QStringLiteral("Injected input channel failure") : strError);
+	}
+	if (m_role == ControllerSessionRole
+		&& (shouldFailInitializationAt(RealtimeInputChannelPeerInitializationStage)
+			|| !createRealtimeInputDataChannel(&strError)))
+	{
+		return failInitialization(RealtimeInputChannelPeerInitializationStage,
+			strError.isEmpty() ? QStringLiteral("Injected realtime input channel failure") : strError);
+	}
+	if (m_role == ControllerSessionRole
+		&& (shouldFailInitializationAt(SessionChannelPeerInitializationStage)
+			|| !createSessionDataChannel(&strError)))
+	{
+		return failInitialization(SessionChannelPeerInitializationStage,
+			strError.isEmpty() ? QStringLiteral("Injected session channel failure") : strError);
+	}
+	if (m_role == ControllerSessionRole
+		&& (shouldFailInitializationAt(ClipboardChannelPeerInitializationStage)
+			|| !createClipboardDataChannel(&strError)))
+	{
+		return failInitialization(ClipboardChannelPeerInitializationStage,
+			strError.isEmpty() ? QStringLiteral("Injected clipboard channel failure") : strError);
+	}
+	if (m_role == ControlledSessionRole
+		&& (shouldFailInitializationAt(LocalVideoTrackPeerInitializationStage)
+			|| !addLocalVideoTrack(&strError)))
+	{
+		return failInitialization(LocalVideoTrackPeerInitializationStage,
+			strError.isEmpty() ? QStringLiteral("Injected local video track failure") : strError);
+	}
+	if (m_role == ControllerSessionRole
+		&& (shouldFailInitializationAt(RemoteVideoReceiverPeerInitializationStage)
+			|| !addRemoteVideoReceiver(&strError)))
+	{
+		return failInitialization(RemoteVideoReceiverPeerInitializationStage,
+			strError.isEmpty() ? QStringLiteral("Injected remote video receiver failure") : strError);
+	}
 
+	m_lifecycleState = ReadyWebRtcPeerLifecycleState;
+	guard.commit();
 	emit stateChanged(m_nGeneration.load(), QStringLiteral("PeerReady"));
-	return true;
+	return KPeerInitializationResult::success();
+}
+
+bool KWebRtcPeer::shouldFailInitializationAt(KPeerInitializationStage) const
+{
+	return false;
+}
+
+KPeerInitializationResult KWebRtcPeer::failInitialization(
+	KPeerInitializationStage stage, const QString &strTechnicalMessage)
+{
+	m_lifecycleState = FailedWebRtcPeerLifecycleState;
+	KSessionTraceLogger::write(KSessionStateMachine::roleName(m_role),
+		QStringLiteral("peer_initialization"), QStringLiteral("failed"), -1,
+		QStringLiteral("generation=%1 stage=%2 technical=%3")
+			.arg(m_nGeneration.load())
+			.arg(KPeerInitializationResult::stageName(stage), strTechnicalMessage));
+	return KPeerInitializationResult::rollbackPending(stage, strTechnicalMessage);
 }
 
 quint64 KWebRtcPeer::generation() const
@@ -545,8 +635,9 @@ bool KWebRtcPeer::postCallback(quint64 nGeneration,
 
 void KWebRtcPeer::requestShutdown(quint64 nGeneration)
 {
-	if (m_bShutdownPending.exchange(true))
+	if (m_lifecycleState == ShuttingDownWebRtcPeerLifecycleState)
 		return;
+	m_lifecycleState = ShuttingDownWebRtcPeerLifecycleState;
 
 	m_spCallbackGate->close();
 	stopStatsPolling();
@@ -565,6 +656,8 @@ void KWebRtcPeer::requestShutdown(quint64 nGeneration)
 	m_pSessionDataChannel->clear();
 	m_pClipboardDataChannel->clear();
 
+	if (m_spPeerConnection)
+		m_spPeerConnection->Close();
 	if (m_spRemoteVideoTrack)
 		m_spRemoteVideoTrack->RemoveSink(this);
 	webrtc::scoped_refptr<webrtc::VideoTrackInterface> spRemoteVideoTrack = std::move(m_spRemoteVideoTrack);
@@ -581,8 +674,14 @@ void KWebRtcPeer::requestShutdown(quint64 nGeneration)
 	if (!spRemoteVideoTrack && !spVideoSender && !spPeerConnection && !spVideoSource
 		&& !spFactory && !upSignalingThread && !upWorkerThread && !upNetworkThread)
 	{
-		m_bShutdownPending = false;
-		emit shutdownFinished(nGeneration);
+		QMetaObject::invokeMethod(this,
+			[this, nGeneration]()
+			{
+				if (m_lifecycleState != ShuttingDownWebRtcPeerLifecycleState)
+					return;
+				m_lifecycleState = IdleWebRtcPeerLifecycleState;
+				emit shutdownFinished(nGeneration);
+			}, Qt::QueuedConnection);
 		return;
 	}
 
@@ -601,19 +700,19 @@ void KWebRtcPeer::requestShutdown(quint64 nGeneration)
 			spPeerConnection = nullptr;
 			spVideoSource = nullptr;
 			spFactory = nullptr;
-			if (upSignalingThread)
-				upSignalingThread->Stop();
-			if (upWorkerThread)
-				upWorkerThread->Stop();
 			if (upNetworkThread)
 				upNetworkThread->Stop();
+			if (upWorkerThread)
+				upWorkerThread->Stop();
+			if (upSignalingThread)
+				upSignalingThread->Stop();
 		});
 	connect(m_pTeardownThread, &QThread::finished, this,
 		[this, nGeneration]()
 		{
 			QThread *pFinishedThread = m_pTeardownThread;
 			m_pTeardownThread = nullptr;
-			m_bShutdownPending = false;
+			m_lifecycleState = IdleWebRtcPeerLifecycleState;
 			if (pFinishedThread != nullptr)
 				pFinishedThread->deleteLater();
 			emit shutdownFinished(nGeneration);
@@ -1416,7 +1515,7 @@ void KWebRtcPeer::OnFrame(const webrtc::VideoFrame &frame)
 	m_pRemoteFrameProcessor->enqueue(frame);
 }
 
-bool KWebRtcPeer::createFactory(QString *pErrorMessage)
+bool KWebRtcPeer::createThreads(QString *pErrorMessage)
 {
 	m_spNetworkThread = webrtc::Thread::CreateWithSocketServer();
 	m_spWorkerThread = webrtc::Thread::Create();
@@ -1428,10 +1527,19 @@ bool KWebRtcPeer::createFactory(QString *pErrorMessage)
 		return false;
 	}
 
-	m_spNetworkThread->Start();
-	m_spWorkerThread->Start();
-	m_spSignalingThread->Start();
+	if (!m_spNetworkThread->Start()
+		|| !m_spWorkerThread->Start()
+		|| !m_spSignalingThread->Start())
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("Start WebRTC threads failed");
+		return false;
+	}
+	return true;
+}
 
+bool KWebRtcPeer::createFactory(QString *pErrorMessage)
+{
 	webrtc::PeerConnectionFactoryDependencies deps;
 	deps.network_thread = m_spNetworkThread.get();
 	deps.worker_thread = m_spWorkerThread.get();

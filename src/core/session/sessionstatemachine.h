@@ -61,6 +61,7 @@ public:
 	bool restore();
 	bool beginStopping();
 	bool markShutdownTimedOut();
+	bool markInitializationRollbackTimedOut();
 	void finish(bool bKeepListening);
 
 	bool canEnterRemoteDesktop() const;

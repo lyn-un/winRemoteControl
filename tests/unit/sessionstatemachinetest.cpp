@@ -88,6 +88,19 @@ namespace
 			QStringLiteral("rejected incoming connection restores listening"));
 	}
 
+	void testInitializationRollbackTimeout()
+	{
+		KSessionStateMachine stateMachine;
+		check(stateMachine.markInitializationRollbackTimedOut(),
+			QStringLiteral("idle initialization rollback can enter timeout isolation"));
+		check(stateMachine.isShutdownTimedOut()
+			&& !stateMachine.canSendInput(),
+			QStringLiteral("initialization rollback timeout disables session work"));
+		stateMachine.finish(false);
+		check(stateMachine.state() == IdleSessionState,
+			QStringLiteral("late initialization rollback completion restores idle"));
+	}
+
 	void testInterruptionRestore()
 	{
 		KSessionStateMachine stateMachine;
@@ -223,6 +236,7 @@ int main(int nArgc, char *pArgv[])
 	QCoreApplication application(nArgc, pArgv);
 	testControllerLifecycle();
 	testControlledLifecycleAndGeneration();
+	testInitializationRollbackTimeout();
 	testInterruptionRestore();
 	testInvalidTransitionsAndRoleChanges();
 	testTableDrivenTransitions();

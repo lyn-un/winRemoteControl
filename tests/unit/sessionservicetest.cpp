@@ -10,6 +10,7 @@
 #include <QtCore/QDebug>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QThread>
+#include <QtCore/QTimer>
 #include <QtCore/QUuid>
 #include <QtNetwork/QHostAddress>
 #include <QtNetwork/QTcpServer>
@@ -81,16 +82,25 @@ namespace
 	class KFakeRemotePeerTransport final : public KRemotePeerTransport
 	{
 	public:
-		bool initialize(KSessionRole role, quint64 nGeneration, QString *pErrorMessage) override
+		KPeerInitializationResult initialize(KSessionRole role,
+			quint64 nGeneration) override
 		{
 			initializedRole = role;
 			m_nGeneration = nGeneration;
 			++nInitializeCount;
 			if (bInitializeSucceeds)
-				return true;
-			if (pErrorMessage != nullptr)
-				*pErrorMessage = QStringLiteral("injected initialization failure");
-			return false;
+				return KPeerInitializationResult::success();
+
+			++nShutdownCount;
+			nLastShutdownGeneration = nGeneration;
+			if (bCompleteShutdownImmediately)
+			{
+				QTimer::singleShot(0, this,
+					[this, nGeneration]() { emit shutdownFinished(nGeneration); });
+			}
+			return KPeerInitializationResult::rollbackPending(
+				FactoryPeerInitializationStage,
+				QStringLiteral("injected initialization failure"));
 		}
 
 		void requestShutdown(quint64 nGeneration) override
@@ -668,8 +678,109 @@ namespace
 		check(pPeer->nInitializeCount == 1 && pPeer->nShutdownCount == 1,
 			QStringLiteral("failed peer initialization requests resource rollback"));
 		check(service.isIdle()
-			&& sessionError.code == InitializationFailedSessionErrorCode,
+			&& sessionError.code == InitializationFailedSessionErrorCode
+			&& sessionError.strTechnicalMessage.contains(QStringLiteral("stage=Factory")),
 			QStringLiteral("failed initialization leaves the session idle with a structured error"));
+	}
+
+	void testInitializationRollbackRunsLatestPendingRequest()
+	{
+		auto spPeer = std::make_unique<KFakeRemotePeerTransport>();
+		KFakeRemotePeerTransport *pPeer = spPeer.get();
+		pPeer->bInitializeSucceeds = false;
+		pPeer->bCompleteShutdownImmediately = false;
+		KSessionCoordinator service(std::make_unique<KFakeDeviceInfoProvider>(),
+			std::make_unique<KFakeInputInjector>(),
+			std::move(spPeer),
+			std::make_unique<KTcpSignalingTransport>());
+		QVector<quint16> availablePorts;
+		QObject::connect(&service, &KSessionCoordinator::listeningAvailabilityChanged,
+			[&availablePorts](bool bAvailable, quint16 nPort)
+			{
+				if (bAvailable)
+					availablePorts.append(nPort);
+			});
+
+		service.startSignalingServer(reserveLocalPort());
+		pPeer->bInitializeSucceeds = true;
+		pPeer->bCompleteShutdownImmediately = true;
+		const quint16 nSupersededPort = reserveLocalPort();
+		const quint16 nLatestPort = reserveLocalPort();
+		service.startSignalingServer(nSupersededPort);
+		service.startSignalingServer(nLatestPort);
+		check(pPeer->nInitializeCount == 1,
+			QStringLiteral("rollback prevents reuse before peer cleanup completes"));
+
+		pPeer->completeShutdown();
+		check(waitUntil([&availablePorts, nLatestPort]()
+			{
+				return availablePorts.contains(nLatestPort);
+			}),
+			QStringLiteral("rollback completion executes the latest pending listener"));
+		check(!availablePorts.contains(nSupersededPort)
+			&& pPeer->nInitializeCount == 2,
+			QStringLiteral("superseded rollback request is not executed"));
+		service.disconnectSession();
+	}
+
+	void testInitializationRollbackTimeoutAndLateCompletion()
+	{
+		auto spPeer = std::make_unique<KFakeRemotePeerTransport>();
+		KFakeRemotePeerTransport *pPeer = spPeer.get();
+		pPeer->bInitializeSucceeds = false;
+		pPeer->bCompleteShutdownImmediately = false;
+		KSessionCoordinator service(std::make_unique<KFakeDeviceInfoProvider>(),
+			std::make_unique<KFakeInputInjector>(),
+			std::move(spPeer),
+			std::make_unique<KTcpSignalingTransport>());
+		KSessionState lastState = IdleSessionState;
+		KSessionError lastError;
+		QObject::connect(&service, &KSessionCoordinator::sessionStateChanged,
+			[&lastState](KSessionState state) { lastState = state; });
+		QObject::connect(&service, &KSessionCoordinator::sessionErrorOccurred,
+			[&lastError](const KSessionError &error) { lastError = error; });
+
+		service.startSignalingServer(reserveLocalPort());
+		check(waitUntil([&lastState]()
+			{
+				return lastState == ShutdownTimedOutSessionState;
+			}, 3500),
+			QStringLiteral("initialization rollback timeout isolates the peer"));
+		check(lastError.code == ShutdownTimeoutSessionErrorCode,
+			QStringLiteral("initialization rollback timeout reports a structured error"));
+		const int nInitializeCount = pPeer->nInitializeCount;
+		service.startSignalingServer(reserveLocalPort());
+		check(pPeer->nInitializeCount == nInitializeCount,
+			QStringLiteral("timed-out initialization resources cannot be reused"));
+
+		pPeer->completeShutdown();
+		check(waitUntil([&service]() { return service.isIdle(); }),
+			QStringLiteral("late initialization rollback completion restores idle"));
+	}
+
+	void testListenerFailureRollsBackReadyPeer()
+	{
+		QTcpServer occupiedPort;
+		check(occupiedPort.listen(QHostAddress::AnyIPv4, 0),
+			QStringLiteral("listener rollback test reserves a port"));
+		auto spPeer = std::make_unique<KFakeRemotePeerTransport>();
+		KFakeRemotePeerTransport *pPeer = spPeer.get();
+		KSessionCoordinator service(std::make_unique<KFakeDeviceInfoProvider>(),
+			std::make_unique<KFakeInputInjector>(),
+			std::move(spPeer),
+			std::make_unique<KTcpSignalingTransport>());
+
+		const quint16 nPort = occupiedPort.serverPort();
+		service.startSignalingServer(nPort);
+		check(pPeer->nInitializeCount == 1 && pPeer->nShutdownCount == 1,
+			QStringLiteral("TCP listener failure rolls back the ready peer"));
+		check(waitUntil([&service]() { return service.isIdle(); }),
+			QStringLiteral("listener failure rollback returns to idle"));
+		occupiedPort.close();
+		service.startSignalingServer(nPort);
+		check(pPeer->nInitializeCount == 2,
+			QStringLiteral("listener can initialize again after rollback"));
+		service.disconnectSession();
 	}
 
 	void testShutdownTimeoutIsolationAndLateCompletion()
@@ -778,6 +889,9 @@ int main(int argc, char *argv[])
 	testDenyPolicyRejectsBeforeOffer();
 	testDisabledRemoteAccessCannotListen();
 	testInitializationFailureRollsBackTransport();
+	testInitializationRollbackRunsLatestPendingRequest();
+	testInitializationRollbackTimeoutAndLateCompletion();
+	testListenerFailureRollsBackReadyPeer();
 	testShutdownTimeoutIsolationAndLateCompletion();
 	testSignalingReceiveBoundaries();
 	if (g_nFailureCount == 0)

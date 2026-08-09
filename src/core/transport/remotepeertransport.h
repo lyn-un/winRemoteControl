@@ -10,6 +10,7 @@
 #include "core/protocol/sessionmessage.h"
 #include "core/protocol/webrtcsignalingmessage.h"
 #include "core/session/sessionstatemachine.h"
+#include "core/transport/peerinitializationresult.h"
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
@@ -26,7 +27,8 @@ public:
 
 	~KRemotePeerTransport() override = default;
 
-	virtual bool initialize(KSessionRole role, quint64 nGeneration, QString *pErrorMessage) = 0;
+	virtual KPeerInitializationResult initialize(KSessionRole role,
+		quint64 nGeneration) = 0;
 	virtual void requestShutdown(quint64 nGeneration) = 0;
 	virtual quint64 generation() const = 0;
 	virtual void createOffer() = 0;

@@ -73,7 +73,9 @@ private:
 		ConnectPendingRequest,
 		RolePendingRequest
 	};
-	bool initializePeer(KSessionRole role, QString *pErrorMessage);
+	KPeerInitializationResult initializePeer(KSessionRole role);
+	void beginPeerInitializationRollback(quint64 nGeneration);
+	void handlePeerInitializationRollbackTimeout();
 	void wirePeer();
 	void initializeProtocolRoutes();
 	void initializeSessionHandlers();
@@ -177,6 +179,10 @@ private:
 	KSignalingTransport *m_pSignaling = nullptr;
 	KInputInjector *m_pInputInjector = nullptr;
 	QTimer *m_pCapabilityTimer = nullptr;
+	QTimer *m_pPeerInitializationRollbackTimer = nullptr;
+	bool m_bPeerInitializationRollbackPending = false;
+	bool m_bPeerInitializationRollbackTimedOut = false;
+	quint64 m_nPeerInitializationRollbackGeneration = 0;
 	bool m_bStopKeepListening = false;
 	bool m_bStopReportError = false;
 	bool m_bStopRecovering = false;

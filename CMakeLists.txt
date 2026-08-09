@@ -119,6 +119,8 @@ add_library(wrc_core STATIC
 	src/core/transport/networkstatstracker.h
 	src/core/transport/outboundmessagequeue.cpp
 	src/core/transport/outboundmessagequeue.h
+	src/core/transport/peerinitializationresult.cpp
+	src/core/transport/peerinitializationresult.h
 )
 
 target_include_directories(wrc_core PUBLIC
@@ -618,7 +620,7 @@ if(WRC_BUILD_TESTS)
 		wrc_p1_core_tests
 		wrc_webrtc_callback_gate_tests
 		PROPERTIES ENVIRONMENT_MODIFICATION
-			"PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+			"Path=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
 	)
 
 	if(WRC_BUILD_APP)
@@ -630,6 +632,17 @@ if(WRC_BUILD_TESTS)
 		Qt6::Core
 	)
 	add_test(NAME wrc_input_injector_tests COMMAND wrc_input_injector_tests)
+
+	add_executable(wrc_webrtc_peer_initialization_tests
+		tests/unit/webrtcpeerinitializationtest.cpp
+		src/common/framewatermark.cpp
+	)
+	target_link_libraries(wrc_webrtc_peer_initialization_tests PRIVATE
+		wrc_webrtc_adapter
+		Qt6::Core
+	)
+	add_test(NAME wrc_webrtc_peer_initialization_tests
+		COMMAND wrc_webrtc_peer_initialization_tests)
 
 	add_executable(wrc_capture_pipeline_tests
 		tests/unit/capturepipelinetest.cpp

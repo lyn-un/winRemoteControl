@@ -27,6 +27,7 @@ namespace
 	constexpr int kReconnectTimeoutMs = 10000;
 	constexpr int kInitialApprovalResponseTimeoutMs = 5000;
 	constexpr int kApprovalResponseGraceMs = 5000;
+	constexpr int kPeerInitializationRollbackTimeoutMs = 3000;
 
 	static QString roleToString(KSessionRole role)
 	{
@@ -52,6 +53,13 @@ namespace
 		return strExtra;
 	}
 
+	static QString peerInitializationError(const KPeerInitializationResult &result)
+	{
+		return QStringLiteral("stage=%1 technical=%2")
+			.arg(KPeerInitializationResult::stageName(result.stage),
+				result.strTechnicalMessage);
+	}
+
 }
 
 KSessionCoordinator::KSessionCoordinator(
@@ -71,12 +79,16 @@ KSessionCoordinator::KSessionCoordinator(
 	, m_pRecoveryController(new KRecoveryController(this))
 	, m_pShutdownCoordinator(new KShutdownCoordinator(this))
 	, m_pCapabilityTimer(new QTimer(this))
+	, m_pPeerInitializationRollbackTimer(new QTimer(this))
 {
 	Q_ASSERT(m_spRemotePeerTransport != nullptr);
 	Q_ASSERT(m_pSignaling != nullptr);
 	initializeProtocolRoutes();
 	initializeSessionHandlers();
 	m_pCapabilityTimer->setSingleShot(true);
+	m_pPeerInitializationRollbackTimer->setSingleShot(true);
+	m_pPeerInitializationRollbackTimer->setInterval(
+		kPeerInitializationRollbackTimeoutMs);
 	connect(m_pAccessApprovalController, &KAccessApprovalController::timedOut,
 		this, &KSessionCoordinator::handleApprovalTimeout);
 	connect(m_pRecoveryController, &KRecoveryController::timedOut,
@@ -87,6 +99,8 @@ KSessionCoordinator::KSessionCoordinator(
 		this, &KSessionCoordinator::handleStopWatchdog);
 	connect(m_pCapabilityTimer, &QTimer::timeout,
 		this, &KSessionCoordinator::handleCapabilityTimeout);
+	connect(m_pPeerInitializationRollbackTimer, &QTimer::timeout,
+		this, &KSessionCoordinator::handlePeerInitializationRollbackTimeout);
 	m_pSessionCommandDispatcher->setTransmitFunction(
 		[this](const KSessionMessage &message) { return transmitSessionMessage(message); });
 	connect(m_pSessionCommandDispatcher, &KSessionCommandDispatcher::commandCompleted,
@@ -274,6 +288,12 @@ void KSessionCoordinator::setRole(const QString &strRole)
 	KSessionRole role;
 	if (!KSessionStateMachine::roleFromString(strRole, &role))
 		return;
+	if (m_bPeerInitializationRollbackPending)
+	{
+		m_pendingRequestType = RolePendingRequest;
+		m_pendingRole = role;
+		return;
+	}
 	if (role != m_sessionStateMachine.role()
 		&& m_sessionStateMachine.state() != IdleSessionState)
 	{
@@ -311,6 +331,12 @@ void KSessionCoordinator::startSignalingServer(quint16 nPort)
 			false, QStringLiteral("Remote access is disabled"));
 		return;
 	}
+	if (m_bPeerInitializationRollbackPending)
+	{
+		m_pendingRequestType = ListenPendingRequest;
+		m_nPendingPort = nPort;
+		return;
+	}
 	if (m_sessionStateMachine.state() != IdleSessionState)
 	{
 		m_pendingRequestType = ListenPendingRequest;
@@ -318,18 +344,22 @@ void KSessionCoordinator::startSignalingServer(quint16 nPort)
 		finishSession(RestartListenerSessionEndReason, QString(), false, true, false);
 		return;
 	}
-	QString strError;
-	if (!initializePeer(ControlledSessionRole, &strError))
+	const KPeerInitializationResult initializationResult =
+		initializePeer(ControlledSessionRole);
+	if (!initializationResult.succeeded())
 	{
 		reportSessionError(WebRtcSessionErrorDomain,
 			InitializationFailedSessionErrorCode, StartupSessionErrorStage,
-			false, strError);
+			false, peerInitializationError(initializationResult));
 		return;
 	}
 
+	QString strError;
 	if (!m_pSignaling->startServer(nPort, &strError))
 	{
 		updateListeningAvailability(false);
+		beginPeerInitializationRollback(m_nActivePeerGeneration);
+		m_spRemotePeerTransport->requestShutdown(m_nActivePeerGeneration);
 		reportSessionError(SignalingSessionErrorDomain,
 			ConnectionFailedSessionErrorCode, ListeningSessionErrorStage,
 			true, strError);
@@ -358,6 +388,13 @@ void KSessionCoordinator::connectSignaling(const QString &strHost, quint16 nPort
 			false, QStringLiteral("Invalid controlled endpoint"));
 		return;
 	}
+	if (m_bPeerInitializationRollbackPending)
+	{
+		m_pendingRequestType = ConnectPendingRequest;
+		m_strPendingHost = strTargetHost;
+		m_nPendingPort = nPort;
+		return;
+	}
 	m_strLastConnectionHost = strTargetHost;
 	m_nLastConnectionPort = nPort;
 	m_bSignalingConnected = false;
@@ -370,12 +407,13 @@ void KSessionCoordinator::connectSignaling(const QString &strHost, quint16 nPort
 		return;
 	}
 	m_pSignaling->stop();
-	QString strError;
-	if (!initializePeer(ControllerSessionRole, &strError))
+	const KPeerInitializationResult initializationResult =
+		initializePeer(ControllerSessionRole);
+	if (!initializationResult.succeeded())
 	{
 		reportSessionError(WebRtcSessionErrorDomain,
 			InitializationFailedSessionErrorCode, StartupSessionErrorStage,
-			false, strError);
+			false, peerInitializationError(initializationResult));
 		return;
 	}
 
@@ -412,6 +450,8 @@ void KSessionCoordinator::disconnectSession()
 	m_pendingRequestType = NoPendingRequest;
 	m_strPendingHost.clear();
 	m_nPendingPort = 0;
+	if (m_bPeerInitializationRollbackPending)
+		return;
 	finishSession(LocalDisconnectSessionEndReason, QString(), false, true, false);
 }
 
@@ -826,6 +866,29 @@ void KSessionCoordinator::handleCaptureShutdownFinished(quint64 nGeneration)
 
 void KSessionCoordinator::handlePeerShutdownFinished(quint64 nGeneration)
 {
+	if (m_bPeerInitializationRollbackPending
+		&& nGeneration == m_nPeerInitializationRollbackGeneration)
+	{
+		m_pPeerInitializationRollbackTimer->stop();
+		const bool bTimedOut = m_bPeerInitializationRollbackTimedOut;
+		m_bPeerInitializationRollbackPending = false;
+		m_bPeerInitializationRollbackTimedOut = false;
+		m_nPeerInitializationRollbackGeneration = 0;
+		if (bTimedOut && m_sessionStateMachine.isShutdownTimedOut())
+		{
+			m_sessionStateMachine.finish(false);
+			publishSessionState();
+		}
+		KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
+			QStringLiteral("peer_initialization_rollback"),
+			QStringLiteral("completed"), -1,
+			QStringLiteral("generation=%1 afterTimeout=%2")
+				.arg(nGeneration)
+				.arg(bTimedOut ? 1 : 0));
+		if (!bTimedOut)
+			executePendingRequest();
+		return;
+	}
 	if (nGeneration != m_nStoppingGeneration
 		|| !m_sessionStateMachine.canCompleteShutdown())
 		return;
@@ -896,8 +959,9 @@ void KSessionCoordinator::finishStopping(quint64 nGeneration,
 	if (bKeepListening && role == ControlledSessionRole)
 	{
 		m_pSignaling->disconnectPeer();
-		QString strError;
-		if (initializePeer(ControlledSessionRole, &strError))
+		const KPeerInitializationResult initializationResult =
+			initializePeer(ControlledSessionRole);
+		if (initializationResult.succeeded())
 		{
 			bListening = true;
 			m_sessionStateMachine.finish(true);
@@ -911,7 +975,7 @@ void KSessionCoordinator::finishStopping(quint64 nGeneration,
 			publishSessionState();
 			reportSessionError(WebRtcSessionErrorDomain,
 				InitializationFailedSessionErrorCode, ShutdownSessionErrorStage,
-				false, strError);
+				false, peerInitializationError(initializationResult));
 		}
 	}
 	else
@@ -940,6 +1004,8 @@ void KSessionCoordinator::finishStopping(quint64 nGeneration,
 
 void KSessionCoordinator::executePendingRequest()
 {
+	if (m_bPeerInitializationRollbackPending)
+		return;
 	const PendingRequestType requestType = m_pendingRequestType;
 	const QString strHost = m_strPendingHost;
 	const quint16 nPort = m_nPendingPort;
@@ -962,14 +1028,50 @@ void KSessionCoordinator::resetInputTraceState()
 	emit inputTraceUpdated(0, -1);
 }
 
-bool KSessionCoordinator::initializePeer(KSessionRole role, QString *pErrorMessage)
+KPeerInitializationResult KSessionCoordinator::initializePeer(KSessionRole role)
 {
 	m_bDeviceInfoRequested = false;
 	++m_nActivePeerGeneration;
-	if (m_spRemotePeerTransport->initialize(role, m_nActivePeerGeneration, pErrorMessage))
-		return true;
-	m_spRemotePeerTransport->requestShutdown(m_nActivePeerGeneration);
-	return false;
+	const KPeerInitializationResult result =
+		m_spRemotePeerTransport->initialize(role, m_nActivePeerGeneration);
+	if (result.status == RollbackPendingPeerInitializationStatus)
+		beginPeerInitializationRollback(m_nActivePeerGeneration);
+	return result;
+}
+
+void KSessionCoordinator::beginPeerInitializationRollback(quint64 nGeneration)
+{
+	m_bPeerInitializationRollbackPending = true;
+	m_bPeerInitializationRollbackTimedOut = false;
+	m_nPeerInitializationRollbackGeneration = nGeneration;
+	m_pPeerInitializationRollbackTimer->start();
+	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
+		QStringLiteral("peer_initialization_rollback"),
+		QStringLiteral("started"), -1,
+		QStringLiteral("generation=%1 timeoutMs=%2")
+			.arg(nGeneration)
+			.arg(kPeerInitializationRollbackTimeoutMs));
+}
+
+void KSessionCoordinator::handlePeerInitializationRollbackTimeout()
+{
+	if (!m_bPeerInitializationRollbackPending
+		|| m_bPeerInitializationRollbackTimedOut)
+	{
+		return;
+	}
+	m_bPeerInitializationRollbackTimedOut = true;
+	m_pendingRequestType = NoPendingRequest;
+	m_strPendingHost.clear();
+	m_nPendingPort = 0;
+	if (!m_sessionStateMachine.markInitializationRollbackTimedOut())
+		return;
+	publishSessionState();
+	reportSessionError(ShutdownSessionErrorDomain,
+		ShutdownTimeoutSessionErrorCode, ShutdownSessionErrorStage,
+		false,
+		QStringLiteral("WebRTC initialization rollback timed out; generation=%1")
+			.arg(m_nPeerInitializationRollbackGeneration));
 }
 
 void KSessionCoordinator::wirePeer()

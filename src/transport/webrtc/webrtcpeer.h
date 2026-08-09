@@ -47,7 +47,8 @@ public:
 	KWebRtcPeer(const KWebRtcPeer &) = delete;
 	KWebRtcPeer &operator=(const KWebRtcPeer &) = delete;
 
-	bool initialize(KSessionRole role, quint64 nGeneration, QString *pErrorMessage) override;
+	KPeerInitializationResult initialize(KSessionRole role,
+		quint64 nGeneration) override;
 	void requestShutdown(quint64 nGeneration) override;
 	quint64 generation() const override;
 	void createOffer() override;
@@ -60,7 +61,19 @@ public:
 	void setInputRealtimeEnabled(bool bEnabled) override;
 	void setStreamConfig(const KStreamConfig &config) override;
 
+protected:
+	virtual bool shouldFailInitializationAt(KPeerInitializationStage stage) const;
+
 private:
+	enum KWebRtcPeerLifecycleState
+	{
+		IdleWebRtcPeerLifecycleState,
+		InitializingWebRtcPeerLifecycleState,
+		ReadyWebRtcPeerLifecycleState,
+		FailedWebRtcPeerLifecycleState,
+		ShuttingDownWebRtcPeerLifecycleState
+	};
+
 	void OnSignalingChange(webrtc::PeerConnectionInterface::SignalingState new_state) override;
 	void OnAddTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterface> receiver,
 		const std::vector<webrtc::scoped_refptr<webrtc::MediaStreamInterface>> &streams) override;
@@ -77,6 +90,7 @@ private:
 	void OnFrame(const webrtc::VideoFrame &frame) override;
 	void handleStatsReport(webrtc::scoped_refptr<const webrtc::RTCStatsReport> spReport);
 
+	bool createThreads(QString *pErrorMessage);
 	bool createFactory(QString *pErrorMessage);
 	bool createPeerConnection(QString *pErrorMessage);
 	bool createInputDataChannel(QString *pErrorMessage);
@@ -125,13 +139,15 @@ private:
 	void flushClipboardQueue();
 	bool enqueueInputMessage(const QString &strPayload, bool bMouseMove);
 	static QString rtcErrorMessage(const QString &strPrefix, const webrtc::RTCError &error);
+	KPeerInitializationResult failInitialization(
+		KPeerInitializationStage stage, const QString &strTechnicalMessage);
 	void clearPeerObjects();
 	bool postCallback(quint64 nGeneration,
 		std::function<void(KWebRtcPeer *)> callback);
 
 	KSessionRole m_role = ControllerSessionRole;
 	std::atomic<quint64> m_nGeneration = 0;
-	std::atomic_bool m_bShutdownPending = false;
+	KWebRtcPeerLifecycleState m_lifecycleState = IdleWebRtcPeerLifecycleState;
 	std::shared_ptr<KWebRtcCallbackGate> m_spCallbackGate;
 	class QThread *m_pTeardownThread = nullptr;
 	class QTimer *m_pStatsTimer = nullptr;

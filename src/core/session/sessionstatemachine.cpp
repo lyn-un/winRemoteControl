@@ -151,6 +151,14 @@ bool KSessionStateMachine::markShutdownTimedOut()
 	return true;
 }
 
+bool KSessionStateMachine::markInitializationRollbackTimedOut()
+{
+	if (m_state != IdleSessionState)
+		return false;
+	m_state = ShutdownTimedOutSessionState;
+	return true;
+}
+
 void KSessionStateMachine::finish(bool bKeepListening)
 {
 	m_state = bKeepListening && m_role == ControlledSessionRole
