@@ -36,6 +36,7 @@ flowchart TB
 - `KRemotePeerTransport` 是核心层面向远端 Peer 的端口；`KWebRtcPeer` 是其 WebRTC 实现。
 - `KCaptureService` 管理采集线程、generation 和 FrameSink；DXGI 采集源不依赖 WebRTC。
 - ViewModel 和 bridge 将 C++ 状态映射给 React，不创建或拥有网络、采集对象。
+- `KTerminalSessionService` 管理终端审批、generation、流控和状态；`KWindowsPseudoConsole` 是 ConPTY/Job Object 适配器，终端窗口仍只是 presentation。
 
 ## 线程模型
 

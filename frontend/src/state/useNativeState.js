@@ -43,6 +43,9 @@ export function useNativeState() {
   const [clipboardSyncError, setClipboardSyncError] = useState("");
 	const [sessionCapabilities, setSessionCapabilities] = useState(null);
   const [incomingAccessRequest, setIncomingAccessRequest] = useState(null);
+	const [incomingTerminalRequest, setIncomingTerminalRequest] = useState(null);
+	const [terminalState, setTerminalState] = useState({ state: "Closed", available: false, status: "" });
+	const [terminalError, setTerminalError] = useState("");
   const [fps, setFps] = useState(0);
   const frameTimes = useRef([]);
   const settingsInitialized = useRef(false);
@@ -201,6 +204,27 @@ export function useNativeState() {
         return;
       }
 
+		if (message.type === "incomingTerminalAccessRequest") {
+			setIncomingTerminalRequest({ requestId: message.requestId || "", deviceName: message.deviceName || "", sourceAddress: message.sourceAddress || "", expiresAtMs: Number(message.expiresAtMs) || Date.now() });
+			return;
+		}
+
+		if (message.type === "incomingTerminalAccessRequestCleared") {
+			setIncomingTerminalRequest((request) => (!request || request.requestId === message.requestId ? null : request));
+			return;
+		}
+
+		if (message.type === "terminalStateChanged") {
+			setTerminalState({ state: message.state || "Closed", available: Boolean(message.available), status: message.status || "", deviceName: message.deviceName || "", deviceSource: message.deviceSource || "" });
+			if (message.state === "Running") setTerminalError("");
+			return;
+		}
+
+		if (message.type === "terminalError") {
+			setTerminalError(message.message || "远程终端发生错误");
+			return;
+		}
+
       if (message.type === "clipboardSyncStateChanged") {
         setClipboardSync({
           enabled: Boolean(message.enabled),
@@ -300,6 +324,9 @@ export function useNativeState() {
     applicationSettings,
     applicationSettingsError,
     incomingAccessRequest,
+		incomingTerminalRequest,
+		terminalState,
+		terminalError,
     clipboardSync,
     clipboardSyncError,
 		sessionCapabilities,

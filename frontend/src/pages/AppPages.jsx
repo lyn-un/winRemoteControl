@@ -14,6 +14,7 @@ function Icon({ name }) {
     signal: <><path d="M5 15a10 10 0 0 1 14 0M8 18a6 6 0 0 1 8 0" /><circle cx="12" cy="21" r="1" /></>,
     settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.09A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.14.37.35.7.6 1 .3.28.68.42 1.1.4h.09v4h-.09A1.7 1.7 0 0 0 19.4 15Z" /></>,
     shield: <><path d="M12 3 5 6v5c0 4.6 2.8 8.2 7 10 4.2-1.8 7-5.4 7-10V6l-7-3Z" /><path d="m9 12 2 2 4-4" /></>,
+		terminal: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></>,
   };
   return <svg className="ui-icon" viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>;
 }
@@ -30,7 +31,7 @@ function formatRecentTime(value) {
   return `${Math.floor(elapsed / 86_400_000)} 天前`;
 }
 
-function DeviceCard({ device, busy, onConnect, onRemove }) {
+function DeviceCard({ device, busy, onConnect, onTerminal, onRemove }) {
   return (
     <article className={`device-tile ${device.online ? "is-online" : "is-recent"}`}>
       <div className="device-tile-top">
@@ -52,6 +53,7 @@ function DeviceCard({ device, busy, onConnect, onRemove }) {
       <button className="device-connect" disabled={busy} onClick={onConnect}>
         {busy ? "连接中" : "连接"}<Icon name="arrow" />
       </button>
+		{onTerminal && <button className="device-terminal" disabled={busy} onClick={onTerminal}><Icon name="terminal" />终端</button>}
     </article>
   );
 }
@@ -98,7 +100,7 @@ function ConnectedSession({ state, wallpaperUrl, onDisconnect }) {
   );
 }
 
-function DevicesPage({ state, devices, busy, connectDevice, removeDevice }) {
+function DevicesPage({ state, devices, busy, connectDevice, openTerminal, removeDevice }) {
   return (
     <section className="content-view view-enter">
       <header className="page-heading">
@@ -113,6 +115,7 @@ function DevicesPage({ state, devices, busy, connectDevice, removeDevice }) {
               device={device}
               busy={busy}
               onConnect={() => connectDevice(device)}
+				onTerminal={device.recentId ? () => openTerminal(device.recentId) : null}
               onRemove={device.recentId ? () => removeDevice(device.recentId) : null}
             />
           ))}
@@ -348,6 +351,24 @@ function AccessRequestModal({ request }) {
   );
 }
 
+function TerminalRequestModal({ request }) {
+	const [seconds, setSeconds] = useState(() => Math.max(0, Math.ceil((request.expiresAtMs - Date.now()) / 1000)));
+	const respond = (accepted) => sendCommand("respondTerminalAccessRequest", { requestId: request.requestId, accepted });
+	useEffect(() => {
+		const timer = window.setInterval(() => setSeconds(Math.max(0, Math.ceil((request.expiresAtMs - Date.now()) / 1000))), 250);
+		return () => window.clearInterval(timer);
+	}, [request.expiresAtMs]);
+	return <div className="approval-backdrop"><article className="approval-dialog terminal-approval">
+		<div className="approval-rings"><span /><span /><Icon name="terminal" /></div>
+		<span className="eyebrow">REMOTE TERMINAL</span><h2>允许打开 PowerShell？</h2>
+		<p>{request.deviceName || "控制端"}请求在本机启动一个普通用户权限的 PowerShell。</p>
+		<dl><div><dt>权限</dt><dd>当前登录用户</dd></div><div><dt>自动拒绝</dt><dd>{seconds} 秒</dd></div></dl>
+		{request.sourceAddress && <small>来源地址：{request.sourceAddress}</small>}
+		<div className="approval-actions"><button className="outline-button danger" onClick={() => respond(false)}>拒绝</button><button className="primary-button" onClick={() => respond(true)}>允许本次会话</button></div>
+		<small>终端运行期间会在本机界面持续显示状态，可随时停止。</small>
+	</article></div>;
+}
+
 export function DashboardPage() {
   const state = useNativeState();
   const [activePage, setActivePage] = useState("devices");
@@ -439,6 +460,7 @@ export function DashboardPage() {
             devices={mergedDevices}
             busy={busy}
             connectDevice={beginConnection}
+			openTerminal={(deviceId) => sendCommand("openRecentDeviceTerminal", { deviceId })}
             removeDevice={(deviceId) => sendCommand("removeRecentDevice", { deviceId })}
           />
         ) : activePage === "assist" ? (
@@ -452,6 +474,8 @@ export function DashboardPage() {
         ) : null}
         {awaitingApproval && state.role === "controller" && <div className="approval-waiting"><span className="waiting-pulse" /><div><strong>等待对方确认</strong><small>被控端允许后才会建立远程会话</small></div><button onClick={() => sendCommand("disconnectSession")}>取消</button></div>}
         {state.incomingAccessRequest && <AccessRequestModal request={state.incomingAccessRequest} />}
+		{state.incomingTerminalRequest && <TerminalRequestModal request={state.incomingTerminalRequest} />}
+		{state.terminalState.state === "Running" && state.role === "controlled" && <div className="terminal-running-banner"><Icon name="terminal" /><div><strong>远程终端正在运行</strong><small>PowerShell 使用当前登录用户权限</small></div><button onClick={() => sendCommand("closeTerminal")}>停止终端</button></div>}
         {errors.length > 0 && <div className="error-stack">{errors.map((error, index) => <p key={`${index}-${error}`}>{error}</p>)}</div>}
       </div>
     </main>

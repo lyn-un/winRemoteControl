@@ -11,6 +11,7 @@ winRemoteControl 是一个面向 Windows 局域网的远程桌面原型。控制
 - DXGI 桌面采集、H.264 WebRTC 视频和 D3D11 渲染。
 - `h264_mf` 优先，失败时自动回退 `libx264`。
 - 鼠标、物理键盘、Unicode/IME 文本和双向纯文本剪贴板。
+- 已审批会话中的独立 PowerShell 远程终端，具有单独权限确认。
 - 能力协商、短暂 ICE 断线恢复、异步停止及初始化失败回滚。
 - 会话日志、延迟日志和输入到画面反馈统计。
 
@@ -52,6 +53,7 @@ build\release\Release\winRemoteControl.exe --trace --log-dir "D:\wrc_logs"
 - [架构概览](docs/architecture/overview.md)
 - [会话生命周期](docs/architecture/session-lifecycle.md)
 - [协议概览](docs/protocols/overview.md)
+- [远程终端](docs/features/remote-terminal.md)
 - [视频链路](docs/media/video-pipeline.md)
 - [构建与测试](docs/development/build-and-test.md)
 - [日志与诊断](docs/development/logging-and-diagnostics.md)

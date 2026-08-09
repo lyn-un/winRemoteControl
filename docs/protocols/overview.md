@@ -47,8 +47,11 @@ Session DataChannel 打开后交换 `KSessionCapabilities`，包括：
 | `input-realtime` | unordered、`maxRetransmits=0` | 高频鼠标移动等可被新状态覆盖的实时输入 |
 | `session` | reliable、ordered | 能力、设备信息、流配置、开始/停止推流和结束会话 |
 | `clipboard` | reliable、ordered | 双向纯文本剪贴板消息与同步状态 |
+| `terminal` | reliable、ordered | ConPTY stdin 与合并后的 stdout/stderr 二进制字节流 |
 
 各通道有独立、有上限的发送队列和背压策略。输入序号用于拒绝重复或倒序事件；剪贴板使用 UUID 去重，日志不记录正文。
+
+终端控制消息通过 `session` DataChannel 传输，包括申请、审批、尺寸、关闭、退出和错误；终端字节流不经过 JSON。单次二进制消息最大 64 KiB，实际输出按 16 KiB 分块。`terminal` 是可选能力，没有交集时不影响桌面、输入和剪贴板。
 
 ## 安全与兼容边界
 

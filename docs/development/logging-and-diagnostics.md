@@ -55,6 +55,7 @@ winRemoteControl.exe
 | 视频 | capture、`initial_frame_retry`、`h264_encode_no_output`、decode/render、frame coalesced summary |
 | 输入 | `input_send/recv`、`inject_begin/end`、`input_roundtrip`、`input_roundtrip_stats` |
 | 剪贴板 | channel、send/receive/apply/drop；只记录 UUID、大小、序号和原因 |
+| 终端 | `terminal_open_requested`、`terminal_approval_pending`、`terminal_started`、`terminal_exited`、`terminal_host_error` |
 
 排查跨机器问题时，需要分别收集两台电脑同一时间段的日志。日志不会通过 WebRTC 自动传输。
 
@@ -62,5 +63,6 @@ winRemoteControl.exe
 
 - 键盘日志不记录虚拟键值、扫描码对应字符或 Unicode 正文。
 - 剪贴板日志不记录正文、哈希、文件名或路径。
+- 终端日志不记录命令、输出、工作目录或环境变量。
 - 发现与最近设备日志不记录设备名称。
 - 高频事件应采样或聚合，避免诊断本身明显增加延迟。
