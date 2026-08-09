@@ -20,18 +20,23 @@
 #include "clipboard/clipboardsyncservice.h"
 #include "ui_bridge/webviewwidget.h"
 #include "ui_bridge/devicediscoveryviewmodel.h"
+#include "common/sessiontracelogger.h"
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QDebug>
 #include <QtCore/QSysInfo>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QUuid>
+#include <QtCore/QTimer>
 #include <memory>
 
 namespace
 {
+	constexpr int kApplicationShutdownDeadlineMs = 8000;
+
 	QString RecentDevicesFilePath()
 	{
 		const QString strFileName = QStringLiteral("recent_devices.ini");
@@ -88,7 +93,12 @@ KApplicationComposition::KApplicationComposition(QObject *pParent)
 		std::make_unique<KQtClipboardAdapter>(),
 		m_pSessionService,
 		this))
+	, m_pShutdownDeadlineTimer(new QTimer(this))
 {
+	m_pShutdownDeadlineTimer->setSingleShot(true);
+	m_pShutdownDeadlineTimer->setInterval(kApplicationShutdownDeadlineMs);
+	connect(m_pShutdownDeadlineTimer, &QTimer::timeout,
+		this, &KApplicationComposition::handleShutdownDeadline);
 	m_pRecentDeviceService->initialize();
 	m_pApplicationSettingsService->initialize();
 	m_pSessionService->applyApplicationSettings(m_pApplicationSettingsService->settings());
@@ -275,6 +285,7 @@ void KApplicationComposition::shutdown()
 		return;
 
 	m_bShutdown = true;
+	m_pShutdownDeadlineTimer->start();
 	m_bSessionShutdownPending = !m_pSessionService->isIdle();
 	m_bCaptureShutdownPending = true;
 	m_pClipboardSyncService->shutdown();
@@ -286,8 +297,29 @@ void KApplicationComposition::shutdown()
 
 void KApplicationComposition::tryFinishShutdown()
 {
-	if (!m_bShutdown || m_bSessionShutdownPending || m_bCaptureShutdownPending)
+	if (!m_bShutdown || m_bShutdownFinished
+		|| m_bSessionShutdownPending || m_bCaptureShutdownPending)
 		return;
+	m_bShutdownFinished = true;
+	m_pShutdownDeadlineTimer->stop();
+	emit shutdownFinished();
+}
+
+void KApplicationComposition::handleShutdownDeadline()
+{
+	if (!m_bShutdown || m_bShutdownFinished)
+		return;
+
+	m_bShutdownFinished = true;
+	const QString strPending = QStringLiteral("session=%1 capture=%2 deadlineMs=%3")
+		.arg(m_bSessionShutdownPending ? 1 : 0)
+		.arg(m_bCaptureShutdownPending ? 1 : 0)
+		.arg(kApplicationShutdownDeadlineMs);
+	qCritical().noquote() << QStringLiteral("Application shutdown deadline reached: %1")
+		.arg(strPending);
+	KSessionTraceLogger::write(QStringLiteral("local"),
+		QStringLiteral("application_lifecycle"),
+		QStringLiteral("shutdown_timeout"), -1, strPending);
 	emit shutdownFinished();
 }
 

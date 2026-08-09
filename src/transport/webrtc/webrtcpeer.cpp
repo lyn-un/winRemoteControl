@@ -67,6 +67,8 @@ private:
 
 namespace
 {
+	constexpr unsigned long kDestructorShutdownTimeoutMs = 2000;
+
 	constexpr char kStreamId[] = "wrc-stream";
 	constexpr char kVideoLabel[] = "wrc-screen";
 	constexpr char kInputChannelLabel[] = "input";
@@ -466,8 +468,31 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 KWebRtcPeer::~KWebRtcPeer()
 {
 	requestShutdown(m_nGeneration.load());
-	if (m_pTeardownThread != nullptr)
-		m_pTeardownThread->wait();
+	QThread *pTeardownThread = m_pTeardownThread;
+	if (pTeardownThread == nullptr)
+		return;
+
+	if (QThread::currentThread() != pTeardownThread
+		&& pTeardownThread->wait(kDestructorShutdownTimeoutMs))
+	{
+		QObject::disconnect(pTeardownThread, nullptr, this, nullptr);
+		m_pTeardownThread = nullptr;
+		delete pTeardownThread;
+		return;
+	}
+
+	m_spCallbackGate->close();
+	qCritical() << "WebRTC teardown did not stop before destruction; isolating it";
+	KSessionTraceLogger::write(QStringLiteral("local"),
+		QStringLiteral("webrtc_lifecycle"),
+		QStringLiteral("destructor_timeout"), -1,
+		QStringLiteral("timeoutMs=%1 generation=%2")
+			.arg(kDestructorShutdownTimeoutMs)
+			.arg(m_nGeneration.load()));
+	QObject::disconnect(pTeardownThread, nullptr, this, nullptr);
+	connect(pTeardownThread, &QThread::finished,
+		pTeardownThread, &QObject::deleteLater);
+	m_pTeardownThread = nullptr;
 }
 
 bool KWebRtcPeer::initialize(KSessionRole role, quint64 nGeneration, QString *pErrorMessage)

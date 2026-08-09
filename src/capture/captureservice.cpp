@@ -2,13 +2,16 @@
 
 #include "capture/captureworker.h"
 #include "common/latencytracelogger.h"
+#include "common/sessiontracelogger.h"
 
+#include <QtCore/QDebug>
 #include <QtCore/QMetaObject>
 #include <QtCore/QThread>
 
 namespace
 {
 	constexpr quint64 kSourceFrameCoalesceTraceInterval = 30;
+	constexpr unsigned long kDestructorShutdownTimeoutMs = 2000;
 }
 
 KCaptureService::KCaptureService(QObject *pParent)
@@ -19,6 +22,27 @@ KCaptureService::KCaptureService(QObject *pParent)
 KCaptureService::~KCaptureService()
 {
 	stopCapture();
+	if (m_pCaptureThread == nullptr || !m_pCaptureThread->isRunning())
+		return;
+
+	if (QThread::currentThread() != m_pCaptureThread
+		&& m_pCaptureThread->wait(kDestructorShutdownTimeoutMs))
+	{
+		return;
+	}
+
+	qCritical() << "Capture thread did not stop before destruction; isolating it";
+	KSessionTraceLogger::write(QStringLiteral("local"),
+		QStringLiteral("capture_lifecycle"),
+		QStringLiteral("destructor_timeout"), -1,
+		QStringLiteral("timeoutMs=%1 generation=%2")
+			.arg(kDestructorShutdownTimeoutMs)
+			.arg(m_nGeneration));
+	QObject::disconnect(m_pCaptureWorker, nullptr, this, nullptr);
+	QObject::disconnect(m_pCaptureThread, nullptr, this, nullptr);
+	m_pCaptureThread->setParent(nullptr);
+	m_pCaptureThread = nullptr;
+	m_pCaptureWorker = nullptr;
 }
 
 void KCaptureService::startCapture()
