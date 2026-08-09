@@ -134,10 +134,20 @@ bool KSessionStateMachine::restore()
 
 bool KSessionStateMachine::beginStopping()
 {
-	if (m_state == IdleSessionState || m_state == StoppingSessionState)
+	if (m_state == IdleSessionState
+		|| m_state == StoppingSessionState
+		|| m_state == ShutdownTimedOutSessionState)
 		return false;
 
 	m_state = StoppingSessionState;
+	return true;
+}
+
+bool KSessionStateMachine::markShutdownTimedOut()
+{
+	if (m_state != StoppingSessionState)
+		return false;
+	m_state = ShutdownTimedOutSessionState;
 	return true;
 }
 
@@ -211,11 +221,22 @@ bool KSessionStateMachine::isStopping() const
 	return m_state == StoppingSessionState;
 }
 
+bool KSessionStateMachine::isShutdownTimedOut() const
+{
+	return m_state == ShutdownTimedOutSessionState;
+}
+
+bool KSessionStateMachine::canCompleteShutdown() const
+{
+	return isStopping() || isShutdownTimedOut();
+}
+
 bool KSessionStateMachine::hasActiveSession() const
 {
 	return m_state != IdleSessionState
 		&& m_state != ListeningSessionState
-		&& m_state != StoppingSessionState;
+		&& m_state != StoppingSessionState
+		&& m_state != ShutdownTimedOutSessionState;
 }
 
 bool KSessionStateMachine::canHandlePeerTermination() const
@@ -267,7 +288,9 @@ QString KSessionStateMachine::stateName(KSessionState state)
 		return QStringLiteral("Streaming");
 	if (state == ReconnectingSessionState)
 		return QStringLiteral("Reconnecting");
-	return QStringLiteral("Stopping");
+	if (state == StoppingSessionState)
+		return QStringLiteral("Stopping");
+	return QStringLiteral("ShutdownTimedOut");
 }
 
 QString KSessionStateMachine::endReasonName(KSessionEndReason reason, const QString &strDetail)

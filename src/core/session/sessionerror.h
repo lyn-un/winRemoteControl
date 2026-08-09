@@ -14,7 +14,8 @@ enum KSessionErrorDomain
 	WebRtcSessionErrorDomain = 5,
 	CaptureSessionErrorDomain = 6,
 	InputSessionErrorDomain = 7,
-	ClipboardSessionErrorDomain = 8
+	ClipboardSessionErrorDomain = 8,
+	ShutdownSessionErrorDomain = 9
 };
 
 enum KSessionErrorCode
@@ -40,7 +41,8 @@ enum KSessionErrorCode
 	CaptureFailedSessionErrorCode = 18,
 	InputBackpressureOverflowSessionErrorCode = 19,
 	CommandTimeoutSessionErrorCode = 20,
-	CommandQueueOverflowSessionErrorCode = 21
+	CommandQueueOverflowSessionErrorCode = 21,
+	ShutdownTimeoutSessionErrorCode = 22
 };
 
 enum KSessionErrorStage

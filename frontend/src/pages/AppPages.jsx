@@ -139,8 +139,8 @@ function AssistPage({ state, numericPort, setRole, connectManual, busy }) {
         <article className="assist-primary-panel">
           <div className="panel-title"><span>01</span><div><h2>选择本机角色</h2><p>连接前确认这台电脑由谁操作。</p></div></div>
           <div className="role-picker">
-            <button className={state.role === "controller" ? "active" : ""} onClick={() => setRole("controller")}><Icon name="devices" /><span><strong>控制其他设备</strong><small>查看并操作另一台电脑</small></span></button>
-            <button className={state.role === "controlled" ? "active" : ""} onClick={() => setRole("controlled")}><Icon name="assist" /><span><strong>允许远程控制</strong><small>等待另一台电脑连接本机</small></span></button>
+            <button className={state.role === "controller" ? "active" : ""} disabled={busy} onClick={() => setRole("controller")}><Icon name="devices" /><span><strong>控制其他设备</strong><small>查看并操作另一台电脑</small></span></button>
+            <button className={state.role === "controlled" ? "active" : ""} disabled={busy} onClick={() => setRole("controlled")}><Icon name="assist" /><span><strong>允许远程控制</strong><small>等待另一台电脑连接本机</small></span></button>
           </div>
 
           {state.role === "controller" ? (
@@ -354,7 +354,7 @@ export function DashboardPage() {
   const numericPort = Number.parseInt(state.port, 10) || 39000;
   const remoteOnline = state.role === "controller" && state.sessionOpen;
   const awaitingApproval = state.webrtcState === "AwaitingApproval";
-  const busy = state.signalingState === "Connecting" || ["Connecting", "AwaitingApproval", "Negotiating"].includes(state.webrtcState);
+  const busy = state.signalingState === "Connecting" || ["Connecting", "AwaitingApproval", "Negotiating", "Stopping", "ShutdownTimedOut"].includes(state.webrtcState);
   const wallpaperUrl = state.deviceInfo?.wallpaperData
     ? `data:${state.deviceInfo.wallpaperMime || "image/jpeg"};base64,${state.deviceInfo.wallpaperData}`
     : "";
@@ -412,14 +412,14 @@ export function DashboardPage() {
       <aside className="app-sidebar">
         <div className="app-brand"><span>W</span><div><strong>winRemote</strong><small>Control</small></div></div>
         <nav className="app-nav">
-          <button className={activePage === "devices" ? "active" : ""} onClick={() => { setRole("controller"); setActivePage("devices"); sendCommand("requestRecentDevices"); }}><Icon name="devices" /><span>我的设备</span></button>
+          <button className={activePage === "devices" ? "active" : ""} disabled={busy} onClick={() => { setRole("controller"); setActivePage("devices"); sendCommand("requestRecentDevices"); }}><Icon name="devices" /><span>我的设备</span></button>
           <button className={activePage === "assist" ? "active" : ""} onClick={() => setActivePage("assist")}><Icon name="assist" /><span>远程协助</span></button>
         </nav>
         <div className="sidebar-recents">
           <span>最近连接</span>
           {state.recentDevices.slice(0, 3).map((device) => {
             const online = state.lanDevices.some((item) => endpointKey(item.address, item.port) === endpointKey(device.host, device.port));
-            return <button key={device.deviceId} disabled={device.incoming} title={device.incoming ? "曾控制本机，仅作为接入记录" : "再次连接"} onClick={() => beginConnection({ ...device, recentId: device.deviceId, online })}><i className={online ? "online" : ""} /><span>{device.name || device.host}</span>{device.incoming && <em>接入</em>}</button>;
+            return <button key={device.deviceId} disabled={device.incoming || busy} title={device.incoming ? "曾控制本机，仅作为接入记录" : "再次连接"} onClick={() => beginConnection({ ...device, recentId: device.deviceId, online })}><i className={online ? "online" : ""} /><span>{device.name || device.host}</span>{device.incoming && <em>接入</em>}</button>;
           })}
           {state.recentDevices.length === 0 && <small>成功连接后会显示在这里</small>}
         </div>
@@ -465,7 +465,8 @@ export function DesktopPage() {
   const reconnecting = state.webrtcState === "Reconnecting";
   const retrying = ["Connecting", "AwaitingApproval", "Negotiating"].includes(state.webrtcState);
   const sessionEnded = ["Disconnected", "Failed"].includes(state.webrtcState);
-  const sessionUnavailable = reconnecting || retrying || sessionEnded || state.webrtcState === "Stopping";
+  const shutdownTimedOut = state.webrtcState === "ShutdownTimedOut";
+  const sessionUnavailable = reconnecting || retrying || sessionEnded || state.webrtcState === "Stopping" || shutdownTimedOut;
   const qualityPresets = {
     auto: { fps: 30, width: 1280, height: 720, bitrateKbps: 3000 },
   };
@@ -538,11 +539,12 @@ export function DesktopPage() {
         {sessionUnavailable && (
           <div className={`desktop-disconnected ${reconnecting || retrying ? "is-recovering" : ""}`}>
             <div className="disconnect-orbit"><span /><span /><b>!</b></div>
-            <strong>{reconnecting ? "正在恢复连接" : retrying ? "正在重新连接" : state.webrtcState === "Stopping" ? "正在结束会话" : "远程连接已断开"}</strong>
+            <strong>{reconnecting ? "正在恢复连接" : retrying ? "正在重新连接" : shutdownTimedOut ? "会话关闭超时" : state.webrtcState === "Stopping" ? "正在结束会话" : "远程连接已断开"}</strong>
             <p>{reconnecting
               ? "正在尝试恢复当前会话，恢复期间已暂停键盘和鼠标输入。"
               : retrying
                 ? state.webrtcState === "AwaitingApproval" ? "已重新联系被控端，正在等待对方确认。" : "正在重新建立安全连接，请稍候。"
+                : shutdownTimedOut ? "部分系统组件未能及时关闭，请重新启动程序。"
                 : state.webrtcState === "Stopping" ? "正在安全释放输入、视频和网络资源。" : "当前会话已经结束，可以重新申请控制或返回主界面。"}</p>
             {retrying && <button className="outline-button" onClick={() => sendCommand("disconnectSession")}>取消重连</button>}
             {sessionEnded && (

@@ -26,6 +26,8 @@ QString KSessionErrorPresenter::userMessage(const KSessionError &error)
 		return QStringLiteral("远端未确认控制命令，会话已安全停止");
 	if (error.code == CommandQueueOverflowSessionErrorCode)
 		return QStringLiteral("控制命令队列已满，会话已安全停止");
+	if (error.code == ShutdownTimeoutSessionErrorCode)
+		return QStringLiteral("会话关闭超时，请重新启动程序");
 	if (error.code == CaptureFailedSessionErrorCode)
 		return QStringLiteral("屏幕采集失败");
 	if (error.code == InvalidArgumentSessionErrorCode)

@@ -10,8 +10,12 @@ KShutdownCoordinator::KShutdownCoordinator(QObject *pParent)
 	connect(m_pWatchdogTimer, &QTimer::timeout, this,
 		[this]()
 		{
+			if (!m_bActive || m_bTimedOut)
+				return;
+			m_bTimedOut = true;
 			emit watchdogExpired(m_nGeneration,
-				m_bCapturePending, m_bPeerPending);
+				m_bCapturePending, m_bPeerPending,
+				m_elapsedTimer.isValid() ? m_elapsedTimer.elapsed() : 0);
 		});
 }
 
@@ -25,6 +29,8 @@ void KShutdownCoordinator::begin(quint64 nGeneration,
 	m_bActive = true;
 	m_bCapturePending = bCapturePending;
 	m_bPeerPending = bPeerPending;
+	m_bTimedOut = false;
+	m_elapsedTimer.start();
 	m_pWatchdogTimer->start(qMax(1, nWatchdogMs));
 	tryFinish();
 }
@@ -52,6 +58,8 @@ void KShutdownCoordinator::clear()
 	m_bActive = false;
 	m_bCapturePending = false;
 	m_bPeerPending = false;
+	m_bTimedOut = false;
+	m_elapsedTimer.invalidate();
 }
 
 bool KShutdownCoordinator::isActive() const
@@ -69,6 +77,11 @@ bool KShutdownCoordinator::isPeerPending() const
 	return m_bPeerPending;
 }
 
+bool KShutdownCoordinator::hasTimedOut() const
+{
+	return m_bTimedOut;
+}
+
 quint64 KShutdownCoordinator::generation() const
 {
 	return m_nGeneration;
@@ -79,6 +92,7 @@ void KShutdownCoordinator::tryFinish()
 	if (!m_bActive || m_bCapturePending || m_bPeerPending)
 		return;
 	const quint64 nGeneration = m_nGeneration;
+	const bool bFinishedAfterTimeout = m_bTimedOut;
 	clear();
-	emit finished(nGeneration);
+	emit finished(nGeneration, bFinishedAfterTimeout);
 }

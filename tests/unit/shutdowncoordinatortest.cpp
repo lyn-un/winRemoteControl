@@ -36,16 +36,24 @@ int main(int nArgc, char *pArgv[])
 	KShutdownCoordinator coordinator;
 	quint64 nFinishedGeneration = 0;
 	quint64 nWatchdogGeneration = 0;
+	bool bFinishedAfterTimeout = false;
 	bool bWatchdogCapturePending = false;
 	bool bWatchdogPeerPending = false;
+	qint64 nWatchdogElapsedMs = 0;
 	QObject::connect(&coordinator, &KShutdownCoordinator::finished,
-		[&](quint64 nGeneration) { nFinishedGeneration = nGeneration; });
+		[&](quint64 nGeneration, bool bTimedOut)
+		{
+			nFinishedGeneration = nGeneration;
+			bFinishedAfterTimeout = bTimedOut;
+		});
 	QObject::connect(&coordinator, &KShutdownCoordinator::watchdogExpired,
-		[&](quint64 nGeneration, bool bCapturePending, bool bPeerPending)
+		[&](quint64 nGeneration, bool bCapturePending, bool bPeerPending,
+			qint64 nElapsedMs)
 		{
 			nWatchdogGeneration = nGeneration;
 			bWatchdogCapturePending = bCapturePending;
 			bWatchdogPeerPending = bPeerPending;
+			nWatchdogElapsedMs = nElapsedMs;
 		});
 
 	coordinator.begin(7, true, true, 1000);
@@ -56,15 +64,20 @@ int main(int nArgc, char *pArgv[])
 	Check(!coordinator.isCapturePending() && coordinator.isPeerPending(),
 		"capture and peer shutdown complete independently");
 	coordinator.completePeer(7);
-	Check(nFinishedGeneration == 7 && !coordinator.isActive(),
+	Check(nFinishedGeneration == 7 && !bFinishedAfterTimeout
+		&& !coordinator.isActive(),
 		"shutdown finishes once all components complete");
 
 	coordinator.begin(8, true, false, 10);
 	ProcessEventsFor(20);
 	Check(nWatchdogGeneration == 8
-		&& bWatchdogCapturePending && !bWatchdogPeerPending,
+		&& bWatchdogCapturePending && !bWatchdogPeerPending
+		&& nWatchdogElapsedMs > 0 && coordinator.hasTimedOut(),
 		"watchdog reports the exact pending components");
-	coordinator.clear();
+	coordinator.completeCapture(8);
+	Check(nFinishedGeneration == 8 && bFinishedAfterTimeout
+		&& !coordinator.isActive(),
+		"a late component completion finishes timed-out shutdown exactly once");
 
 	return g_nFailureCount == 0 ? 0 : 1;
 }

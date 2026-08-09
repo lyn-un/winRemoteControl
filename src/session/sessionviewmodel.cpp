@@ -208,7 +208,8 @@ void KSessionViewModel::handleSessionStateChanged(KSessionState state)
 {
 	emit sessionStateChanged(state);
 	const QString strPresentationState = state == IdleSessionState
-		&& m_lastSessionState == StoppingSessionState
+		&& (m_lastSessionState == StoppingSessionState
+			|| m_lastSessionState == ShutdownTimedOutSessionState)
 		? QStringLiteral("Disconnected")
 		: KSessionStateMachine::stateName(state);
 	m_lastSessionState = state;
@@ -219,7 +220,8 @@ void KSessionViewModel::handleSessionStateChanged(KSessionState state)
 		enterRemoteDesktop();
 		return;
 	}
-	if (state == ReconnectingSessionState)
+	if (state == ReconnectingSessionState
+		|| state == ShutdownTimedOutSessionState)
 	{
 		m_inputFeedbackTracker.reset();
 		emit suspendRemoteInputRequested();

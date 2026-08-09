@@ -96,10 +96,11 @@ private:
 		bool bReportError);
 	void handleCaptureShutdownFinished(quint64 nGeneration);
 	void handlePeerShutdownFinished(quint64 nGeneration);
-	void finishStopping(quint64 nGeneration);
+	void finishStopping(quint64 nGeneration, bool bFinishedAfterTimeout);
 	void handleStopWatchdog(quint64 nGeneration,
 		bool bCapturePending,
-		bool bPeerPending);
+		bool bPeerPending,
+		qint64 nElapsedMs);
 	void executePendingRequest();
 	void resetInputTraceState();
 	void handleRemoteFrame(const KDecodedVideoFrame &frame);

@@ -264,6 +264,13 @@ void KSessionCoordinator::reportSessionError(KSessionErrorDomain domain,
 
 void KSessionCoordinator::setRole(const QString &strRole)
 {
+	if (m_sessionStateMachine.isShutdownTimedOut())
+	{
+		reportSessionError(ShutdownSessionErrorDomain,
+			ShutdownTimeoutSessionErrorCode, ShutdownSessionErrorStage,
+			false, QStringLiteral("Cannot change role while shutdown is incomplete"));
+		return;
+	}
 	KSessionRole role;
 	if (!KSessionStateMachine::roleFromString(strRole, &role))
 		return;
@@ -289,6 +296,13 @@ void KSessionCoordinator::setRole(const QString &strRole)
 
 void KSessionCoordinator::startSignalingServer(quint16 nPort)
 {
+	if (m_sessionStateMachine.isShutdownTimedOut())
+	{
+		reportSessionError(ShutdownSessionErrorDomain,
+			ShutdownTimeoutSessionErrorCode, ShutdownSessionErrorStage,
+			false, QStringLiteral("Cannot listen while shutdown is incomplete"));
+		return;
+	}
 	m_bSignalingConnected = false;
 	if (!m_applicationSettings.bRemoteAccessEnabled)
 	{
@@ -329,6 +343,13 @@ void KSessionCoordinator::startSignalingServer(quint16 nPort)
 
 void KSessionCoordinator::connectSignaling(const QString &strHost, quint16 nPort)
 {
+	if (m_sessionStateMachine.isShutdownTimedOut())
+	{
+		reportSessionError(ShutdownSessionErrorDomain,
+			ShutdownTimeoutSessionErrorCode, ShutdownSessionErrorStage,
+			false, QStringLiteral("Cannot connect while shutdown is incomplete"));
+		return;
+	}
 	const QString strTargetHost = strHost;
 	if (strTargetHost.isEmpty() || nPort == 0)
 	{
@@ -797,21 +818,24 @@ void KSessionCoordinator::continueStoppingTeardown()
 
 void KSessionCoordinator::handleCaptureShutdownFinished(quint64 nGeneration)
 {
-	if (nGeneration != m_nStoppingGeneration || !m_sessionStateMachine.isStopping())
+	if (nGeneration != m_nStoppingGeneration
+		|| !m_sessionStateMachine.canCompleteShutdown())
 		return;
 	m_pShutdownCoordinator->completeCapture(nGeneration);
 }
 
 void KSessionCoordinator::handlePeerShutdownFinished(quint64 nGeneration)
 {
-	if (nGeneration != m_nStoppingGeneration || !m_sessionStateMachine.isStopping())
+	if (nGeneration != m_nStoppingGeneration
+		|| !m_sessionStateMachine.canCompleteShutdown())
 		return;
 	m_pShutdownCoordinator->completePeer(nGeneration);
 }
 
 void KSessionCoordinator::handleStopWatchdog(quint64 nGeneration,
 	bool bCapturePending,
-	bool bPeerPending)
+	bool bPeerPending,
+	qint64 nElapsedMs)
 {
 	if (!m_sessionStateMachine.isStopping()
 		|| nGeneration != m_nStoppingGeneration)
@@ -822,15 +846,34 @@ void KSessionCoordinator::handleStopWatchdog(quint64 nGeneration,
 		QStringLiteral("session_stop_watchdog"),
 		QStringLiteral("timeout"),
 		-1,
-		QStringLiteral("generation=%1 capturePending=%2 peerPending=%3")
+		QStringLiteral("generation=%1 capturePending=%2 peerPending=%3 costMs=%4")
 			.arg(nGeneration)
+			.arg(bCapturePending ? 1 : 0)
+			.arg(bPeerPending ? 1 : 0)
+			.arg(nElapsedMs));
+	m_pendingRequestType = NoPendingRequest;
+	m_strPendingHost.clear();
+	m_nPendingPort = 0;
+	if (m_stopRole == ControlledSessionRole)
+		m_pSignaling->disconnectPeer();
+	else
+		m_pSignaling->stop();
+	if (!m_sessionStateMachine.markShutdownTimedOut())
+		return;
+	publishSessionState();
+	reportSessionError(ShutdownSessionErrorDomain,
+		ShutdownTimeoutSessionErrorCode, ShutdownSessionErrorStage,
+		false,
+		QStringLiteral("Shutdown timed out after %1 ms; capturePending=%2 peerPending=%3")
+			.arg(nElapsedMs)
 			.arg(bCapturePending ? 1 : 0)
 			.arg(bPeerPending ? 1 : 0));
 }
 
-void KSessionCoordinator::finishStopping(quint64 nGeneration)
+void KSessionCoordinator::finishStopping(quint64 nGeneration,
+	bool bFinishedAfterTimeout)
 {
-	if (!m_sessionStateMachine.isStopping()
+	if (!m_sessionStateMachine.canCompleteShutdown()
 		|| nGeneration != m_nStoppingGeneration)
 	{
 		return;
@@ -841,6 +884,13 @@ void KSessionCoordinator::finishStopping(quint64 nGeneration)
 	const KSessionRole role = m_stopRole;
 	const QString strReason = m_strStopReason;
 	m_bStopTeardownStarted = false;
+	if (bFinishedAfterTimeout)
+	{
+		KSessionTraceLogger::write(roleToString(role),
+			QStringLiteral("session_shutdown_late_complete"),
+			QStringLiteral("completed"), -1,
+			QStringLiteral("generation=%1").arg(nGeneration));
+	}
 
 	bool bListening = false;
 	if (bKeepListening && role == ControlledSessionRole)

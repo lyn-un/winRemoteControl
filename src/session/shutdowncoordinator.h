@@ -2,6 +2,7 @@
 #define _WINREMOTECONTROL_SESSION_SHUTDOWNCOORDINATOR_H_
 
 #include <QtCore/QObject>
+#include <QtCore/QElapsedTimer>
 
 class KShutdownCoordinator : public QObject
 {
@@ -23,13 +24,15 @@ public:
 	bool isActive() const;
 	bool isCapturePending() const;
 	bool isPeerPending() const;
+	bool hasTimedOut() const;
 	quint64 generation() const;
 
 signals:
-	void finished(quint64 nGeneration);
+	void finished(quint64 nGeneration, bool bFinishedAfterTimeout);
 	void watchdogExpired(quint64 nGeneration,
 		bool bCapturePending,
-		bool bPeerPending);
+		bool bPeerPending,
+		qint64 nElapsedMs);
 
 private:
 	void tryFinish();
@@ -39,6 +42,8 @@ private:
 	bool m_bActive = false;
 	bool m_bCapturePending = false;
 	bool m_bPeerPending = false;
+	bool m_bTimedOut = false;
+	QElapsedTimer m_elapsedTimer;
 };
 
 #endif // _WINREMOTECONTROL_SESSION_SHUTDOWNCOORDINATOR_H_

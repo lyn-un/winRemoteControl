@@ -96,7 +96,9 @@ namespace
 		void requestShutdown(quint64 nGeneration) override
 		{
 			++nShutdownCount;
-			emit shutdownFinished(nGeneration);
+			nLastShutdownGeneration = nGeneration;
+			if (bCompleteShutdownImmediately)
+				emit shutdownFinished(nGeneration);
 		}
 
 		quint64 generation() const override { return m_nGeneration; }
@@ -223,6 +225,11 @@ namespace
 			emit inputBackpressureOverflow(m_nGeneration);
 		}
 
+		void completeShutdown()
+		{
+			emit shutdownFinished(nLastShutdownGeneration);
+		}
+
 		KSessionRole initializedRole = ControllerSessionRole;
 		KSessionMessage lastSentSessionMessage;
 		QVector<KSessionMessage> sentSessionMessages;
@@ -234,6 +241,7 @@ namespace
 		int nInitializeCount = 0;
 		int nShutdownCount = 0;
 		quint64 m_nGeneration = 0;
+		quint64 nLastShutdownGeneration = 0;
 		int nCreateOfferCount = 0;
 		int nRestartIceCount = 0;
 		int nVideoFrameCount = 0;
@@ -244,6 +252,7 @@ namespace
 		KSessionMessageSendStatus sessionSendStatus = SessionMessageAccepted;
 		bool bInputRealtimeEnabled = false;
 		bool bInitializeSucceeds = true;
+		bool bCompleteShutdownImmediately = true;
 	};
 
 	quint16 reserveLocalPort()
@@ -663,6 +672,44 @@ namespace
 			QStringLiteral("failed initialization leaves the session idle with a structured error"));
 	}
 
+	void testShutdownTimeoutIsolationAndLateCompletion()
+	{
+		auto spPeer = std::make_unique<KFakeRemotePeerTransport>();
+		KFakeRemotePeerTransport *pPeer = spPeer.get();
+		pPeer->bCompleteShutdownImmediately = false;
+		KSessionCoordinator service(std::make_unique<KFakeDeviceInfoProvider>(),
+			std::make_unique<KFakeInputInjector>(),
+			std::move(spPeer),
+			std::make_unique<KTcpSignalingTransport>());
+		KSessionState lastState = IdleSessionState;
+		KSessionError lastError;
+		QObject::connect(&service, &KSessionCoordinator::sessionStateChanged,
+			[&lastState](KSessionState state) { lastState = state; });
+		QObject::connect(&service, &KSessionCoordinator::sessionErrorOccurred,
+			[&lastError](const KSessionError &error) { lastError = error; });
+
+		service.startSignalingServer(reserveLocalPort());
+		check(lastState == ListeningSessionState,
+			QStringLiteral("timeout test starts from a listening peer"));
+		service.disconnectSession();
+		check(waitUntil([&lastState]()
+			{
+				return lastState == ShutdownTimedOutSessionState;
+			}, 3500),
+			QStringLiteral("missing peer completion enters shutdown timeout isolation"));
+		check(lastError.domain == ShutdownSessionErrorDomain
+			&& lastError.code == ShutdownTimeoutSessionErrorCode,
+			QStringLiteral("shutdown timeout publishes a structured lifecycle error"));
+		const int nInitializeCount = pPeer->nInitializeCount;
+		service.startSignalingServer(reserveLocalPort());
+		check(pPeer->nInitializeCount == nInitializeCount,
+			QStringLiteral("timed-out peer cannot be reused for a new listener"));
+
+		pPeer->completeShutdown();
+		check(waitUntil([&service]() { return service.isIdle(); }),
+			QStringLiteral("late peer completion finishes the isolated shutdown"));
+	}
+
 	void testSignalingReceiveBoundaries()
 	{
 		KTcpSignalingTransport transport;
@@ -731,6 +778,7 @@ int main(int argc, char *argv[])
 	testDenyPolicyRejectsBeforeOffer();
 	testDisabledRemoteAccessCannotListen();
 	testInitializationFailureRollsBackTransport();
+	testShutdownTimeoutIsolationAndLateCompletion();
 	testSignalingReceiveBoundaries();
 	if (g_nFailureCount == 0)
 		qInfo() << "All session service tests passed";

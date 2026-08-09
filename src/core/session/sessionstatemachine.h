@@ -20,7 +20,8 @@ enum KSessionState
 	ConnectedSessionState,
 	StreamingSessionState,
 	ReconnectingSessionState,
-	StoppingSessionState
+	StoppingSessionState,
+	ShutdownTimedOutSessionState
 };
 
 enum KSessionEndReason
@@ -59,6 +60,7 @@ public:
 	bool beginReconnecting();
 	bool restore();
 	bool beginStopping();
+	bool markShutdownTimedOut();
 	void finish(bool bKeepListening);
 
 	bool canEnterRemoteDesktop() const;
@@ -73,6 +75,8 @@ public:
 	bool isNegotiating() const;
 	bool isReconnecting() const;
 	bool isStopping() const;
+	bool isShutdownTimedOut() const;
+	bool canCompleteShutdown() const;
 	bool hasActiveSession() const;
 	bool canHandlePeerTermination() const;
 	bool shouldKeepListening() const;

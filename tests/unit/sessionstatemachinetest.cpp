@@ -44,6 +44,14 @@ namespace
 		check(stateMachine.beginStopping(), QStringLiteral("controller can stop session"));
 		check(!stateMachine.canHandlePeerTermination(),
 			QStringLiteral("stopping session ignores peer termination"));
+		check(stateMachine.markShutdownTimedOut(),
+			QStringLiteral("stopping session can enter shutdown timeout isolation"));
+		check(stateMachine.isShutdownTimedOut()
+			&& stateMachine.canCompleteShutdown()
+			&& !stateMachine.canSendInput(),
+			QStringLiteral("shutdown timeout remains completable but disables input"));
+		check(!stateMachine.beginStopping(),
+			QStringLiteral("timed-out shutdown cannot be started again"));
 		stateMachine.finish(false);
 		check(stateMachine.state() == IdleSessionState, QStringLiteral("controller finishes idle"));
 		check(!stateMachine.beginStopping(), QStringLiteral("finished controller cannot stop twice"));
