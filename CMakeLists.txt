@@ -562,6 +562,10 @@ qt_add_executable(winRemoteControl WIN32
 	src/app/mainwindow.h
 )
 
+set_target_properties(winRemoteControl PROPERTIES
+	RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_SOURCE_DIR}/build/Release"
+)
+
 target_compile_definitions(winRemoteControl PRIVATE
 	UNICODE
 	_UNICODE
@@ -735,6 +739,9 @@ if(WRC_BUILD_TESTS)
 		Qt6::Network
 	)
 	add_test(NAME wrc_session_service_tests COMMAND wrc_session_service_tests)
+	set_tests_properties(wrc_session_service_tests PROPERTIES
+		ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Network>"
+	)
 
 	add_executable(wrc_access_approval_tests
 		tests/unit/accessapprovalcontrollertest.cpp
@@ -785,6 +792,9 @@ if(WRC_BUILD_TESTS)
 		Qt6::Network
 	)
 	add_test(NAME wrc_lan_discovery_tests COMMAND wrc_lan_discovery_tests)
+	set_tests_properties(wrc_lan_discovery_tests PROPERTIES
+		ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Network>"
+	)
 
 	add_executable(wrc_recent_device_tests
 		tests/unit/recentdeviceservicetest.cpp

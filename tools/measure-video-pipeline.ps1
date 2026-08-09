@@ -1,5 +1,5 @@
 param(
-    [string]$BuildDirectory = (Join-Path $PSScriptRoot "..\build\Release"),
+    [string]$BuildDirectory = (Join-Path $PSScriptRoot "..\build\cmake-release\Release"),
     [int]$Width = 1280,
     [int]$Height = 720,
     [int]$Frames = 120

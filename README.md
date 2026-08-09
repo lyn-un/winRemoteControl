@@ -37,13 +37,13 @@ cmake --build --preset release
 ctest --preset release
 ```
 
-生成的主程序通常位于 `build\release\Release\winRemoteControl.exe`。
+生成的主程序位于 `build\Release\winRemoteControl.exe`。CMake 中间文件位于 `build\cmake-release`。
 
 运行时不加参数默认关闭诊断日志。需要完整日志时：
 
 ```cmd
-build\release\Release\winRemoteControl.exe --trace
-build\release\Release\winRemoteControl.exe --trace --log-dir "D:\wrc_logs"
+build\Release\winRemoteControl.exe --trace
+build\Release\winRemoteControl.exe --trace --log-dir "D:\wrc_logs"
 ```
 
 默认 TCP 信令端口为 `39000`，局域网发现 UDP 端口为 `39001`。Windows 防火墙、校园网客户端隔离或虚拟机 NAT 可能阻止广播发现；此时仍可使用手动 IP 连接。
