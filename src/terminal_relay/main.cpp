@@ -2,8 +2,8 @@
 
 #include "core/terminal/terminalrelayprotocol.h"
 
-#include <atomic>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -16,21 +16,99 @@ namespace
 	std::atomic_bool g_bRunning = true;
 	std::mutex g_writeMutex;
 
-	bool ReadExact(HANDLE hFile, void *pData, DWORD nBytes)
+	bool WaitForOverlappedOperation(HANDLE hFile, OVERLAPPED *pOperation,
+		DWORD *pTransferredBytes)
 	{
+		if (pOperation == nullptr || pTransferredBytes == nullptr)
+			return false;
+		while (g_bRunning.load())
+		{
+			const DWORD nWaitResult = WaitForSingleObject(pOperation->hEvent, 100);
+			if (nWaitResult == WAIT_OBJECT_0)
+				return GetOverlappedResult(hFile, pOperation, pTransferredBytes, FALSE) != FALSE;
+			if (nWaitResult == WAIT_FAILED)
+			{
+				CancelIoEx(hFile, pOperation);
+				DWORD nIgnoredBytes = 0;
+				GetOverlappedResult(hFile, pOperation, &nIgnoredBytes, TRUE);
+				return false;
+			}
+		}
+		CancelIoEx(hFile, pOperation);
+		DWORD nIgnoredBytes = 0;
+		GetOverlappedResult(hFile, pOperation, &nIgnoredBytes, TRUE);
+		return false;
+	}
+
+	bool ReadPipeExact(HANDLE hPipe, void *pData, DWORD nBytes)
+	{
+		HANDLE hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+		if (hEvent == nullptr)
+			return false;
 		char *pCurrent = static_cast<char *>(pData);
+		bool bSucceeded = true;
 		while (nBytes > 0 && g_bRunning.load())
 		{
+			ResetEvent(hEvent);
+			OVERLAPPED operation = {};
+			operation.hEvent = hEvent;
 			DWORD nRead = 0;
-			if (!ReadFile(hFile, pCurrent, nBytes, &nRead, nullptr) || nRead == 0)
-				return false;
+			if (!ReadFile(hPipe, pCurrent, nBytes, &nRead, &operation))
+			{
+				if (GetLastError() != ERROR_IO_PENDING
+					|| !WaitForOverlappedOperation(hPipe, &operation, &nRead))
+				{
+					bSucceeded = false;
+					break;
+				}
+			}
+			if (nRead == 0)
+			{
+				bSucceeded = false;
+				break;
+			}
 			pCurrent += nRead;
 			nBytes -= nRead;
 		}
-		return nBytes == 0;
+		CloseHandle(hEvent);
+		return bSucceeded && nBytes == 0;
 	}
 
-	bool WriteExact(HANDLE hFile, const void *pData, DWORD nBytes)
+	bool WritePipeExact(HANDLE hPipe, const void *pData, DWORD nBytes)
+	{
+		HANDLE hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+		if (hEvent == nullptr)
+			return false;
+		const char *pCurrent = static_cast<const char *>(pData);
+		bool bSucceeded = true;
+		while (nBytes > 0 && g_bRunning.load())
+		{
+			ResetEvent(hEvent);
+			OVERLAPPED operation = {};
+			operation.hEvent = hEvent;
+			DWORD nWritten = 0;
+			if (!WriteFile(hPipe, pCurrent, nBytes, &nWritten, &operation))
+			{
+				if (GetLastError() != ERROR_IO_PENDING
+					|| !WaitForOverlappedOperation(hPipe, &operation, &nWritten))
+				{
+					bSucceeded = false;
+					break;
+				}
+			}
+			if (nWritten == 0)
+			{
+				bSucceeded = false;
+				break;
+			}
+			pCurrent += nWritten;
+			nBytes -= nWritten;
+		}
+		CloseHandle(hEvent);
+		return bSucceeded && nBytes == 0;
+	}
+
+	bool WriteStreamExact(HANDLE hFile, const void *pData, DWORD nBytes)
 	{
 		const char *pCurrent = static_cast<const char *>(pData);
 		while (nBytes > 0 && g_bRunning.load())
@@ -53,8 +131,8 @@ namespace
 		header.nType = nType;
 		header.nPayloadBytes = nPayloadBytes;
 		std::scoped_lock lock(g_writeMutex);
-		return WriteExact(hPipe, &header, sizeof(header))
-			&& (nPayloadBytes == 0 || WriteExact(hPipe, pPayload, nPayloadBytes));
+		return WritePipeExact(hPipe, &header, sizeof(header))
+			&& (nPayloadBytes == 0 || WritePipeExact(hPipe, pPayload, nPayloadBytes));
 	}
 
 	BOOL WINAPI ConsoleControlHandler(DWORD nControlType)
@@ -303,7 +381,7 @@ namespace
 		while (g_bRunning.load())
 		{
 			KTerminalRelayProtocol::FrameHeader header;
-			if (!ReadExact(hPipe, &header, sizeof(header)))
+			if (!ReadPipeExact(hPipe, &header, sizeof(header)))
 				break;
 			if (header.nMagic != KTerminalRelayProtocol::kMagic
 				|| header.nVersion != KTerminalRelayProtocol::kVersion
@@ -313,13 +391,13 @@ namespace
 			}
 			std::vector<char> payload(header.nPayloadBytes);
 			if (header.nPayloadBytes > 0
-				&& !ReadExact(hPipe, payload.data(), header.nPayloadBytes))
+				&& !ReadPipeExact(hPipe, payload.data(), header.nPayloadBytes))
 			{
 				break;
 			}
 			if (header.nType == KTerminalRelayProtocol::OutputFrameType)
 			{
-				if (!WriteExact(hOutput, payload.data(), header.nPayloadBytes))
+				if (!WriteStreamExact(hOutput, payload.data(), header.nPayloadBytes))
 					break;
 			}
 			else if (header.nType == KTerminalRelayProtocol::CloseFrameType)
@@ -347,7 +425,7 @@ int wmain(int argc, wchar_t *argv[])
 	if (!WaitNamedPipeW(strPipePath.c_str(), 10000))
 		return 3;
 	HANDLE hPipe = CreateFileW(strPipePath.c_str(), GENERIC_READ | GENERIC_WRITE,
-		0, nullptr, OPEN_EXISTING, 0, nullptr);
+		0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
 	if (hPipe == INVALID_HANDLE_VALUE)
 		return 4;
 
