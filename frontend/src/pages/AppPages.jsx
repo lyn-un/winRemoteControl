@@ -31,7 +31,7 @@ function formatRecentTime(value) {
   return `${Math.floor(elapsed / 86_400_000)} 天前`;
 }
 
-function DeviceCard({ device, busy, onConnect, onTerminal, onRemove }) {
+function DeviceCard({ device, busy, terminalDisabled, terminalDisabledReason, onConnect, onTerminal, onRemove }) {
   return (
     <article className={`device-tile ${device.online ? "is-online" : "is-recent"}`}>
       <div className="device-tile-top">
@@ -53,7 +53,7 @@ function DeviceCard({ device, busy, onConnect, onTerminal, onRemove }) {
       <button className="device-connect" disabled={busy} onClick={onConnect}>
         {busy ? "连接中" : "连接"}<Icon name="arrow" />
       </button>
-		{onTerminal && <button className="device-terminal" disabled={busy} onClick={onTerminal}><Icon name="terminal" />终端</button>}
+		{onTerminal && <button className="device-terminal" disabled={busy || terminalDisabled} title={terminalDisabled ? terminalDisabledReason : "打开远程 PowerShell"} onClick={onTerminal}><Icon name="terminal" />终端</button>}
     </article>
   );
 }
@@ -114,6 +114,8 @@ function DevicesPage({ state, devices, busy, connectDevice, openTerminal, remove
               key={device.key}
               device={device}
               busy={busy}
+			  terminalDisabled={!state.terminalFrontendSupport.supported}
+			  terminalDisabledReason={state.terminalFrontendSupport.reason || "未安装 Windows Terminal"}
               onConnect={() => connectDevice(device)}
 				onTerminal={device.recentId ? () => openTerminal(device.recentId) : null}
               onRemove={device.recentId ? () => removeDevice(device.recentId) : null}

@@ -44,7 +44,8 @@ public:
 	quint64 sessionGeneration() const override;
 	bool isIdle() const override;
 	bool matchesCurrentEndpoint(const QString &strHost, quint16 nPort) const override;
-	void setTerminalCapabilityAvailable(bool bAvailable);
+	void setTerminalCapabilitiesAvailable(bool bControllerAvailable,
+		bool bControlledAvailable);
 
 	KSessionCoordinator(const KSessionCoordinator &) = delete;
 	KSessionCoordinator &operator=(const KSessionCoordinator &) = delete;
@@ -167,7 +168,8 @@ private:
 	bool m_bClipboardChannelOpen = false;
 	bool m_bTerminalChannelOpen = false;
 	bool m_bTerminalChannelStatePublished = false;
-	bool m_bTerminalCapabilityAvailable = false;
+	bool m_bControllerTerminalCapabilityAvailable = false;
+	bool m_bControlledTerminalCapabilityAvailable = false;
 	bool m_bSessionChannelOpen = false;
 	bool m_bCaptureActive = false;
 	quint64 m_nLastInjectedInputSeq = 0;

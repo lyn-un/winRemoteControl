@@ -8,7 +8,6 @@
 class KRemoteDesktopWindow;
 class KApplicationComposition;
 class KWebViewWidget;
-class KRemoteTerminalWindow;
 
 class KMainWindow : public QMainWindow
 {
@@ -28,14 +27,11 @@ private:
 	void initConnections();
 	void openRemoteDesktopWindow();
 	void closeRemoteDesktopWindow();
-	void openRemoteTerminalWindow();
-	void closeRemoteTerminalWindow();
 
 	QString m_strFrontendPath;
 	KApplicationComposition *m_pComposition = nullptr;
 	KWebViewWidget *m_pWebViewWidget = nullptr;
 	KRemoteDesktopWindow *m_pRemoteDesktopWindow = nullptr;
-	KRemoteTerminalWindow *m_pRemoteTerminalWindow = nullptr;
 	bool m_bClosePending = false;
 	bool m_bShutdownComplete = false;
 };

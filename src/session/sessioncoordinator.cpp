@@ -161,9 +161,12 @@ bool KSessionCoordinator::matchesCurrentEndpoint(
 		&& m_nLastConnectionPort == nPort;
 }
 
-void KSessionCoordinator::setTerminalCapabilityAvailable(bool bAvailable)
+void KSessionCoordinator::setTerminalCapabilitiesAvailable(
+	bool bControllerAvailable,
+	bool bControlledAvailable)
 {
-	m_bTerminalCapabilityAvailable = bAvailable;
+	m_bControllerTerminalCapabilityAvailable = bControllerAvailable;
+	m_bControlledTerminalCapabilityAvailable = bControlledAvailable;
 }
 
 void KSessionCoordinator::initializeProtocolRoutes()
@@ -1460,7 +1463,10 @@ KSessionCapabilities KSessionCoordinator::localCapabilities() const
 		QStringLiteral("video"), QStringLiteral("session"), QStringLiteral("input"),
 		QStringLiteral("input-realtime"), QStringLiteral("clipboard")
 	};
-	if (m_bTerminalCapabilityAvailable)
+	const bool bTerminalAvailable = m_sessionStateMachine.role() == ControllerSessionRole
+		? m_bControllerTerminalCapabilityAvailable
+		: m_bControlledTerminalCapabilityAvailable;
+	if (bTerminalAvailable)
 		capabilities.supportedChannels.append(QStringLiteral("terminal"));
 	capabilities.bInputRealtime = true;
 	capabilities.nMaximumWidth = KProtocolConstraints::kMaximumStreamWidth;

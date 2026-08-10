@@ -1,6 +1,7 @@
 #include "terminal/terminalsessionservice.h"
 
 #include "core/terminal/terminalhost.h"
+#include "core/terminal/terminalfrontend.h"
 #include "session/sessioncontroller.h"
 
 #include <QtCore/QCoreApplication>
@@ -53,6 +54,29 @@ namespace
 		int nLastRows = 0;
 		quint64 nLastGeneration = 0;
 		QByteArray input;
+	};
+
+	class KFakeTerminalFrontend final : public KTerminalFrontend
+	{
+	public:
+		bool isSupported(QString *) const override { return true; }
+		bool open(quint64 nGeneration, const QString &, QString *) override
+		{
+			nCurrentGeneration = nGeneration;
+			emit connected(nGeneration);
+			return true;
+		}
+		void focus() override { ++nFocusCount; }
+		bool writeOutput(quint64, const QByteArray &data) override
+		{
+			output.append(data);
+			return true;
+		}
+		void close(quint64) override {}
+
+		quint64 nCurrentGeneration = 0;
+		int nFocusCount = 0;
+		QByteArray output;
 	};
 
 	class KFakeSessionController final : public KSessionController
@@ -122,8 +146,10 @@ namespace
 	void TestControllerRequestsApproval()
 	{
 		auto spHost = std::make_unique<KFakeTerminalHost>();
+		auto spFrontend = std::make_unique<KFakeTerminalFrontend>();
 		KFakeSessionController controller;
-		KTerminalSessionService service(std::move(spHost), &controller);
+		KTerminalSessionService service(std::move(spHost), &controller,
+			std::move(spFrontend));
 		controller.makeReady();
 		service.openCurrentTerminal(120, 40);
 		Check(controller.messages.size() == 1,
@@ -168,8 +194,10 @@ namespace
 		for (int nOrder = 0; nOrder < 6; ++nOrder)
 		{
 			auto spHost = std::make_unique<KFakeTerminalHost>();
+			auto spFrontend = std::make_unique<KFakeTerminalFrontend>();
 			KFakeSessionController controller;
-			KTerminalSessionService service(std::move(spHost), &controller);
+			KTerminalSessionService service(std::move(spHost), &controller,
+				std::move(spFrontend));
 			service.openCurrentTerminal(100, 30);
 			const int events[6][3] = {
 				{ 0, 1, 2 }, { 0, 2, 1 }, { 1, 0, 2 },
@@ -200,8 +228,10 @@ namespace
 	void TestOutputBeforeAcceptedIsPreserved()
 	{
 		auto spHost = std::make_unique<KFakeTerminalHost>();
+		auto spFrontend = std::make_unique<KFakeTerminalFrontend>();
 		KFakeSessionController controller;
-		KTerminalSessionService service(std::move(spHost), &controller);
+		KTerminalSessionService service(std::move(spHost), &controller,
+			std::move(spFrontend));
 		controller.makeReady();
 		QByteArray output;
 		QObject::connect(&service, &KTerminalSessionService::outputReady,

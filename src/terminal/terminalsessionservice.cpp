@@ -1,6 +1,7 @@
 #include "terminal/terminalsessionservice.h"
 
 #include "common/sessiontracelogger.h"
+#include "core/terminal/terminalfrontend.h"
 #include "core/terminal/terminalhost.h"
 #include "session/sessioncontroller.h"
 
@@ -17,9 +18,11 @@ namespace
 KTerminalSessionService::KTerminalSessionService(
 	std::unique_ptr<KTerminalHost> spTerminalHost,
 	KSessionController *pSessionController,
+	std::unique_ptr<KTerminalFrontend> spTerminalFrontend,
 	QObject *pParent)
 	: QObject(pParent)
 	, m_spTerminalHost(std::move(spTerminalHost))
+	, m_spTerminalFrontend(std::move(spTerminalFrontend))
 	, m_pSessionController(pSessionController)
 	, m_pApprovalTimer(new QTimer(this))
 {
@@ -67,6 +70,43 @@ KTerminalSessionService::KTerminalSessionService(
 			emit terminalError(strTechnical);
 			setState(FailedTerminalState, QStringLiteral("终端运行失败"));
 		});
+	if (m_spTerminalFrontend != nullptr)
+	{
+		connect(m_spTerminalFrontend.get(), &KTerminalFrontend::connected,
+			this, [this](quint64 nGeneration)
+			{
+				if (nGeneration != m_pSessionController->sessionGeneration())
+					return;
+				m_bFrontendConnected = true;
+				tryOpenPendingTerminal();
+			});
+		connect(m_spTerminalFrontend.get(), &KTerminalFrontend::inputReady,
+			this, [this](quint64 nGeneration, const QByteArray &data)
+			{
+				if (nGeneration == m_pSessionController->sessionGeneration())
+					sendInput(data);
+			});
+		connect(m_spTerminalFrontend.get(), &KTerminalFrontend::resizeRequested,
+			this, [this](quint64 nGeneration, int nColumns, int nRows)
+			{
+				if (nGeneration == m_pSessionController->sessionGeneration())
+					resizeTerminal(nColumns, nRows);
+			});
+		connect(m_spTerminalFrontend.get(), &KTerminalFrontend::closed,
+			this, [this](quint64 nGeneration)
+			{
+				if (nGeneration != m_pSessionController->sessionGeneration())
+					return;
+				m_bFrontendConnected = false;
+				stopHost(true, QStringLiteral("terminal_relay_closed"));
+			});
+		connect(m_spTerminalFrontend.get(), &KTerminalFrontend::terminalError,
+			this, [this](quint64 nGeneration, const QString &, const QString &strTechnical)
+			{
+				if (nGeneration == m_pSessionController->sessionGeneration())
+					emit terminalError(strTechnical);
+			});
+	}
 }
 
 KTerminalSessionService::~KTerminalSessionService()
@@ -79,26 +119,35 @@ bool KTerminalSessionService::isHostSupported(QString *pReason) const
 	return m_spTerminalHost->isSupported(pReason);
 }
 
+bool KTerminalSessionService::isFrontendSupported(QString *pReason) const
+{
+	if (m_spTerminalFrontend != nullptr)
+		return m_spTerminalFrontend->isSupported(pReason);
+	if (pReason != nullptr)
+		*pReason = QStringLiteral("当前程序未配置 Windows Terminal 前端");
+	return false;
+}
+
 void KTerminalSessionService::openCurrentTerminal(int nColumns, int nRows)
 {
 	if (m_state == RunningTerminalState || m_state == AwaitingApprovalTerminalState)
 	{
-		emit focusWindowRequested();
+		if (m_spTerminalFrontend != nullptr)
+			m_spTerminalFrontend->focus();
 		return;
 	}
-	if (!isSessionReady())
-	{
-		m_bController = true;
-		m_bOpenAfterConnect = true;
-		m_nColumns = qBound(20, nColumns, 400);
-		m_nRows = qBound(5, nRows, 200);
-		setState(OpeningTerminalState, QStringLiteral("正在等待终端通道"));
-		return;
-	}
-	emit focusWindowRequested();
 	m_bController = true;
 	m_nColumns = qBound(20, nColumns, 400);
 	m_nRows = qBound(5, nRows, 200);
+	if (!ensureFrontendOpen())
+		return;
+	if (!isSessionReady() || !m_bFrontendConnected)
+	{
+		m_bOpenAfterConnect = true;
+		setState(OpeningTerminalState, QStringLiteral("正在等待终端通道"));
+		return;
+	}
+	m_spTerminalFrontend->focus();
 	m_strRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
 	KTerminalMessage message;
 	message.type = OpenRequestTerminalMessageType;
@@ -112,6 +161,13 @@ void KTerminalSessionService::openCurrentTerminal(int nColumns, int nRows)
 
 void KTerminalSessionService::openTerminalForEndpoint(const QString &strHost, quint16 nPort)
 {
+	QString strSupportReason;
+	if (!isFrontendSupported(&strSupportReason))
+	{
+		emit terminalError(strSupportReason);
+		setState(FailedTerminalState, QStringLiteral("Windows Terminal 不可用"));
+		return;
+	}
 	if (!m_pSessionController->isIdle())
 	{
 		if (m_pSessionController->matchesCurrentEndpoint(strHost, nPort))
@@ -125,9 +181,9 @@ void KTerminalSessionService::openTerminalForEndpoint(const QString &strHost, qu
 	m_strDeviceSource = strHost;
 	m_bOpenAfterConnect = true;
 	m_bController = true;
-	emit focusWindowRequested();
 	m_pSessionController->setRole(QStringLiteral("controller"));
 	m_pSessionController->connectSignaling(strHost, nPort);
+	ensureFrontendOpen();
 	setState(OpeningTerminalState, QStringLiteral("正在连接设备"));
 }
 
@@ -219,6 +275,8 @@ void KTerminalSessionService::shutdown()
 {
 	m_bOpenAfterConnect = false;
 	stopHost(false, QStringLiteral("application_shutdown"));
+	if (m_spTerminalFrontend != nullptr)
+		m_spTerminalFrontend->close(m_pSessionController->sessionGeneration());
 }
 
 void KTerminalSessionService::handleSessionStateChanged(KSessionState state)
@@ -227,6 +285,9 @@ void KTerminalSessionService::handleSessionStateChanged(KSessionState state)
 	tryOpenPendingTerminal();
 	if (state == ReconnectingSessionState && m_state == RunningTerminalState)
 	{
+		if (m_bController && m_spTerminalFrontend != nullptr)
+			m_spTerminalFrontend->writeOutput(m_pSessionController->sessionGeneration(),
+				QByteArray("\r\n[winRemoteControl] Network reconnecting; input paused.\r\n"));
 		setState(PausedTerminalState, QStringLiteral("网络恢复中，终端输入已暂停"));
 		return;
 	}
@@ -234,6 +295,9 @@ void KTerminalSessionService::handleSessionStateChanged(KSessionState state)
 		&& m_state == PausedTerminalState)
 	{
 		setState(RunningTerminalState, QStringLiteral("终端已恢复"));
+		if (m_bController && m_spTerminalFrontend != nullptr)
+			m_spTerminalFrontend->writeOutput(m_pSessionController->sessionGeneration(),
+				QByteArray("[winRemoteControl] Network restored.\r\n"));
 		flushOutput();
 		return;
 	}
@@ -301,6 +365,8 @@ void KTerminalSessionService::handleControlMessage(const KTerminalMessage &messa
 	{
 		setState(FailedTerminalState, QStringLiteral("被控端拒绝了终端请求"));
 		emit terminalError(QStringLiteral("被控端拒绝了终端请求"));
+		if (m_spTerminalFrontend != nullptr)
+			m_spTerminalFrontend->close(m_pSessionController->sessionGeneration());
 	}
 	else if (message.type == ResizeTerminalMessageType && !m_bController)
 		m_spTerminalHost->resize(m_pSessionController->sessionGeneration(),
@@ -308,12 +374,18 @@ void KTerminalSessionService::handleControlMessage(const KTerminalMessage &messa
 	else if (message.type == CloseTerminalMessageType)
 		stopHost(false, message.strReason);
 	else if (message.type == ExitedTerminalMessageType && m_bController)
+	{
 		setState(ClosedTerminalState,
 			QStringLiteral("PowerShell 已退出（%1）").arg(message.nExitCode));
+		if (m_spTerminalFrontend != nullptr)
+			m_spTerminalFrontend->close(m_pSessionController->sessionGeneration());
+	}
 	else if (message.type == ErrorTerminalMessageType)
 	{
 		setState(FailedTerminalState, QStringLiteral("远程终端发生错误"));
 		emit terminalError(QStringLiteral("远程终端发生错误：%1").arg(message.strErrorCode));
+		if (m_bController && m_spTerminalFrontend != nullptr)
+			m_spTerminalFrontend->close(m_pSessionController->sessionGeneration());
 	}
 }
 
@@ -332,6 +404,12 @@ void KTerminalSessionService::handleTerminalData(const QByteArray &data)
 		if (m_state != RunningTerminalState)
 			return;
 		m_nOutputBytes += static_cast<quint64>(data.size());
+		if (m_spTerminalFrontend == nullptr
+			|| !m_spTerminalFrontend->writeOutput(
+				m_pSessionController->sessionGeneration(), data))
+		{
+			emit terminalError(QStringLiteral("无法写入 Windows Terminal"));
+		}
 		emit outputReady(data);
 	}
 	else if (m_state == RunningTerminalState && !m_spTerminalHost->writeInput(
@@ -354,10 +432,31 @@ void KTerminalSessionService::handleChannelChanged(bool bOpen)
 
 void KTerminalSessionService::tryOpenPendingTerminal()
 {
-	if (!m_bOpenAfterConnect || !isSessionReady())
+	if (!m_bOpenAfterConnect || !isSessionReady()
+		|| (m_bController && !m_bFrontendConnected))
 		return;
 	m_bOpenAfterConnect = false;
 	openCurrentTerminal(m_nColumns, m_nRows);
+}
+
+bool KTerminalSessionService::ensureFrontendOpen()
+{
+	if (m_spTerminalFrontend == nullptr)
+	{
+		emit terminalError(QStringLiteral("当前程序未配置 Windows Terminal 前端"));
+		return false;
+	}
+	QString strError;
+	const QString strTitle = QStringLiteral("winRemoteControl - %1")
+		.arg(m_strDeviceName.isEmpty() ? m_strDeviceSource : m_strDeviceName);
+	if (m_spTerminalFrontend->open(m_pSessionController->sessionGeneration(),
+		strTitle, &strError))
+	{
+		return true;
+	}
+	emit terminalError(strError);
+	setState(FailedTerminalState, QStringLiteral("Windows Terminal 不可用"));
+	return false;
 }
 
 void KTerminalSessionService::handleHostOutput(
@@ -456,6 +555,8 @@ void KTerminalSessionService::stopHost(bool bNotifyRemote, const QString &strRea
 		m_spTerminalHost->requestStop(m_pSessionController->sessionGeneration());
 	else
 		setState(ClosedTerminalState, QStringLiteral("终端已关闭"));
+	if (m_bController && m_spTerminalFrontend != nullptr)
+		m_spTerminalFrontend->close(m_pSessionController->sessionGeneration());
 	m_outputQueue.clear();
 	m_nQueuedOutputBytes = 0;
 	m_pendingControllerOutputQueue.clear();
@@ -467,8 +568,11 @@ void KTerminalSessionService::stopHost(bool bNotifyRemote, const QString &strRea
 void KTerminalSessionService::resetSession()
 {
 	m_pApprovalTimer->stop();
+	if (m_spTerminalFrontend != nullptr)
+		m_spTerminalFrontend->close(m_pSessionController->sessionGeneration());
 	m_capabilities = KNegotiatedCapabilities();
 	m_bChannelOpen = false;
+	m_bFrontendConnected = false;
 	m_bPermissionGranted = false;
 	m_bPermissionDenied = false;
 	m_bOpenAfterConnect = false;
@@ -489,8 +593,10 @@ void KTerminalSessionService::setState(KTerminalState state, const QString &strS
 	m_state = state;
 	m_strStatus = strStatus;
 	QString strReason;
-	const bool bHostSupported = m_spTerminalHost->isSupported(&strReason);
-	const bool bAvailable = bHostSupported && m_bChannelOpen
+	const bool bLocalSupported = m_bController
+		? isFrontendSupported(&strReason)
+		: m_spTerminalHost->isSupported(&strReason);
+	const bool bAvailable = bLocalSupported && m_bChannelOpen
 		&& m_capabilities.channels.contains(QStringLiteral("terminal"));
 	emit stateChanged(state, bAvailable, strStatus, m_strDeviceName, m_strDeviceSource);
 }
@@ -536,6 +642,8 @@ void KTerminalSessionService::flushPendingControllerOutput()
 		const QByteArray data = m_pendingControllerOutputQueue.dequeue();
 		m_nPendingControllerOutputBytes -= data.size();
 		m_nOutputBytes += static_cast<quint64>(data.size());
+		if (m_spTerminalFrontend != nullptr)
+			m_spTerminalFrontend->writeOutput(m_pSessionController->sessionGeneration(), data);
 		emit outputReady(data);
 	}
 }

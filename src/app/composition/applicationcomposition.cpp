@@ -8,8 +8,8 @@
 #include "adapters/settings/qsettingsrecentdevicestore.h"
 #include "adapters/settings/qsettingsapplicationstore.h"
 #include "app/remotedesktopwindow.h"
-#include "app/remoteterminalwindow.h"
 #include "adapters/windows/terminal/windowspseudoconsole.h"
+#include "adapters/windows/terminal/windowsterminalfrontend.h"
 #include "capture/captureservice.h"
 #include "core/discovery/devicediscoverycontroller.h"
 #include "discovery/landiscoveryservice.h"
@@ -99,10 +99,12 @@ KApplicationComposition::KApplicationComposition(QObject *pParent)
 	, m_pTerminalSessionService(new KTerminalSessionService(
 		std::make_unique<KWindowsPseudoConsole>(),
 		m_pSessionService,
+		std::make_unique<KWindowsTerminalFrontend>(),
 		this))
 	, m_pShutdownDeadlineTimer(new QTimer(this))
 {
-	m_pSessionService->setTerminalCapabilityAvailable(
+	m_pSessionService->setTerminalCapabilitiesAvailable(
+		m_pTerminalSessionService->isFrontendSupported(),
 		m_pTerminalSessionService->isHostSupported());
 	m_pShutdownDeadlineTimer->setSingleShot(true);
 	m_pShutdownDeadlineTimer->setInterval(kApplicationShutdownDeadlineMs);
@@ -155,8 +157,17 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		m_pRecentDeviceService, &KRecentDeviceService::removeDevice);
 	connect(pWebViewWidget, &KWebViewWidget::openRecentDeviceTerminalRequested,
 		m_pRecentDeviceService, &KRecentDeviceService::openTerminalDevice);
+	connect(pWebViewWidget, &KWebViewWidget::requestTerminalFrontendSupportRequested,
+		this, [this, pWebViewWidget]()
+		{
+			QString strReason;
+			const bool bSupported = m_pTerminalSessionService->isFrontendSupported(&strReason);
+			pWebViewWidget->sendTerminalFrontendSupportChanged(bSupported, strReason);
+		});
 	connect(pWebViewWidget, &KWebViewWidget::respondTerminalAccessRequestRequested,
 		m_pTerminalSessionService, &KTerminalSessionService::respondIncomingRequest);
+	connect(pWebViewWidget, &KWebViewWidget::closeTerminalRequested,
+		m_pTerminalSessionService, &KTerminalSessionService::closeTerminal);
 	connect(pWebViewWidget, &KWebViewWidget::requestApplicationSettingsRequested,
 		m_pApplicationSettingsService, &KApplicationSettingsService::requestSettings);
 	connect(pWebViewWidget, &KWebViewWidget::updateApplicationSettingsRequested,
@@ -214,28 +225,11 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		pWebViewWidget, &KWebViewWidget::sendIncomingTerminalRequestCleared);
 	connect(m_pTerminalSessionService, &KTerminalSessionService::terminalError,
 		pWebViewWidget, &KWebViewWidget::sendTerminalError);
-}
-
-void KApplicationComposition::wireRemoteTerminalWindow(KRemoteTerminalWindow *pWindow)
-{
-	Q_ASSERT(pWindow != nullptr);
-	connect(pWindow, &KRemoteTerminalWindow::terminalCloseRequested,
-		m_pTerminalSessionService, &KTerminalSessionService::closeTerminal);
-	KWebViewWidget *pWebViewWidget = pWindow->webViewWidget();
-	connect(pWebViewWidget, &KWebViewWidget::terminalInputRequested,
-		m_pTerminalSessionService, &KTerminalSessionService::sendInput);
-	connect(pWebViewWidget, &KWebViewWidget::terminalResizeRequested,
-		m_pTerminalSessionService, &KTerminalSessionService::resizeTerminal);
-	connect(pWebViewWidget, &KWebViewWidget::closeTerminalRequested,
-		m_pTerminalSessionService, &KTerminalSessionService::closeTerminal);
-	connect(pWebViewWidget, &KWebViewWidget::requestTerminalStateRequested,
-		m_pTerminalSessionService, &KTerminalSessionService::requestState);
-	connect(m_pTerminalSessionService, &KTerminalSessionService::stateChanged,
-		pWebViewWidget, &KWebViewWidget::sendTerminalStateChanged);
-	connect(m_pTerminalSessionService, &KTerminalSessionService::outputReady,
-		pWebViewWidget, &KWebViewWidget::sendTerminalOutput);
-	connect(m_pTerminalSessionService, &KTerminalSessionService::terminalError,
-		pWebViewWidget, &KWebViewWidget::sendTerminalError);
+	QString strTerminalSupportReason;
+	const bool bTerminalFrontendSupported =
+		m_pTerminalSessionService->isFrontendSupported(&strTerminalSupportReason);
+	pWebViewWidget->sendTerminalFrontendSupportChanged(
+		bTerminalFrontendSupported, strTerminalSupportReason);
 }
 
 void KApplicationComposition::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWindow)
@@ -424,8 +418,6 @@ void KApplicationComposition::wireServices()
 		m_pSessionViewModel, &KSessionViewModel::connectSignaling);
 	connect(m_pRecentDeviceService, &KRecentDeviceService::terminalEndpointRequested,
 		m_pTerminalSessionService, &KTerminalSessionService::openTerminalForEndpoint);
-	connect(m_pTerminalSessionService, &KTerminalSessionService::focusWindowRequested,
-		this, [this]() { emit terminalWindowRequested(); });
 	connect(m_pSessionViewModel, &KSessionViewModel::sessionChannelChanged,
 		m_pRecentDeviceService, &KRecentDeviceService::setSessionChannelOpen);
 	connect(m_pSessionService, &KSessionCoordinator::incomingAccessObserved,

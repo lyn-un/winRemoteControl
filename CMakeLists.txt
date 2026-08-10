@@ -124,6 +124,10 @@ add_library(wrc_core STATIC
 	src/core/transport/peerinitializationresult.cpp
 	src/core/transport/peerinitializationresult.h
 	src/core/terminal/terminalhost.h
+	src/core/terminal/terminalfrontend.h
+	src/core/terminal/terminalrelayframecodec.cpp
+	src/core/terminal/terminalrelayframecodec.h
+	src/core/terminal/terminalrelayprotocol.h
 	src/core/terminal/terminalstate.h
 )
 
@@ -284,6 +288,48 @@ target_include_directories(wrc_windows_terminal_adapter PUBLIC
 target_link_libraries(wrc_windows_terminal_adapter PUBLIC
 	wrc_core
 	Qt6::Core
+)
+
+add_library(wrc_windows_terminal_frontend_adapter STATIC
+	src/adapters/windows/terminal/windowsterminalfrontend.cpp
+	src/adapters/windows/terminal/windowsterminalfrontend.h
+)
+
+target_compile_definitions(wrc_windows_terminal_frontend_adapter PRIVATE
+	UNICODE
+	_UNICODE
+	WIN32_LEAN_AND_MEAN
+	NOMINMAX
+)
+
+target_include_directories(wrc_windows_terminal_frontend_adapter PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_windows_terminal_frontend_adapter PUBLIC
+	wrc_core
+	wrc_diagnostics
+	Qt6::Core
+	Qt6::Network
+)
+
+add_executable(wrcTerminalRelay
+	src/terminal_relay/main.cpp
+)
+
+set_target_properties(wrcTerminalRelay PROPERTIES
+	RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_SOURCE_DIR}/build/Release"
+)
+
+target_compile_definitions(wrcTerminalRelay PRIVATE
+	UNICODE
+	_UNICODE
+	WIN32_LEAN_AND_MEAN
+	NOMINMAX
+)
+
+target_include_directories(wrcTerminalRelay PRIVATE
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 
 target_include_directories(wrc_clipboard_application PUBLIC
@@ -511,8 +557,6 @@ target_link_libraries(wrc_capture_application PUBLIC
 add_library(wrc_qt_presentation STATIC
 	src/app/remotedesktopwindow.cpp
 	src/app/remotedesktopwindow.h
-	src/app/remoteterminalwindow.cpp
-	src/app/remoteterminalwindow.h
 	src/render/videorenderwidget.cpp
 	src/render/videorenderwidget.h
 	src/session/inputfeedbacktracker.cpp
@@ -562,6 +606,8 @@ qt_add_executable(winRemoteControl WIN32
 	src/app/mainwindow.h
 )
 
+add_dependencies(winRemoteControl wrcTerminalRelay)
+
 set_target_properties(winRemoteControl PROPERTIES
 	RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_SOURCE_DIR}/build/Release"
 )
@@ -591,6 +637,7 @@ target_link_libraries(winRemoteControl PRIVATE
 	wrc_webrtc_adapter
 	wrc_windows_adapters
 	wrc_windows_terminal_adapter
+	wrc_windows_terminal_frontend_adapter
 	wrc_capture_application
 	wrc_windows_capture_adapter
 	wrc_qt_presentation
@@ -833,6 +880,16 @@ if(WRC_BUILD_TESTS)
 		Qt6::Core
 	)
 	add_test(NAME wrc_terminal_session_tests COMMAND wrc_terminal_session_tests)
+
+	add_executable(wrc_terminal_relay_frame_codec_tests
+		tests/unit/terminalrelayframecodectest.cpp
+	)
+	target_link_libraries(wrc_terminal_relay_frame_codec_tests PRIVATE
+		wrc_core
+		Qt6::Core
+	)
+	add_test(NAME wrc_terminal_relay_frame_codec_tests
+		COMMAND wrc_terminal_relay_frame_codec_tests)
 
 	add_executable(wrc_windows_pseudoconsole_tests
 		tests/unit/windowspseudoconsoletest.cpp

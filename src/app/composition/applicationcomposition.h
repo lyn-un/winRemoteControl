@@ -14,7 +14,6 @@ class KRecentDeviceService;
 class KApplicationSettingsService;
 class KClipboardSyncService;
 class KTerminalSessionService;
-class KRemoteTerminalWindow;
 class QTimer;
 
 class KApplicationComposition : public QObject
@@ -31,7 +30,6 @@ public:
 	KSessionViewModel *sessionViewModel() const;
 	void wireDashboard(KWebViewWidget *pWebViewWidget);
 	void wireRemoteDesktopWindow(KRemoteDesktopWindow *pWindow);
-	void wireRemoteTerminalWindow(KRemoteTerminalWindow *pWindow);
 	void enterRemoteDesktop();
 	void leaveRemoteDesktop();
 	void disconnectSession();
@@ -39,7 +37,6 @@ public:
 
 signals:
 	void shutdownFinished();
-	void terminalWindowRequested();
 
 private:
 	void wireServices();

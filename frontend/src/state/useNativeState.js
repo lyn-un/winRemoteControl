@@ -45,6 +45,7 @@ export function useNativeState() {
   const [incomingAccessRequest, setIncomingAccessRequest] = useState(null);
 	const [incomingTerminalRequest, setIncomingTerminalRequest] = useState(null);
 	const [terminalState, setTerminalState] = useState({ state: "Closed", available: false, status: "" });
+	const [terminalFrontendSupport, setTerminalFrontendSupport] = useState({ supported: false, reason: "" });
 	const [terminalError, setTerminalError] = useState("");
   const [fps, setFps] = useState(0);
   const frameTimes = useRef([]);
@@ -220,6 +221,11 @@ export function useNativeState() {
 			return;
 		}
 
+		if (message.type === "terminalFrontendSupportChanged") {
+			setTerminalFrontendSupport({ supported: Boolean(message.supported), reason: message.reason || "" });
+			return;
+		}
+
 		if (message.type === "terminalError") {
 			setTerminalError(message.message || "远程终端发生错误");
 			return;
@@ -288,6 +294,7 @@ export function useNativeState() {
     if (getViewMode() === "dashboard") {
       sendCommand("requestRecentDevices");
       sendCommand("requestApplicationSettings");
+	  sendCommand("requestTerminalFrontendSupport");
     }
   }, []);
 
@@ -326,6 +333,7 @@ export function useNativeState() {
     incomingAccessRequest,
 		incomingTerminalRequest,
 		terminalState,
+		terminalFrontendSupport,
 		terminalError,
     clipboardSync,
     clipboardSyncError,

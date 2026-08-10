@@ -13,6 +13,7 @@
 #include <memory>
 
 class KSessionController;
+class KTerminalFrontend;
 class KTerminalHost;
 class QTimer;
 
@@ -23,9 +24,11 @@ class KTerminalSessionService final : public QObject
 public:
 	explicit KTerminalSessionService(std::unique_ptr<KTerminalHost> spTerminalHost,
 		KSessionController *pSessionController,
+		std::unique_ptr<KTerminalFrontend> spTerminalFrontend = nullptr,
 		QObject *pParent = nullptr);
 	~KTerminalSessionService() override;
 	bool isHostSupported(QString *pReason = nullptr) const;
+	bool isFrontendSupported(QString *pReason = nullptr) const;
 
 	KTerminalSessionService(const KTerminalSessionService &) = delete;
 	KTerminalSessionService &operator=(const KTerminalSessionService &) = delete;
@@ -49,7 +52,6 @@ signals:
 		const QString &strDeviceSource, qint64 nExpiresAtMs);
 	void incomingRequestCleared(const QString &strRequestId, const QString &strReason);
 	void terminalError(const QString &strMessage);
-	void focusWindowRequested();
 
 private:
 	void handleSessionStateChanged(KSessionState state);
@@ -60,6 +62,7 @@ private:
 	void handleHostOutput(quint64 nGeneration, const QByteArray &data);
 	void handleHostExited(quint64 nGeneration, int nExitCode);
 	void handleApprovalTimeout();
+	bool ensureFrontendOpen();
 	void tryOpenPendingTerminal();
 	bool startHost(const QString &strRequestId, int nColumns, int nRows);
 	void stopHost(bool bNotifyRemote, const QString &strReason);
@@ -74,6 +77,7 @@ private:
 	void writeTrace(const QString &strStage, const QString &strExtra = QString()) const;
 
 	std::unique_ptr<KTerminalHost> m_spTerminalHost;
+	std::unique_ptr<KTerminalFrontend> m_spTerminalFrontend;
 	KSessionController *m_pSessionController = nullptr;
 	QTimer *m_pApprovalTimer = nullptr;
 	KTerminalState m_state = ClosedTerminalState;
@@ -95,6 +99,7 @@ private:
 	int m_nRows = 30;
 	int m_nApprovalTimeoutSeconds = 30;
 	bool m_bChannelOpen = false;
+	bool m_bFrontendConnected = false;
 	bool m_bController = false;
 	bool m_bPermissionGranted = false;
 	bool m_bPermissionDenied = false;

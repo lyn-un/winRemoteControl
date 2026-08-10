@@ -1,34 +1,43 @@
 # 远程 PowerShell 终端
 
-远程终端是已审批 WebRTC 会话的可选附加能力。它不会绕过主连接审批，且每个新会话首次打开终端时还需要被控端单独确认。
+远程终端是已审批 WebRTC 会话的可选附加能力。它不会绕过主连接审批；每个新会话首次打开终端时，还需要被控端单独确认。
 
-## 组件
-
-- `KTerminalSessionService`：管理权限、状态、generation、单实例和输出背压。
-- `KWindowsPseudoConsole`：动态检测 ConPTY API，以当前用户权限启动 `powershell.exe -NoLogo`。
-- `KRemoteTerminalWindow`：承载专用 WebView2 页面，不与桌面视频窗口绑定。
-- xterm.js：处理 VT 转义序列、键盘输入和窗口尺寸。
+## 整体链路
 
 ```mermaid
 flowchart LR
-    UI["xterm.js"] -->|"Base64 over local Bridge"| Controller["Terminal service"]
-    Controller -->|"binary terminal DataChannel"| Controlled["Terminal service"]
-    Controlled -->|"stdin pipe"| ConPTY["Windows ConPTY"]
-    ConPTY -->|"stdout/stderr pipe"| Controlled
-    Controlled -->|"binary terminal DataChannel"| Controller
-    Controller -->|"local Bridge"| UI
+    WT["Windows Terminal (wt.exe)"] --> Relay["wrcTerminalRelay.exe"]
+    Relay -->|"当前用户命名管道"| Controller["控制端 KTerminalSessionService"]
+    Controller -->|"reliable ordered terminal DataChannel"| Controlled["被控端 KTerminalSessionService"]
+    Controlled --> ConPTY["Windows ConPTY"]
+    ConPTY --> PS["Windows PowerShell 5"]
 ```
 
-## 权限和状态
+Windows Terminal 只是控制端的原生终端界面。真正的 PowerShell 进程始终运行在被控端，由 `KWindowsPseudoConsole` 通过 ConPTY 托管。
 
-内部状态为 `Closed -> AwaitingApproval -> Opening -> Running -> Closing/Failed`。同一 generation 中一次允许后可关闭并重新打开，不重复弹出；拒绝或超时后本会话不再询问。完整重连会产生新 generation，因此必须重新审批。
+## 组件
 
-`Reconnecting` 期间 PowerShell 进程保留，但终端输入和输出发送暂停。恢复失败、终端 DataChannel 关闭或主会话结束时，Job Object 终止 PowerShell 及子进程。
+- `KTerminalSessionService`：管理终端审批、generation、单实例、断网暂停和 WebRTC 流控。
+- `KWindowsTerminalFrontend`：检测 `wt.exe` 和 Relay，创建随机命名管道与一次性 token，启动或聚焦专用 Windows Terminal 窗口。
+- `wrcTerminalRelay.exe`：无 Qt 的本地字节中继，把 Windows Terminal 的 stdin/stdout 与主程序命名管道相连，并上报终端尺寸。
+- `KWindowsPseudoConsole`：在被控端以当前用户权限启动 `powershell.exe -NoLogo`，通过 Job Object 清理进程树。
 
-## 边界
+## 本地 IPC 边界
 
-- 固定使用 Windows PowerShell 5，不选择 Shell，不保存历史。
-- 继承应用当前用户和权限，不触发 UAC，不提权。
-- 单次数据不超过 64 KiB；输入队列上限 256 KiB，输出队列上限 1 MiB。
-- 不支持终端作为文件传输、后台持久化或隐藏运行入口。
-- ConPTY 需要 Windows 10 1809 或更高版本；API 不可用时不声明 `terminal` 能力。
+- `QLocalServer` 只允许当前用户访问，每次打开使用随机管道名和 128-bit 一次性 token。
+- 只允许一个 Relay 客户端；首帧必须是 `Hello`，验证失败立即断开。
+- 本地帧类型为 `Hello / Input / Output / Resize / Close`，单帧最大 64 KiB，解码器支持拆包和粘包。
+- Relay 不连接网络、不解析命令，不记录 token、输入或输出内容。
+
+## 权限和生命周期
+
+内部状态为 `Closed -> AwaitingApproval -> Opening -> Running -> Closing/Failed`。同一 generation 中允许后，关闭并重新打开无需再次询问；完整重连会产生新 generation，因此必须重新审批。
+
+`Reconnecting` 期间保留 Windows Terminal 窗口和远端 PowerShell，但丢弃新输入。恢复失败、Terminal DataChannel 关闭或主会话结束时，命名管道会关闭，被控端 Job Object 终止 PowerShell 及子进程。用户关闭 Windows Terminal 只会停止终端，不会断开远程桌面。
+
+## 能力条件
+
+- 控制端：必须能找到 `wt.exe`，且 `wrcTerminalRelay.exe` 与主程序同目录。
+- 被控端：只需 Windows 10 1809 或更高版本的 ConPTY，不需要安装 Windows Terminal。
+- 任一端不满足本地条件时，不声明 `terminal` 能力，不影响视频、键鼠和剪贴板。
+- 不提权、不触发 UAC、不修改 Windows Terminal 配置，不启用 SSH Server 或改动防火墙。

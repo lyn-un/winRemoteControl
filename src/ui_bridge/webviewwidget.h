@@ -73,7 +73,7 @@ public slots:
 		const QString &strStatus,
 		const QString &strDeviceName,
 		const QString &strDeviceSource);
-	void sendTerminalOutput(const QByteArray &data);
+	void sendTerminalFrontendSupportChanged(bool bSupported, const QString &strReason);
 	void sendIncomingTerminalRequest(const QString &strRequestId,
 		const QString &strDeviceName,
 		const QString &strDeviceSource,
@@ -97,11 +97,9 @@ signals:
 	void connectRecentDeviceRequested(const QString &strDeviceId);
 	void removeRecentDeviceRequested(const QString &strDeviceId);
 	void openRecentDeviceTerminalRequested(const QString &strDeviceId);
+	void requestTerminalFrontendSupportRequested();
 	void respondTerminalAccessRequestRequested(const QString &strRequestId, bool bAccepted);
-	void terminalInputRequested(const QByteArray &data);
-	void terminalResizeRequested(int nColumns, int nRows);
 	void closeTerminalRequested();
-	void requestTerminalStateRequested();
 	void requestApplicationSettingsRequested();
 	void updateApplicationSettingsRequested(bool bRemoteAccessEnabled,
 		const QString &strApprovalMode,
