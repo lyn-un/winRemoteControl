@@ -166,6 +166,7 @@ private:
 	bool m_bInputChannelOpen = false;
 	bool m_bClipboardChannelOpen = false;
 	bool m_bTerminalChannelOpen = false;
+	bool m_bTerminalChannelStatePublished = false;
 	bool m_bTerminalCapabilityAvailable = false;
 	bool m_bSessionChannelOpen = false;
 	bool m_bCaptureActive = false;

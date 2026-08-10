@@ -91,12 +91,27 @@ namespace
 
 		void makeReady()
 		{
+			emitConnected();
+			emitCapabilities();
+			emitChannel(true);
+		}
+
+		void emitConnected()
+		{
 			emit sessionStateChanged(ConnectedSessionState);
+		}
+
+		void emitCapabilities()
+		{
 			KNegotiatedCapabilities capabilities;
 			capabilities.bValid = true;
 			capabilities.channels.append(QStringLiteral("terminal"));
 			emit sessionCapabilitiesChanged(capabilities);
-			emit terminalChannelChanged(true);
+		}
+
+		void emitChannel(bool bOpen)
+		{
+			emit terminalChannelChanged(bOpen);
 		}
 
 		quint64 nGeneration = 7;
@@ -147,6 +162,62 @@ namespace
 		Check(pHost->input == QByteArray("dir\r\n"),
 			QStringLiteral("terminal input reaches controlled host"));
 	}
+
+	void TestPendingOpenHandlesEveryReadyEventOrder()
+	{
+		for (int nOrder = 0; nOrder < 6; ++nOrder)
+		{
+			auto spHost = std::make_unique<KFakeTerminalHost>();
+			KFakeSessionController controller;
+			KTerminalSessionService service(std::move(spHost), &controller);
+			service.openCurrentTerminal(100, 30);
+			const int events[6][3] = {
+				{ 0, 1, 2 }, { 0, 2, 1 }, { 1, 0, 2 },
+				{ 1, 2, 0 }, { 2, 0, 1 }, { 2, 1, 0 }
+			};
+			for (int nIndex = 0; nIndex < 3; ++nIndex)
+			{
+				switch (events[nOrder][nIndex])
+				{
+				case 0: controller.emitConnected(); break;
+				case 1: controller.emitCapabilities(); break;
+				case 2: controller.emitChannel(true); break;
+				}
+			}
+			controller.emitConnected();
+			controller.emitCapabilities();
+			controller.emitChannel(true);
+			Check(controller.messages.size() == 1,
+				QStringLiteral("pending terminal request is sent once for event order %1")
+					.arg(nOrder));
+			Check(!controller.messages.isEmpty()
+				&& controller.messages.first().type == OpenRequestTerminalMessageType,
+				QStringLiteral("pending terminal request has open type for order %1")
+					.arg(nOrder));
+		}
+	}
+
+	void TestOutputBeforeAcceptedIsPreserved()
+	{
+		auto spHost = std::make_unique<KFakeTerminalHost>();
+		KFakeSessionController controller;
+		KTerminalSessionService service(std::move(spHost), &controller);
+		controller.makeReady();
+		QByteArray output;
+		QObject::connect(&service, &KTerminalSessionService::outputReady,
+			[&output](const QByteArray &data) { output.append(data); });
+		service.openCurrentTerminal();
+		emit controller.terminalDataReceived(QByteArray("PowerShell banner\r\n"));
+		Check(output.isEmpty(),
+			QStringLiteral("early terminal output waits for acceptance"));
+
+		KTerminalMessage accepted;
+		accepted.type = AcceptedTerminalMessageType;
+		accepted.strRequestId = controller.messages.first().strRequestId;
+		emit controller.terminalControlMessageReceived(accepted);
+		Check(output == QByteArray("PowerShell banner\r\n"),
+			QStringLiteral("early terminal output is flushed after acceptance"));
+	}
 }
 
 int main(int argc, char *argv[])
@@ -154,5 +225,7 @@ int main(int argc, char *argv[])
 	QCoreApplication application(argc, argv);
 	TestControllerRequestsApproval();
 	TestControlledApprovalStartsSingleHost();
+	TestPendingOpenHandlesEveryReadyEventOrder();
+	TestOutputBeforeAcceptedIsPreserved();
 	return g_nFailureCount == 0 ? 0 : 1;
 }

@@ -81,14 +81,18 @@ bool KTerminalSessionService::isHostSupported(QString *pReason) const
 
 void KTerminalSessionService::openCurrentTerminal(int nColumns, int nRows)
 {
-	if (m_state == RunningTerminalState || m_state == OpeningTerminalState)
+	if (m_state == RunningTerminalState || m_state == AwaitingApprovalTerminalState)
 	{
 		emit focusWindowRequested();
 		return;
 	}
 	if (!isSessionReady())
 	{
-		emit terminalError(QStringLiteral("当前会话尚未支持远程终端"));
+		m_bController = true;
+		m_bOpenAfterConnect = true;
+		m_nColumns = qBound(20, nColumns, 400);
+		m_nRows = qBound(5, nRows, 200);
+		setState(OpeningTerminalState, QStringLiteral("正在等待终端通道"));
 		return;
 	}
 	emit focusWindowRequested();
@@ -220,6 +224,7 @@ void KTerminalSessionService::shutdown()
 void KTerminalSessionService::handleSessionStateChanged(KSessionState state)
 {
 	m_sessionState = state;
+	tryOpenPendingTerminal();
 	if (state == ReconnectingSessionState && m_state == RunningTerminalState)
 	{
 		setState(PausedTerminalState, QStringLiteral("网络恢复中，终端输入已暂停"));
@@ -244,15 +249,8 @@ void KTerminalSessionService::handleCapabilitiesChanged(
 	const KNegotiatedCapabilities &capabilities)
 {
 	m_capabilities = capabilities;
-	if (m_bOpenAfterConnect && isSessionReady())
-	{
-		m_bOpenAfterConnect = false;
-		openCurrentTerminal(m_nColumns, m_nRows);
-	}
-	else
-	{
-		requestState();
-	}
+	tryOpenPendingTerminal();
+	requestState();
 }
 
 void KTerminalSessionService::handleControlMessage(const KTerminalMessage &message)
@@ -295,7 +293,10 @@ void KTerminalSessionService::handleControlMessage(const KTerminalMessage &messa
 	if (message.strRequestId != m_strRequestId)
 		return;
 	if (message.type == AcceptedTerminalMessageType && m_bController)
+	{
 		setState(RunningTerminalState, QStringLiteral("PowerShell 已连接"));
+		flushPendingControllerOutput();
+	}
 	else if (message.type == RejectedTerminalMessageType && m_bController)
 	{
 		setState(FailedTerminalState, QStringLiteral("被控端拒绝了终端请求"));
@@ -318,26 +319,45 @@ void KTerminalSessionService::handleControlMessage(const KTerminalMessage &messa
 
 void KTerminalSessionService::handleTerminalData(const QByteArray &data)
 {
-	if (m_state != RunningTerminalState || data.isEmpty())
+	if (data.isEmpty())
 		return;
 	if (m_bController)
 	{
+		if (m_state == AwaitingApprovalTerminalState
+			|| m_state == OpeningTerminalState)
+		{
+			enqueuePendingControllerOutput(data);
+			return;
+		}
+		if (m_state != RunningTerminalState)
+			return;
 		m_nOutputBytes += static_cast<quint64>(data.size());
 		emit outputReady(data);
 	}
-	else if (!m_spTerminalHost->writeInput(
+	else if (m_state == RunningTerminalState && !m_spTerminalHost->writeInput(
 		m_pSessionController->sessionGeneration(), data))
 		emit terminalError(QStringLiteral("PowerShell 输入队列已满"));
-	else
+	else if (m_state == RunningTerminalState)
 		m_nInputBytes += static_cast<quint64>(data.size());
 }
 
 void KTerminalSessionService::handleChannelChanged(bool bOpen)
 {
+	const bool bWasOpen = m_bChannelOpen;
 	m_bChannelOpen = bOpen;
-	if (!bOpen && m_state != ClosedTerminalState)
+	if (!bOpen && bWasOpen && m_state != ClosedTerminalState)
 		stopHost(false, QStringLiteral("terminal_channel_closed"));
+	if (bOpen)
+		tryOpenPendingTerminal();
 	requestState();
+}
+
+void KTerminalSessionService::tryOpenPendingTerminal()
+{
+	if (!m_bOpenAfterConnect || !isSessionReady())
+		return;
+	m_bOpenAfterConnect = false;
+	openCurrentTerminal(m_nColumns, m_nRows);
 }
 
 void KTerminalSessionService::handleHostOutput(
@@ -438,6 +458,8 @@ void KTerminalSessionService::stopHost(bool bNotifyRemote, const QString &strRea
 		setState(ClosedTerminalState, QStringLiteral("终端已关闭"));
 	m_outputQueue.clear();
 	m_nQueuedOutputBytes = 0;
+	m_pendingControllerOutputQueue.clear();
+	m_nPendingControllerOutputBytes = 0;
 	m_nInputBytes = 0;
 	m_nOutputBytes = 0;
 }
@@ -457,6 +479,8 @@ void KTerminalSessionService::resetSession()
 	m_nPendingPort = 0;
 	m_outputQueue.clear();
 	m_nQueuedOutputBytes = 0;
+	m_pendingControllerOutputQueue.clear();
+	m_nPendingControllerOutputBytes = 0;
 	setState(ClosedTerminalState, QStringLiteral("终端未连接"));
 }
 
@@ -491,6 +515,29 @@ void KTerminalSessionService::enqueueOutput(const QByteArray &data)
 		m_nQueuedOutputBytes += chunk.size();
 	}
 	flushOutput();
+}
+
+void KTerminalSessionService::enqueuePendingControllerOutput(const QByteArray &data)
+{
+	if (m_nPendingControllerOutputBytes + data.size() > kMaximumOutputQueueBytes)
+	{
+		emit terminalError(QStringLiteral("终端首屏输出过多，已关闭终端"));
+		stopHost(true, QStringLiteral("pending_output_overflow"));
+		return;
+	}
+	m_pendingControllerOutputQueue.enqueue(data);
+	m_nPendingControllerOutputBytes += data.size();
+}
+
+void KTerminalSessionService::flushPendingControllerOutput()
+{
+	while (!m_pendingControllerOutputQueue.isEmpty())
+	{
+		const QByteArray data = m_pendingControllerOutputQueue.dequeue();
+		m_nPendingControllerOutputBytes -= data.size();
+		m_nOutputBytes += static_cast<quint64>(data.size());
+		emit outputReady(data);
+	}
 }
 
 void KTerminalSessionService::flushOutput()

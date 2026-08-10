@@ -60,12 +60,15 @@ private:
 	void handleHostOutput(quint64 nGeneration, const QByteArray &data);
 	void handleHostExited(quint64 nGeneration, int nExitCode);
 	void handleApprovalTimeout();
+	void tryOpenPendingTerminal();
 	bool startHost(const QString &strRequestId, int nColumns, int nRows);
 	void stopHost(bool bNotifyRemote, const QString &strReason);
 	void resetSession();
 	void setState(KTerminalState state, const QString &strStatus);
 	void enqueueOutput(const QByteArray &data);
 	void flushOutput();
+	void enqueuePendingControllerOutput(const QByteArray &data);
+	void flushPendingControllerOutput();
 	void sendControl(const KTerminalMessage &message);
 	bool isSessionReady() const;
 	void writeTrace(const QString &strStage, const QString &strExtra = QString()) const;
@@ -79,6 +82,8 @@ private:
 	KNegotiatedCapabilities m_capabilities;
 	QQueue<QByteArray> m_outputQueue;
 	qsizetype m_nQueuedOutputBytes = 0;
+	QQueue<QByteArray> m_pendingControllerOutputQueue;
+	qsizetype m_nPendingControllerOutputBytes = 0;
 	quint64 m_nInputBytes = 0;
 	quint64 m_nOutputBytes = 0;
 	QString m_strRequestId;

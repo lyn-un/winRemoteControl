@@ -884,8 +884,10 @@ void KSessionCoordinator::continueStoppingTeardown()
 	m_bInputChannelOpen = false;
 	m_bClipboardChannelOpen = false;
 	m_bTerminalChannelOpen = false;
+	m_bTerminalChannelStatePublished = false;
 	m_bSessionChannelOpen = false;
 	m_bCapabilitiesReceived = false;
+	m_bTerminalChannelStatePublished = false;
 	m_negotiatedCapabilities = KNegotiatedCapabilities();
 	emit sessionCapabilitiesChanged(m_negotiatedCapabilities);
 	m_pSessionCommandDispatcher->failAll(QStringLiteral("session_stopping"));
@@ -1204,8 +1206,15 @@ void KSessionCoordinator::wirePeer()
 			if (nGeneration != m_nActivePeerGeneration)
 				return;
 			m_bTerminalChannelOpen = bOpen;
-			emit terminalChannelChanged(bOpen
-				&& m_negotiatedCapabilities.channels.contains(QStringLiteral("terminal")));
+			if (!m_bCapabilitiesReceived)
+				return;
+			const bool bAvailable = bOpen
+				&& m_negotiatedCapabilities.channels.contains(QStringLiteral("terminal"));
+			if (bAvailable || m_bTerminalChannelStatePublished)
+			{
+				m_bTerminalChannelStatePublished = bAvailable;
+				emit terminalChannelChanged(bAvailable);
+			}
 		});
 	connect(pTransport, &KRemotePeerTransport::terminalLowWatermarkReached,
 		this, [this](quint64 nGeneration)
@@ -1412,14 +1421,15 @@ void KSessionCoordinator::completeCapabilityNegotiation(
 	m_bCapabilitiesReceived = true;
 	m_pCapabilityTimer->stop();
 	m_negotiatedCapabilities = capabilities;
+	m_bTerminalChannelStatePublished = m_bTerminalChannelOpen
+		&& capabilities.channels.contains(QStringLiteral("terminal"));
 	m_spRemotePeerTransport->setInputRealtimeEnabled(capabilities.bInputRealtime);
 	if (!m_sessionStateMachine.markConnected())
 		return;
 	publishSessionState();
 	emit sessionCapabilitiesChanged(capabilities);
 	emit clipboardChannelChanged(m_bClipboardChannelOpen && capabilities.bClipboardText);
-	emit terminalChannelChanged(m_bTerminalChannelOpen
-		&& capabilities.channels.contains(QStringLiteral("terminal")));
+	emit terminalChannelChanged(m_bTerminalChannelStatePublished);
 	if (m_sessionStateMachine.role() == ControllerSessionRole)
 	{
 		if (m_bDeviceInfoRequested)
