@@ -3,6 +3,7 @@
 #include "core/terminal/terminalrelayprotocol.h"
 
 #include <atomic>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -86,61 +87,184 @@ namespace
 		return result;
 	}
 
-	void ConfigureInput(HANDLE hInput)
+	void AppendBytes(std::vector<char> *pOutput, const char *pData,
+		std::size_t nBytes, WORD nRepeatCount)
+	{
+		if (pOutput == nullptr || pData == nullptr || nBytes == 0)
+			return;
+		for (WORD nRepeat = 0; nRepeat < nRepeatCount; ++nRepeat)
+			pOutput->insert(pOutput->end(), pData, pData + nBytes);
+	}
+
+	void AppendSequence(std::vector<char> *pOutput, const char *pSequence,
+		WORD nRepeatCount)
+	{
+		AppendBytes(pOutput, pSequence, std::strlen(pSequence), nRepeatCount);
+	}
+
+	void AppendUnicodeCharacter(std::vector<char> *pOutput, wchar_t nCharacter,
+		WORD nRepeatCount, wchar_t *pPendingHighSurrogate)
+	{
+		if (pOutput == nullptr || pPendingHighSurrogate == nullptr)
+			return;
+		if (nCharacter >= 0xD800 && nCharacter <= 0xDBFF)
+		{
+			*pPendingHighSurrogate = nCharacter;
+			return;
+		}
+
+		std::array<wchar_t, 2> characters = {};
+		int nCharacterCount = 1;
+		if (nCharacter >= 0xDC00 && nCharacter <= 0xDFFF
+			&& *pPendingHighSurrogate != 0)
+		{
+			characters[0] = *pPendingHighSurrogate;
+			characters[1] = nCharacter;
+			nCharacterCount = 2;
+		}
+		else
+		{
+			characters[0] = nCharacter;
+		}
+		*pPendingHighSurrogate = 0;
+
+		const int nUtf8Bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+			characters.data(), nCharacterCount, nullptr, 0, nullptr, nullptr);
+		if (nUtf8Bytes <= 0)
+			return;
+		std::array<char, 8> utf8 = {};
+		WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, characters.data(),
+			nCharacterCount, utf8.data(), nUtf8Bytes, nullptr, nullptr);
+		AppendBytes(pOutput, utf8.data(), static_cast<std::size_t>(nUtf8Bytes), nRepeatCount);
+	}
+
+	void EncodeKeyEvent(const KEY_EVENT_RECORD &event, std::vector<char> *pOutput,
+		wchar_t *pPendingHighSurrogate)
+	{
+		if (!event.bKeyDown || pOutput == nullptr || pPendingHighSurrogate == nullptr)
+			return;
+		const WORD nRepeatCount = event.wRepeatCount == 0 ? 1 : event.wRepeatCount;
+		const bool bShift = (event.dwControlKeyState & SHIFT_PRESSED) != 0;
+		switch (event.wVirtualKeyCode)
+		{
+		case VK_BACK:
+			AppendSequence(pOutput, "\x7f", nRepeatCount);
+			return;
+		case VK_RETURN:
+			AppendSequence(pOutput, "\r", nRepeatCount);
+			return;
+		case VK_TAB:
+			AppendSequence(pOutput, bShift ? "\x1b[Z" : "\t", nRepeatCount);
+			return;
+		case VK_ESCAPE:
+			AppendSequence(pOutput, "\x1b", nRepeatCount);
+			return;
+		case VK_UP:
+			AppendSequence(pOutput, "\x1b[A", nRepeatCount);
+			return;
+		case VK_DOWN:
+			AppendSequence(pOutput, "\x1b[B", nRepeatCount);
+			return;
+		case VK_RIGHT:
+			AppendSequence(pOutput, "\x1b[C", nRepeatCount);
+			return;
+		case VK_LEFT:
+			AppendSequence(pOutput, "\x1b[D", nRepeatCount);
+			return;
+		case VK_HOME:
+			AppendSequence(pOutput, "\x1b[H", nRepeatCount);
+			return;
+		case VK_END:
+			AppendSequence(pOutput, "\x1b[F", nRepeatCount);
+			return;
+		case VK_INSERT:
+			AppendSequence(pOutput, "\x1b[2~", nRepeatCount);
+			return;
+		case VK_DELETE:
+			AppendSequence(pOutput, "\x1b[3~", nRepeatCount);
+			return;
+		case VK_PRIOR:
+			AppendSequence(pOutput, "\x1b[5~", nRepeatCount);
+			return;
+		case VK_NEXT:
+			AppendSequence(pOutput, "\x1b[6~", nRepeatCount);
+			return;
+		default:
+			break;
+		}
+		if (event.uChar.UnicodeChar == 0)
+			return;
+		const bool bAlt = (event.dwControlKeyState
+			& (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) != 0;
+		if (bAlt)
+			AppendSequence(pOutput, "\x1b", 1);
+		AppendUnicodeCharacter(pOutput, event.uChar.UnicodeChar,
+			nRepeatCount, pPendingHighSurrogate);
+	}
+
+	bool ConfigureConsoleInput(HANDLE hInput)
 	{
 		DWORD nMode = 0;
 		if (!GetConsoleMode(hInput, &nMode))
-			return;
-		nMode |= ENABLE_VIRTUAL_TERMINAL_INPUT;
-		nMode &= ~(ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT);
-		SetConsoleMode(hInput, nMode);
+			return false;
+		nMode &= ~(ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT
+			| ENABLE_ECHO_INPUT | ENABLE_VIRTUAL_TERMINAL_INPUT);
+		return SetConsoleMode(hInput, nMode) != FALSE;
 	}
 
-	void InputLoop(HANDLE hPipe, HANDLE hInput)
+	void ConsoleInputLoop(HANDLE hPipe, HANDLE hInput)
 	{
-		DWORD nConsoleMode = 0;
-		const bool bConsoleInput = GetConsoleMode(hInput, &nConsoleMode) != FALSE;
-		std::vector<char> byteBuffer(16 * 1024);
-		std::vector<wchar_t> wideBuffer(8 * 1024);
+		std::array<INPUT_RECORD, 128> records = {};
+		wchar_t nPendingHighSurrogate = 0;
 		while (g_bRunning.load())
 		{
 			DWORD nRead = 0;
-			const void *pData = nullptr;
-			DWORD nDataBytes = 0;
-			if (bConsoleInput)
+			if (!ReadConsoleInputW(hInput, records.data(),
+				static_cast<DWORD>(records.size()), &nRead) || nRead == 0)
 			{
-				if (!ReadConsoleW(hInput, wideBuffer.data(),
-					static_cast<DWORD>(wideBuffer.size()), &nRead, nullptr)
-					|| nRead == 0)
-				{
-					break;
-				}
-				const int nUtf8Bytes = WideCharToMultiByte(CP_UTF8, 0,
-					wideBuffer.data(), static_cast<int>(nRead), nullptr, 0, nullptr, nullptr);
-				if (nUtf8Bytes <= 0)
-					continue;
-				byteBuffer.resize(static_cast<std::size_t>(nUtf8Bytes));
-				WideCharToMultiByte(CP_UTF8, 0, wideBuffer.data(), static_cast<int>(nRead),
-					byteBuffer.data(), nUtf8Bytes, nullptr, nullptr);
-				pData = byteBuffer.data();
-				nDataBytes = static_cast<DWORD>(nUtf8Bytes);
+				break;
 			}
-			else
+			std::vector<char> output;
+			for (DWORD nIndex = 0; nIndex < nRead; ++nIndex)
 			{
-				if (!ReadFile(hInput, byteBuffer.data(),
-					static_cast<DWORD>(byteBuffer.size()), &nRead, nullptr) || nRead == 0)
-				{
-					break;
-				}
-				pData = byteBuffer.data();
-				nDataBytes = nRead;
+				if (records[nIndex].EventType == KEY_EVENT)
+					EncodeKeyEvent(records[nIndex].Event.KeyEvent,
+						&output, &nPendingHighSurrogate);
 			}
-			if (!SendFrame(hPipe, KTerminalRelayProtocol::InputFrameType,
-				pData, nDataBytes))
+			if (!output.empty()
+				&& !SendFrame(hPipe, KTerminalRelayProtocol::InputFrameType,
+					output.data(), static_cast<std::uint32_t>(output.size())))
 			{
 				break;
 			}
 		}
+	}
+
+	void StreamInputLoop(HANDLE hPipe, HANDLE hInput)
+	{
+		std::vector<char> input(16 * 1024);
+		while (g_bRunning.load())
+		{
+			DWORD nRead = 0;
+			if (!ReadFile(hInput, input.data(), static_cast<DWORD>(input.size()),
+				&nRead, nullptr) || nRead == 0)
+			{
+				break;
+			}
+			if (!SendFrame(hPipe, KTerminalRelayProtocol::InputFrameType,
+				input.data(), nRead))
+			{
+				break;
+			}
+		}
+	}
+
+	void InputLoop(HANDLE hPipe, HANDLE hInput)
+	{
+		if (ConfigureConsoleInput(hInput))
+			ConsoleInputLoop(hPipe, hInput);
+		else
+			StreamInputLoop(hPipe, hInput);
 		g_bRunning.store(false);
 	}
 
@@ -237,7 +361,6 @@ int wmain(int argc, wchar_t *argv[])
 
 	HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
 	HANDLE hOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-	ConfigureInput(hInput);
 	std::thread inputThread(InputLoop, hPipe, hInput);
 	std::thread resizeThread(ResizeLoop, hPipe, hOutput);
 	OutputLoop(hPipe, hOutput);
