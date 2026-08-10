@@ -38,7 +38,10 @@ int main(int argc, char *argv[])
 		QThread::msleep(10);
 	}
 	if (!terminal.writeInput(42,
-		QByteArray("Write-Output WRC_CONPTY_OK; exit\r")))
+		QByteArray("Write-Output WRC_CONPTY_OK; "
+			"Write-Output ('WRC_INPUT_CODEPAGE=' + [Console]::InputEncoding.CodePage); "
+			"Write-Output ('WRC_OUTPUT_CODEPAGE=' + [Console]::OutputEncoding.CodePage); "
+			"Write-Output (([string][char]0x4E2D) + [char]0x6587); exit\r")))
 	{
 		return 1;
 	}
@@ -59,6 +62,21 @@ int main(int argc, char *argv[])
 	if (!output.contains("WRC_CONPTY_OK"))
 	{
 		std::cerr << "Missing marker, output bytes=" << output.size() << '\n';
+		std::cerr.write(output.constData(), output.size());
+		std::cerr << '\n';
+		return 1;
+	}
+	if (!output.contains(QByteArray::fromHex("e4b8ade69687")))
+	{
+		std::cerr << "Missing UTF-8 marker, output bytes=" << output.size() << '\n';
+		std::cerr.write(output.constData(), output.size());
+		std::cerr << '\n';
+		return 1;
+	}
+	if (!output.contains("WRC_INPUT_CODEPAGE=65001")
+		|| !output.contains("WRC_OUTPUT_CODEPAGE=65001"))
+	{
+		std::cerr << "ConPTY is not configured for UTF-8, output bytes=" << output.size() << '\n';
 		std::cerr.write(output.constData(), output.size());
 		std::cerr << '\n';
 		return 1;

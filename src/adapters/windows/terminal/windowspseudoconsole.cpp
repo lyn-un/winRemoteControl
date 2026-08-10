@@ -142,7 +142,10 @@ bool KWindowsPseudoConsole::start(quint64 nGeneration,
 		return false;
 	}
 	std::wstring strCommand = std::wstring(systemDirectory.data())
-		+ L"\\WindowsPowerShell\\v1.0\\powershell.exe -NoLogo";
+		+ L"\\WindowsPowerShell\\v1.0\\powershell.exe -NoLogo -NoExit -Command "
+			L"\"[Console]::InputEncoding = [Text.UTF8Encoding]::new($false); "
+			L"[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); "
+			L"$OutputEncoding = [Text.UTF8Encoding]::new($false)\"";
 	const std::wstring strDirectory = QDir::toNativeSeparators(QDir::homePath()).toStdWString();
 	const BOOL bCreated = ::CreateProcessW(nullptr, strCommand.data(), nullptr, nullptr,
 		FALSE, EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
