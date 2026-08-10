@@ -1,7 +1,11 @@
 #include "adapters/windows/terminal/windowspseudoconsole.h"
+#include "adapters/windows/terminal/powershelllaunchpolicy.h"
+
+#include "common/sessiontracelogger.h"
 
 #include <QtCore/QDir>
 #include <QtCore/QMetaObject>
+#include <QtCore/QStandardPaths>
 
 #include <array>
 
@@ -125,44 +129,77 @@ bool KWindowsPseudoConsole::start(quint64 nGeneration,
 	startup.StartupInfo.hStdError = nullptr;
 	startup.lpAttributeList = pAttributeList;
 	PROCESS_INFORMATION process = {};
+	QString strWindowsPowerShellPath;
 	std::array<wchar_t, MAX_PATH> systemDirectory = {};
 	const UINT nSystemDirectoryLength = ::GetSystemDirectoryW(
 		systemDirectory.data(), static_cast<UINT>(systemDirectory.size()));
-	if (nSystemDirectoryLength == 0 || nSystemDirectoryLength >= systemDirectory.size())
+	if (nSystemDirectoryLength > 0 && nSystemDirectoryLength < systemDirectory.size())
 	{
-		::DeleteProcThreadAttributeList(pAttributeList);
-		::HeapFree(::GetProcessHeap(), 0, pAttributeList);
-		m_pClosePseudoConsole(m_hPseudoConsole);
-		m_hPseudoConsole = nullptr;
-		CloseNativeHandle(&hInputRead);
-		CloseNativeHandle(&hOutputWrite);
-		resetHandles();
-		if (pErrorMessage != nullptr)
-			*pErrorMessage = windowsError(QStringLiteral("Resolve PowerShell path failed"), ::GetLastError());
-		return false;
+		strWindowsPowerShellPath = QDir(QString::fromWCharArray(systemDirectory.data()))
+			.filePath(QStringLiteral("WindowsPowerShell/v1.0/powershell.exe"));
 	}
-	std::wstring strCommand = std::wstring(systemDirectory.data())
-		+ L"\\WindowsPowerShell\\v1.0\\powershell.exe -NoLogo -NoExit -Command "
-			L"\"[Console]::InputEncoding = [Text.UTF8Encoding]::new($false); "
-			L"[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); "
-			L"$OutputEncoding = [Text.UTF8Encoding]::new($false)\"";
+	const QString strProgramFiles = qEnvironmentVariable("ProgramFiles");
+	const QString strStandardPowerShell7Path = strProgramFiles.isEmpty()
+		? QString()
+		: QDir(strProgramFiles).filePath(QStringLiteral("PowerShell/7/pwsh.exe"));
+	const QVector<KPowerShellCandidate> candidates = ResolvePowerShellCandidates(
+		strStandardPowerShell7Path,
+		QStandardPaths::findExecutable(QStringLiteral("pwsh.exe")),
+		strWindowsPowerShellPath);
+	const std::wstring strArguments =
+		L"-NoLogo -NoExit -Command "
+		L"\"[Console]::InputEncoding = [Text.UTF8Encoding]::new($false); "
+		L"[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); "
+		L"$OutputEncoding = [Text.UTF8Encoding]::new($false)\"";
 	const std::wstring strDirectory = QDir::toNativeSeparators(QDir::homePath()).toStdWString();
-	const BOOL bCreated = ::CreateProcessW(nullptr, strCommand.data(), nullptr, nullptr,
-		FALSE, EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
-		nullptr, strDirectory.c_str(), &startup.StartupInfo, &process);
+	const KPowerShellStartResult startResult = StartPowerShellCandidate(candidates,
+		[&process, &startup, &strArguments, &strDirectory](
+			const KPowerShellCandidate &candidate) -> quint32
+		{
+			const std::wstring strExecutable = QDir::toNativeSeparators(
+				candidate.strExecutablePath).toStdWString();
+			std::wstring strCommand = L"\"" + strExecutable + L"\" " + strArguments;
+			PROCESS_INFORMATION attemptProcess = {};
+			const BOOL bCreated = ::CreateProcessW(strExecutable.c_str(), strCommand.data(),
+				nullptr, nullptr, FALSE,
+				EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
+				nullptr, strDirectory.c_str(), &startup.StartupInfo, &attemptProcess);
+			if (bCreated)
+			{
+				process = attemptProcess;
+				return ERROR_SUCCESS;
+			}
+			const DWORD nError = ::GetLastError();
+			if (candidate.edition == PowerShell7Edition)
+			{
+				KSessionTraceLogger::write(QStringLiteral("controlled"),
+					QStringLiteral("terminal_shell_start_failed"),
+					QStringLiteral("state"), -1,
+					QStringLiteral("edition=powershell7 error=%1").arg(nError));
+			}
+			return nError;
+		});
 	::DeleteProcThreadAttributeList(pAttributeList);
 	::HeapFree(::GetProcessHeap(), 0, pAttributeList);
 	CloseNativeHandle(&hInputRead);
 	CloseNativeHandle(&hOutputWrite);
-	if (!bCreated)
+	if (!startResult.succeeded())
 	{
 		m_pClosePseudoConsole(m_hPseudoConsole);
 		m_hPseudoConsole = nullptr;
 		resetHandles();
 		if (pErrorMessage != nullptr)
-			*pErrorMessage = windowsError(QStringLiteral("Start PowerShell failed"), ::GetLastError());
+			*pErrorMessage = windowsError(QStringLiteral("Start PowerShell failed"),
+				static_cast<DWORD>(startResult.nLastError));
 		return false;
 	}
+	const KPowerShellCandidate &selectedCandidate = candidates.at(startResult.nSelectedIndex);
+	KSessionTraceLogger::write(QStringLiteral("controlled"),
+		QStringLiteral("terminal_shell_selected"),
+		QStringLiteral("state"), -1,
+		QStringLiteral("edition=%1 fallback=%2")
+			.arg(PowerShellEditionName(selectedCandidate.edition))
+			.arg(selectedCandidate.bFallback ? 1 : 0));
 	m_hProcess = process.hProcess;
 	m_hJob = ::CreateJobObjectW(nullptr, nullptr);
 	JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {};

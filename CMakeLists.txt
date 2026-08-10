@@ -270,6 +270,8 @@ target_link_libraries(wrc_terminal_application PUBLIC
 )
 
 add_library(wrc_windows_terminal_adapter STATIC
+	src/adapters/windows/terminal/powershelllaunchpolicy.cpp
+	src/adapters/windows/terminal/powershelllaunchpolicy.h
 	src/adapters/windows/terminal/windowspseudoconsole.cpp
 	src/adapters/windows/terminal/windowspseudoconsole.h
 )
@@ -287,6 +289,7 @@ target_include_directories(wrc_windows_terminal_adapter PUBLIC
 
 target_link_libraries(wrc_windows_terminal_adapter PUBLIC
 	wrc_core
+	wrc_diagnostics
 	Qt6::Core
 )
 
@@ -900,6 +903,16 @@ if(WRC_BUILD_TESTS)
 	)
 	add_test(NAME wrc_windows_pseudoconsole_tests
 		COMMAND wrc_windows_pseudoconsole_tests)
+
+	add_executable(wrc_terminal_shell_policy_tests
+		tests/unit/powershelllaunchpolicytest.cpp
+	)
+	target_link_libraries(wrc_terminal_shell_policy_tests PRIVATE
+		wrc_windows_terminal_adapter
+		Qt6::Core
+	)
+	add_test(NAME wrc_terminal_shell_policy_tests
+		COMMAND wrc_terminal_shell_policy_tests)
 
 	add_executable(wrc_clipboard_change_filter_tests
 		tests/unit/clipboardchangefiltertest.cpp

@@ -39,6 +39,7 @@ int main(int argc, char *argv[])
 	}
 	if (!terminal.writeInput(42,
 		QByteArray("Write-Output WRC_CONPTY_OK; "
+			"Write-Output ('WRC_PS_EDITION=' + $PSVersionTable.PSEdition); "
 			"Write-Output ('WRC_INPUT_CODEPAGE=' + [Console]::InputEncoding.CodePage); "
 			"Write-Output ('WRC_OUTPUT_CODEPAGE=' + [Console]::OutputEncoding.CodePage); "
 			"Write-Output (([string][char]0x4E2D) + [char]0x6587); exit\r")))
@@ -77,6 +78,14 @@ int main(int argc, char *argv[])
 		|| !output.contains("WRC_OUTPUT_CODEPAGE=65001"))
 	{
 		std::cerr << "ConPTY is not configured for UTF-8, output bytes=" << output.size() << '\n';
+		std::cerr.write(output.constData(), output.size());
+		std::cerr << '\n';
+		return 1;
+	}
+	if (!output.contains("WRC_PS_EDITION=Core")
+		&& !output.contains("WRC_PS_EDITION=Desktop"))
+	{
+		std::cerr << "PowerShell edition marker is missing, output bytes=" << output.size() << '\n';
 		std::cerr.write(output.constData(), output.size());
 		std::cerr << '\n';
 		return 1;
