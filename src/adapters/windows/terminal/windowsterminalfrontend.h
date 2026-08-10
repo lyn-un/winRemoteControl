@@ -50,6 +50,7 @@ private:
 	QString m_strWindowName;
 	bool m_bAuthenticated = false;
 	bool m_bClosing = false;
+	bool m_bInputObserved = false;
 };
 
 #endif // _WINREMOTECONTROL_ADAPTERS_WINDOWS_TERMINAL_WINDOWSTERMINALFRONTEND_H_

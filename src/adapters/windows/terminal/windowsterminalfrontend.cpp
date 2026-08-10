@@ -208,7 +208,15 @@ void KWindowsTerminalFrontend::handleReadyRead()
 			}
 		}
 		else if (frame.nType == InputFrameType)
+		{
+			if (!m_bInputObserved)
+			{
+				m_bInputObserved = true;
+				writeTrace(QStringLiteral("terminal_relay_input"),
+					QStringLiteral("bytes=%1").arg(frame.payload.size()));
+			}
 			emit inputReady(m_nGeneration, frame.payload);
+		}
 		else if (frame.nType == ResizeFrameType
 			&& frame.payload.size() == static_cast<qsizetype>(sizeof(ResizePayload)))
 		{
@@ -298,6 +306,7 @@ void KWindowsTerminalFrontend::clearLocalState(bool bEmitClosed)
 	m_pendingOutput.clear();
 	m_nPendingOutputBytes = 0;
 	m_bAuthenticated = false;
+	m_bInputObserved = false;
 	m_strPipeName.clear();
 	m_strToken.clear();
 	m_strWindowName.clear();

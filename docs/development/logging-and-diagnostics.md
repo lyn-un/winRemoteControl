@@ -55,7 +55,7 @@ winRemoteControl.exe
 | 视频 | capture、`initial_frame_retry`、`h264_encode_no_output`、decode/render、frame coalesced summary |
 | 输入 | `input_send/recv`、`inject_begin/end`、`input_roundtrip`、`input_roundtrip_stats` |
 | 剪贴板 | channel、send/receive/apply/drop；只记录 UUID、大小、序号和原因 |
-| 终端 | `terminal_open_requested`、`terminal_approval_pending`、`terminal_started`、`terminal_exited`、`terminal_host_error`、`terminal_relay_launch/connected/focus/closed` |
+| 终端 | `terminal_open_requested`、`terminal_approval_pending`、`terminal_started`、`terminal_exited`、`terminal_host_error`、`terminal_relay_launch/connected/input/focus/closed` |
 
 排查跨机器问题时，需要分别收集两台电脑同一时间段的日志。日志不会通过 WebRTC 自动传输。
 

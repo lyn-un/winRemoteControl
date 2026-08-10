@@ -98,17 +98,45 @@ namespace
 
 	void InputLoop(HANDLE hPipe, HANDLE hInput)
 	{
-		std::vector<char> buffer(16 * 1024);
+		DWORD nConsoleMode = 0;
+		const bool bConsoleInput = GetConsoleMode(hInput, &nConsoleMode) != FALSE;
+		std::vector<char> byteBuffer(16 * 1024);
+		std::vector<wchar_t> wideBuffer(8 * 1024);
 		while (g_bRunning.load())
 		{
 			DWORD nRead = 0;
-			if (!ReadFile(hInput, buffer.data(), static_cast<DWORD>(buffer.size()),
-				&nRead, nullptr) || nRead == 0)
+			const void *pData = nullptr;
+			DWORD nDataBytes = 0;
+			if (bConsoleInput)
 			{
-				break;
+				if (!ReadConsoleW(hInput, wideBuffer.data(),
+					static_cast<DWORD>(wideBuffer.size()), &nRead, nullptr)
+					|| nRead == 0)
+				{
+					break;
+				}
+				const int nUtf8Bytes = WideCharToMultiByte(CP_UTF8, 0,
+					wideBuffer.data(), static_cast<int>(nRead), nullptr, 0, nullptr, nullptr);
+				if (nUtf8Bytes <= 0)
+					continue;
+				byteBuffer.resize(static_cast<std::size_t>(nUtf8Bytes));
+				WideCharToMultiByte(CP_UTF8, 0, wideBuffer.data(), static_cast<int>(nRead),
+					byteBuffer.data(), nUtf8Bytes, nullptr, nullptr);
+				pData = byteBuffer.data();
+				nDataBytes = static_cast<DWORD>(nUtf8Bytes);
+			}
+			else
+			{
+				if (!ReadFile(hInput, byteBuffer.data(),
+					static_cast<DWORD>(byteBuffer.size()), &nRead, nullptr) || nRead == 0)
+				{
+					break;
+				}
+				pData = byteBuffer.data();
+				nDataBytes = nRead;
 			}
 			if (!SendFrame(hPipe, KTerminalRelayProtocol::InputFrameType,
-				buffer.data(), nRead))
+				pData, nDataBytes))
 			{
 				break;
 			}
