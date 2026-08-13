@@ -22,11 +22,15 @@ public:
 
 protected:
 	void closeEvent(QCloseEvent *pEvent) override;
+	bool nativeEvent(const QByteArray &eventType, void *pMessage, qintptr *pResult) override;
 
 private:
 	void initConnections();
 	void openRemoteDesktopWindow();
 	void closeRemoteDesktopWindow();
+	void beginWindowDrag();
+	void applyWindowCorners();
+	bool handleNativeHitTest(void *pMessage, qintptr *pResult) const;
 
 	QString m_strFrontendPath;
 	KApplicationComposition *m_pComposition = nullptr;

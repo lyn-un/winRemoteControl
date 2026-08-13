@@ -495,6 +495,8 @@ void KWebViewWidget::handleWebMessage(const QString &strMessage)
 	else if (strCommand == QStringLiteral("openRecentDeviceTerminal"))
 		emit openRecentDeviceTerminalRequested(
 			document.object().value(QStringLiteral("deviceId")).toString());
+	else if (strCommand == QStringLiteral("openCurrentTerminal"))
+		emit openCurrentTerminalRequested();
 	else if (strCommand == QStringLiteral("requestTerminalFrontendSupport"))
 		emit requestTerminalFrontendSupportRequested();
 	else if (strCommand == QStringLiteral("respondTerminalAccessRequest"))
@@ -532,6 +534,12 @@ void KWebViewWidget::handleWebMessage(const QString &strMessage)
 		emit stopStreamingRequested();
 	else if (strCommand == QStringLiteral("enterDesktop"))
 		emit enterDesktopRequested();
+	else if (strCommand == QStringLiteral("minimizeMainWindow"))
+		emit minimizeMainWindowRequested();
+	else if (strCommand == QStringLiteral("closeMainWindow"))
+		emit closeMainWindowRequested();
+	else if (strCommand == QStringLiteral("beginMainWindowDrag"))
+		emit beginMainWindowDragRequested();
 	else if (strCommand == QStringLiteral("closeDesktop"))
 		emit closeDesktopRequested();
 	else if (strCommand == QStringLiteral("minimizeDesktopWindow"))

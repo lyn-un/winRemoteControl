@@ -157,6 +157,11 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		m_pRecentDeviceService, &KRecentDeviceService::removeDevice);
 	connect(pWebViewWidget, &KWebViewWidget::openRecentDeviceTerminalRequested,
 		m_pRecentDeviceService, &KRecentDeviceService::openTerminalDevice);
+	connect(pWebViewWidget, &KWebViewWidget::openCurrentTerminalRequested,
+		m_pTerminalSessionService, [this]()
+		{
+			m_pTerminalSessionService->openCurrentTerminal();
+		});
 	connect(pWebViewWidget, &KWebViewWidget::requestTerminalFrontendSupportRequested,
 		this, [this, pWebViewWidget]()
 		{

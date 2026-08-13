@@ -601,12 +601,27 @@ target_link_libraries(wrc_qt_presentation PUBLIC
 	"${WEBVIEW2_ROOT}/build/native/x64/WebView2Loader.dll.lib"
 )
 
+set(WRC_APP_ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/assets/winremotecontrol.ico")
+configure_file(
+	"${CMAKE_CURRENT_SOURCE_DIR}/src/app/winremotecontrol.rc.in"
+	"${CMAKE_CURRENT_BINARY_DIR}/generated/winremotecontrol.rc"
+	@ONLY
+)
+
 qt_add_executable(winRemoteControl WIN32
 	src/app/main.cpp
 	src/app/composition/applicationcomposition.cpp
 	src/app/composition/applicationcomposition.h
 	src/app/mainwindow.cpp
 	src/app/mainwindow.h
+	"${CMAKE_CURRENT_BINARY_DIR}/generated/winremotecontrol.rc"
+)
+
+qt_add_resources(winRemoteControl "branding"
+	PREFIX "/branding"
+	BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets"
+	FILES
+		assets/app-icon.png
 )
 
 add_dependencies(winRemoteControl wrcTerminalRelay)
@@ -647,6 +662,7 @@ target_link_libraries(winRemoteControl PRIVATE
 	Qt6::Widgets
 	Qt6::Gui
 	Qt6::Network
+	dwmapi
 	ole32
 )
 

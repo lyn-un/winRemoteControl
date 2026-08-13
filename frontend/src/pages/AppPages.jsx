@@ -15,8 +15,22 @@ function Icon({ name }) {
     settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.09A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.14.37.35.7.6 1 .3.28.68.42 1.1.4h.09v4h-.09A1.7 1.7 0 0 0 19.4 15Z" /></>,
     shield: <><path d="M12 3 5 6v5c0 4.6 2.8 8.2 7 10 4.2-1.8 7-5.4 7-10V6l-7-3Z" /><path d="m9 12 2 2 4-4" /></>,
 		terminal: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></>,
+    chevron: <path d="m8 10 4 4 4-4" />,
   };
   return <svg className="ui-icon" viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>;
+}
+
+function MainWindowControls() {
+  return (
+    <div className="main-window-controls" data-window-control>
+      <button aria-label="最小化" title="最小化" onClick={() => sendCommand("minimizeMainWindow")}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16h12" /></svg>
+      </button>
+      <button className="is-close" aria-label="关闭" title="关闭" onClick={() => sendCommand("closeMainWindow")}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17" /></svg>
+      </button>
+    </div>
+  );
 }
 
 const endpointKey = (host, port) => `${String(host || "").trim().toLowerCase()}:${Number(port) || 0}`;
@@ -31,37 +45,20 @@ function formatRecentTime(value) {
   return `${Math.floor(elapsed / 86_400_000)} 天前`;
 }
 
-function DeviceCard({ device, busy, terminalDisabled, terminalDisabledReason, onConnect, onTerminal, onRemove }) {
-  return (
-    <article className={`device-tile ${device.online ? "is-online" : "is-recent"}`}>
-      <div className="device-tile-top">
-        <span className="device-glyph"><Icon name="monitor" /></span>
-        <span className={`availability ${device.online ? "online" : "recent"}`}>
-          <i />{device.online ? "局域网在线" : "最近连接"}
-        </span>
-        {onRemove && (
-          <button className="delete-device" title="从最近连接中移除" onClick={onRemove}>
-            <Icon name="trash" />
-          </button>
-        )}
-      </div>
-      <div className="device-copy">
-        <h3>{device.name || "Windows 设备"}</h3>
-        <p>{device.host}:{device.port}</p>
-        <small>{device.online ? "可直接建立局域网连接" : formatRecentTime(device.lastConnectedAtMs)}</small>
-      </div>
-      <button className="device-connect" disabled={busy} onClick={onConnect}>
-        {busy ? "连接中" : "连接"}<Icon name="arrow" />
-      </button>
-		{onTerminal && <button className="device-terminal" disabled={busy || terminalDisabled} title={terminalDisabled ? terminalDisabledReason : "打开远程 PowerShell"} onClick={onTerminal}><Icon name="terminal" />终端</button>}
-    </article>
-  );
-}
-
-function ConnectedSession({ state, wallpaperUrl, onDisconnect }) {
+function ConnectedSession({ state, wallpaperUrl, onDisconnect, onOpenTerminal }) {
   const screenWidth = state.deviceInfo?.screenWidth || 0;
   const screenHeight = state.deviceInfo?.screenHeight || 0;
   const previewStyle = wallpaperUrl ? { backgroundImage: `url(${wallpaperUrl})` } : {};
+  const terminalState = state.terminalState?.state || "Closed";
+  const terminalBusy = ["AwaitingApproval", "Opening", "Closing"].includes(terminalState);
+  const terminalRunning = ["Running", "Paused"].includes(terminalState);
+  const terminalSupported = state.terminalFrontendSupport.supported && state.terminalState?.available;
+  const terminalReason = !state.terminalFrontendSupport.supported
+    ? state.terminalFrontendSupport.reason || "未安装 Windows Terminal"
+    : !state.terminalState?.available
+      ? "对方不支持远程终端，或终端通道尚未就绪"
+      : state.terminalState.status || "打开远程 PowerShell";
+  const terminalLabel = terminalBusy ? "终端连接中" : terminalRunning ? "聚焦终端" : "终端";
   return (
     <section className="connected-view view-enter">
       <header className="session-heading">
@@ -80,8 +77,10 @@ function ConnectedSession({ state, wallpaperUrl, onDisconnect }) {
             <span className="enter-overlay">进入桌面 <Icon name="arrow" /></span>
           </button>
           <footer>
-            <div><i /><span><strong>设备桌面入口</strong><small>点击后打开实时远程控制窗口</small></span></div>
-            <button className="primary-button" onClick={() => sendCommand("enterDesktop")}>进入桌面 <Icon name="arrow" /></button>
+            <div><i /><span><strong>设备桌面入口</strong></span></div>
+            <span className="desktop-entry-actions">
+              <button className="terminal-action-button" disabled={!terminalSupported || terminalBusy} title={terminalReason} onClick={onOpenTerminal}><Icon name="terminal" />{terminalLabel}</button>
+            </span>
           </footer>
         </article>
         <aside className="session-details">
@@ -100,36 +99,61 @@ function ConnectedSession({ state, wallpaperUrl, onDisconnect }) {
   );
 }
 
-function DevicesPage({ state, devices, busy, connectDevice, openTerminal, removeDevice }) {
+function DeviceDetails({ device, busy, onConnect }) {
+  const status = device.online ? "局域网在线" : "最近连接";
+  return (
+    <section className="connected-view device-detail-view view-enter">
+      <header className="session-heading">
+        <div>
+          <span className={`session-badge ${device.online ? "" : "is-recent"}`}><i />{status}</span>
+          <h2>{device.name || "Windows 设备"}</h2>
+          <p>{device.host}:{device.port} · {status}</p>
+        </div>
+        <div className="session-ready"><small>设备状态</small><strong>{device.online ? "ONLINE" : "RECENT"}</strong></div>
+      </header>
+      <div className="session-layout">
+        <article className="desktop-preview-card">
+          <div className="wallpaper-preview device-placeholder-preview">
+            <span className="device-mist-rings" />
+            <span className="wallpaper-placeholder"><Icon name="monitor" /><strong>设备桌面</strong><small>建立连接后获取桌面入口</small></span>
+          </div>
+          <footer>
+            <div><i className={device.online ? "" : "is-recent"} /><span><strong>{device.online ? "设备可以连接" : "曾经连接过此设备"}</strong><small>{device.online ? "局域网发现服务刚刚确认了设备状态" : formatRecentTime(device.lastConnectedAtMs)}</small></span></div>
+            <button className="primary-button" disabled={busy} onClick={onConnect}>{busy ? "正在连接" : "连接设备"}<Icon name="arrow" /></button>
+          </footer>
+        </article>
+        <aside className="session-details">
+          <span className="eyebrow">DEVICE / {device.online ? "ONLINE" : "RECENT"}</span>
+          <h3>设备详情</h3>
+          <dl>
+            <div><dt>设备名称</dt><dd>{device.name || "Windows 设备"}</dd></div>
+            <div><dt>IP 地址</dt><dd>{device.host}</dd></div>
+            <div><dt>信令端口</dt><dd>{device.port}</dd></div>
+            <div><dt>设备来源</dt><dd>{device.online ? "局域网发现" : "本机记录"}</dd></div>
+          </dl>
+          <p className="device-detail-note">连接成功后，终端与远程桌面入口会显示在左侧。</p>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function DevicesPage({ selectedDevice, busy, connectDevice }) {
+  if (selectedDevice) {
+    return <DeviceDetails device={selectedDevice} busy={busy} onConnect={() => connectDevice(selectedDevice)} />;
+  }
   return (
     <section className="content-view view-enter">
       <header className="page-heading">
         <div><span className="eyebrow">LOCAL DEVICES / 01</span><h1>我的设备</h1><p>发现同一网络中的电脑，也可以重新连接曾经使用过的设备。</p></div>
         <button className="refresh-button" onClick={() => sendCommand("refreshLanDevices")}><Icon name="refresh" />刷新设备</button>
       </header>
-      {devices.length > 0 ? (
-        <div className="device-grid">
-          {devices.map((device) => (
-            <DeviceCard
-              key={device.key}
-              device={device}
-              busy={busy}
-			  terminalDisabled={!state.terminalFrontendSupport.supported}
-			  terminalDisabledReason={state.terminalFrontendSupport.reason || "未安装 Windows Terminal"}
-              onConnect={() => connectDevice(device)}
-				onTerminal={device.recentId ? () => openTerminal(device.recentId) : null}
-              onRemove={device.recentId ? () => removeDevice(device.recentId) : null}
-            />
-          ))}
-        </div>
-      ) : (
-        <div className="empty-state">
-          <div className="discovery-orbit"><span /><span /><span /><b>W</b></div>
-          <strong>还没有发现设备</strong>
-          <p>正在搜索局域网设备。如果校园网阻止广播，可以前往“远程协助”通过 IP 地址连接。</p>
-          <button className="outline-button" onClick={() => sendCommand("refreshLanDevices")}><Icon name="refresh" />重新扫描</button>
-        </div>
-      )}
+      <div className="empty-state">
+        <div className="discovery-orbit"><span /><span /><span /><b>W</b></div>
+        <strong>从左侧选择一台设备</strong>
+        <p>设备列表会合并局域网发现和最近连接记录。未发现设备时，也可以前往“远程协助”通过 IP 地址连接。</p>
+        <button className="outline-button" onClick={() => sendCommand("refreshLanDevices")}><Icon name="refresh" />重新扫描</button>
+      </div>
     </section>
   );
 }
@@ -374,6 +398,9 @@ function TerminalRequestModal({ request }) {
 export function DashboardPage() {
   const state = useNativeState();
   const [activePage, setActivePage] = useState("devices");
+  const [devicesExpanded, setDevicesExpanded] = useState(true);
+  const [selectedEndpoint, setSelectedEndpoint] = useState("");
+  const [deviceContextMenu, setDeviceContextMenu] = useState(null);
   const numericPort = Number.parseInt(state.port, 10) || 39000;
   const remoteOnline = state.role === "controller" && state.sessionOpen;
   const awaitingApproval = state.webrtcState === "AwaitingApproval";
@@ -413,8 +440,45 @@ export function DashboardPage() {
       port: device.port,
       online: true,
     }));
-    return devices.sort((left, right) => Number(right.online) - Number(left.online));
+    return devices.sort((left, right) => {
+      const onlineOrder = Number(right.online) - Number(left.online);
+      if (onlineOrder !== 0) return onlineOrder;
+      const recentOrder = Number(right.lastConnectedAtMs || 0) - Number(left.lastConnectedAtMs || 0);
+      if (recentOrder !== 0) return recentOrder;
+      return String(left.name || left.host).localeCompare(String(right.name || right.host), "zh-CN");
+    });
   }, [state.lanDevices, state.recentDevices]);
+
+  const selectedDevice = useMemo(() => mergedDevices.find((device) => endpointKey(device.host, device.port) === selectedEndpoint) || null, [mergedDevices, selectedEndpoint]);
+
+  useEffect(() => {
+    if (!remoteOnline || !state.host) return;
+    setActivePage("devices");
+    setDevicesExpanded(true);
+    const currentEndpoint = endpointKey(state.host, state.port);
+    if (selectedEndpoint !== currentEndpoint) setSelectedEndpoint(currentEndpoint);
+  }, [remoteOnline, selectedEndpoint, state.host, state.port]);
+
+  useEffect(() => {
+    if (!selectedEndpoint || remoteOnline || selectedDevice) return;
+    setSelectedEndpoint("");
+  }, [remoteOnline, selectedDevice, selectedEndpoint]);
+
+  useEffect(() => {
+    if (!deviceContextMenu) return undefined;
+    const closeMenu = () => setDeviceContextMenu(null);
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") closeMenu();
+    };
+    window.addEventListener("pointerdown", closeMenu);
+    window.addEventListener("blur", closeMenu);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeMenu);
+      window.removeEventListener("blur", closeMenu);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [deviceContextMenu]);
 
   const beginConnection = (device) => {
     state.setHost(device.host);
@@ -428,42 +492,83 @@ export function DashboardPage() {
     if (role === "controlled") setActivePage("assist");
   };
 
+  const showDevices = () => {
+    if (state.role !== "controller") setRole("controller");
+    setActivePage("devices");
+    setDevicesExpanded((expanded) => activePage === "devices" ? !expanded : true);
+    sendCommand("requestRecentDevices");
+  };
+
+  const selectDevice = (device) => {
+    if (state.role !== "controller") setRole("controller");
+    setActivePage("devices");
+    setSelectedEndpoint(endpointKey(device.host, device.port));
+    setDeviceContextMenu(null);
+  };
+
+  const showDeviceContextMenu = (event, device) => {
+    if (!device.recentId) return;
+    event.preventDefault();
+    setDeviceContextMenu({
+      deviceId: device.recentId,
+      x: Math.min(event.clientX, window.innerWidth - 180),
+      y: Math.min(event.clientY, window.innerHeight - 54),
+    });
+  };
+
   const errors = [state.error, state.recentDeviceError, state.applicationSettingsError].filter(Boolean);
 
   return (
     <main className="dashboard-shell">
       <aside className="app-sidebar">
-        <div className="app-brand"><span>W</span><div><strong>winRemote</strong><small>Control</small></div></div>
+        <div className="app-brand"><img src="/app-icon.png" alt="" /><div><strong>winRemote</strong><small>Control</small></div></div>
         <nav className="app-nav">
-          <button className={activePage === "devices" ? "active" : ""} disabled={busy} onClick={() => { setRole("controller"); setActivePage("devices"); sendCommand("requestRecentDevices"); }}><Icon name="devices" /><span>我的设备</span></button>
+          <button className={`device-nav-toggle ${activePage === "devices" ? "active" : ""}`} aria-expanded={devicesExpanded} onClick={showDevices}><Icon name="devices" /><span>我的设备</span><span className={`nav-chevron ${devicesExpanded ? "is-expanded" : ""}`}><Icon name="chevron" /></span></button>
+          <div className={`sidebar-device-list ${devicesExpanded ? "is-expanded" : ""}`} aria-hidden={!devicesExpanded}>
+            <div className="sidebar-device-list-inner">
+              {mergedDevices.map((device) => {
+                const selected = endpointKey(device.host, device.port) === selectedEndpoint;
+                const status = device.online ? "局域网在线" : formatRecentTime(device.lastConnectedAtMs);
+                return (
+                  <button
+                    key={device.key}
+                    className={`sidebar-device-row ${selected ? "is-selected" : ""}`}
+                    title={`${device.name || "Windows 设备"}\n${device.host}:${device.port}\n${status}`}
+                    onClick={() => selectDevice(device)}
+                    onContextMenu={(event) => showDeviceContextMenu(event, device)}
+                  >
+                    <i className={device.online ? "is-online" : ""} />
+                    <span><strong>{device.name || "Windows 设备"}</strong><small>{status}</small></span>
+                  </button>
+                );
+              })}
+              {mergedDevices.length === 0 && <div className="sidebar-device-empty"><span>暂无设备</span><small>正在搜索局域网</small></div>}
+            </div>
+          </div>
           <button className={activePage === "assist" ? "active" : ""} onClick={() => setActivePage("assist")}><Icon name="assist" /><span>远程协助</span></button>
         </nav>
-        <div className="sidebar-recents">
-          <span>最近连接</span>
-          {state.recentDevices.slice(0, 3).map((device) => {
-            const online = state.lanDevices.some((item) => endpointKey(item.address, item.port) === endpointKey(device.host, device.port));
-            return <button key={device.deviceId} disabled={device.incoming || busy} title={device.incoming ? "曾控制本机，仅作为接入记录" : "再次连接"} onClick={() => beginConnection({ ...device, recentId: device.deviceId, online })}><i className={online ? "online" : ""} /><span>{device.name || device.host}</span>{device.incoming && <em>接入</em>}</button>;
-          })}
-          {state.recentDevices.length === 0 && <small>成功连接后会显示在这里</small>}
-        </div>
         <button className={`settings-nav-button ${activePage === "settings" ? "active" : ""}`} onClick={() => { setActivePage("settings"); sendCommand("requestApplicationSettings"); }}><Icon name="settings" /><span>设置</span></button>
-        <div className="sidebar-foot"><span className="privacy-dot" /><p>仅局域网连接<br /><small>连接记录保存在本机</small></p></div>
+        <div className="sidebar-foot"><span className="privacy-dot" /><p>仅局域网连接</p></div>
       </aside>
 
-      <div className="dashboard-main">
-        <header className="dashboard-topbar"><span>winRemoteControl</span><div className={`discovery-state ${state.lanDiscoveryError ? "limited" : ""}`}><i />{state.lanDiscoveryError ? "广播受限" : "局域网已就绪"}</div></header>
+      <div className={`dashboard-main ${activePage === "settings" ? "is-settings-page" : ""}`}>
+        <header className="dashboard-topbar" onPointerDown={(event) => {
+          if (event.button === 0 && event.target.closest("[data-window-control]") === null) sendCommand("beginMainWindowDrag");
+        }}>
+          <div className="dashboard-title-actions" data-window-control>
+            <div className={`discovery-state ${state.lanDiscoveryError ? "limited" : ""}`}><i />{state.lanDiscoveryError ? "广播受限" : "局域网已就绪"}</div>
+            <MainWindowControls />
+          </div>
+        </header>
         {activePage === "settings" ? (
           <SettingsPage state={state} />
         ) : remoteOnline ? (
-          <ConnectedSession state={state} wallpaperUrl={wallpaperUrl} onDisconnect={() => sendCommand("disconnectSession")} />
+          <ConnectedSession state={state} wallpaperUrl={wallpaperUrl} onDisconnect={() => sendCommand("disconnectSession")} onOpenTerminal={() => sendCommand("openCurrentTerminal")} />
         ) : activePage === "devices" ? (
           <DevicesPage
-            state={state}
-            devices={mergedDevices}
+            selectedDevice={selectedDevice}
             busy={busy}
             connectDevice={beginConnection}
-			openTerminal={(deviceId) => sendCommand("openRecentDeviceTerminal", { deviceId })}
-            removeDevice={(deviceId) => sendCommand("removeRecentDevice", { deviceId })}
           />
         ) : activePage === "assist" ? (
           <AssistPage
@@ -478,6 +583,7 @@ export function DashboardPage() {
         {state.incomingAccessRequest && <AccessRequestModal request={state.incomingAccessRequest} />}
 		{state.incomingTerminalRequest && <TerminalRequestModal request={state.incomingTerminalRequest} />}
 		{state.terminalState.state === "Running" && state.role === "controlled" && <div className="terminal-running-banner"><Icon name="terminal" /><div><strong>远程终端正在运行</strong><small>PowerShell 使用当前登录用户权限</small></div><button onClick={() => sendCommand("closeTerminal")}>停止终端</button></div>}
+        {deviceContextMenu && <div className="device-context-menu" style={{ left: deviceContextMenu.x, top: deviceContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { sendCommand("removeRecentDevice", { deviceId: deviceContextMenu.deviceId }); setDeviceContextMenu(null); }}><Icon name="trash" />移除最近记录</button></div>}
         {errors.length > 0 && <div className="error-stack">{errors.map((error, index) => <p key={`${index}-${error}`}>{error}</p>)}</div>}
       </div>
     </main>

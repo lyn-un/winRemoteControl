@@ -11,6 +11,7 @@
 
 #include <QtCore/QCommandLineParser>
 #include <QtCore/QMetaType>
+#include <QtGui/QIcon>
 #include <QtNetwork/QNetworkProxy>
 #include <QtWidgets/QApplication>
 
@@ -23,6 +24,7 @@ int main(int nArgc, char *pArgv[])
 		return -1;
 
 	QApplication app(nArgc, pArgv);
+	app.setWindowIcon(QIcon(QStringLiteral(":/branding/app-icon.png")));
 	QCommandLineParser parser;
 	parser.setApplicationDescription(QStringLiteral("winRemoteControl LAN remote desktop client"));
 	parser.addHelpOption();

@@ -97,6 +97,7 @@ signals:
 	void connectRecentDeviceRequested(const QString &strDeviceId);
 	void removeRecentDeviceRequested(const QString &strDeviceId);
 	void openRecentDeviceTerminalRequested(const QString &strDeviceId);
+	void openCurrentTerminalRequested();
 	void requestTerminalFrontendSupportRequested();
 	void respondTerminalAccessRequestRequested(const QString &strRequestId, bool bAccepted);
 	void closeTerminalRequested();
@@ -110,6 +111,9 @@ signals:
 	void startStreamingRequested();
 	void stopStreamingRequested();
 	void enterDesktopRequested();
+	void minimizeMainWindowRequested();
+	void closeMainWindowRequested();
+	void beginMainWindowDragRequested();
 	void closeDesktopRequested();
 	void minimizeDesktopWindowRequested();
 	void toggleMaximizeDesktopWindowRequested();
