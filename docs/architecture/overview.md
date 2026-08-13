@@ -31,8 +31,8 @@ flowchart TB
 ## 关键对象与所有权
 
 - `KApplicationComposition` 创建并持有进程级服务和适配器，负责应用关闭的异步收尾。
-- `KSessionCoordinator` 保留跨模块编排和主状态迁移；Peer 初始化/回滚、Access 审批、能力交换、媒体采集、可靠 Session 命令、恢复与关闭分别委托给小型 Controller。
-- `KPeerLifecycleController` 隔离 WebRTC generation、初始化回滚及异步关闭完成；`KCapabilitySessionFlow` 管理三秒能力交换与协商结果；`KMediaSessionController` 管理流配置约束和幂等 Capture 启停。
+- `KSessionCoordinator` 保留跨模块编排和主状态迁移；Peer 初始化/回滚、Access 传输与审批、能力交换、媒体采集、可靠 Session 命令、恢复与关闭分别委托给小型 Controller。
+- `KAccessSessionFlow` 管理监听、主动连接、最近端点和 Access/SDP 信令的传输边界；`KPeerLifecycleController` 隔离 WebRTC generation、初始化回滚及异步关闭完成；`KCapabilitySessionFlow` 管理三秒能力交换与协商结果；`KMediaSessionController` 管理流配置约束和幂等 Capture 启停。
 - `KSessionStateMachine` 只表达合法状态转换和权限判断，不执行外部 I/O。
 - `KRemotePeerTransport` 是核心层面向远端 Peer 的端口；`KWebRtcPeer` 是其 WebRTC 实现。
 - `KCaptureService` 管理采集线程、generation 和 FrameSink；DXGI 采集源不依赖 WebRTC。

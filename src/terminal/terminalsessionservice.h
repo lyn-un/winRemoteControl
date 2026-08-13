@@ -128,7 +128,6 @@ private:
 	bool m_bChannelOpen = false;
 	bool m_bFrontendConnected = false;
 	bool m_bController = false;
-	bool m_bPermissionGranted = false;
 	bool m_bPermissionDenied = false;
 	bool m_bOpenAfterConnect = false;
 	bool m_bHostStopPending = false;

@@ -43,10 +43,14 @@ private:
 
 	void handleTimer();
 	void rememberResult(const KTerminalMessage &result);
+	bool hasPendingResize() const;
+	void sendDeferredResize();
 
 	QHash<QString, KPendingCommand> m_pending;
 	QHash<QString, KTerminalMessage> m_recentResults;
 	QQueue<QString> m_recentResultIds;
+	KTerminalMessage m_deferredResize;
+	quint64 m_nDeferredResizeGeneration = 0;
 	QElapsedTimer m_clock;
 	class QTimer *m_pTimer = nullptr;
 	TransmitFunction m_transmitFunction;

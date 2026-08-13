@@ -3,8 +3,10 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QThread>
+#include <QtCore/QTimer>
 
 #include <iostream>
+#include <thread>
 
 int main(int argc, char *argv[])
 {
@@ -19,10 +21,18 @@ int main(int argc, char *argv[])
 
 	QByteArray output;
 	bool bStopped = false;
+	int nStoppedCount = 0;
+	int nExitedCount = 0;
 	QObject::connect(&terminal, &KTerminalHost::outputReady,
 		[&output](quint64, const QByteArray &data) { output.append(data); });
 	QObject::connect(&terminal, &KTerminalHost::stopped,
-		[&bStopped](quint64) { bStopped = true; });
+		[&bStopped, &nStoppedCount](quint64)
+		{
+			bStopped = true;
+			++nStoppedCount;
+		});
+	QObject::connect(&terminal, &KTerminalHost::processExited,
+		[&nExitedCount](quint64, int) { ++nExitedCount; });
 
 	QString strError;
 	if (!terminal.start(42, 100, 30, &strError))
@@ -88,6 +98,41 @@ int main(int argc, char *argv[])
 		std::cerr << "PowerShell edition marker is missing, output bytes=" << output.size() << '\n';
 		std::cerr.write(output.constData(), output.size());
 		std::cerr << '\n';
+		return 1;
+	}
+
+	bStopped = false;
+	output.clear();
+	if (!terminal.start(43, 100, 30, &strError))
+	{
+		std::cerr << "ConPTY restart failed: " << strError.toStdString() << '\n';
+		return 1;
+	}
+	std::thread resizeThread([&terminal]()
+		{
+			for (int nIndex = 0; nIndex < 200; ++nIndex)
+			{
+				terminal.resize(43, 80 + (nIndex % 40), 25 + (nIndex % 10));
+				QThread::msleep(1);
+			}
+		});
+	if (!terminal.writeInput(43,
+		QByteArray("Write-Output WRC_RESTART_OK; Start-Sleep -Milliseconds 100; exit\r")))
+	{
+		resizeThread.join();
+		return 1;
+	}
+	QTimer::singleShot(100, &terminal, [&terminal]() { terminal.requestStop(43); });
+	timer.restart();
+	while (!bStopped && timer.elapsed() < 5000)
+	{
+		QCoreApplication::processEvents();
+		QThread::msleep(10);
+	}
+	resizeThread.join();
+	if (!bStopped || nStoppedCount != 2 || nExitedCount != 2)
+	{
+		std::cerr << "ConPTY concurrent stop did not converge once per generation\n";
 		return 1;
 	}
 	return 0;

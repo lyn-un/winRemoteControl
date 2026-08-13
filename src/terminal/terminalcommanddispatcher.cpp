@@ -36,6 +36,13 @@ bool KTerminalCommandDispatcher::send(KTerminalMessage message, quint64 nGenerat
 		return false;
 	if (!KTerminalMessageCodec::isReliableCommand(message.type))
 		return m_transmitFunction(message);
+	if (message.type == ResizeTerminalMessageType && hasPendingResize())
+	{
+		message.strCommandId.clear();
+		m_deferredResize = message;
+		m_nDeferredResizeGeneration = nGeneration;
+		return true;
+	}
 	if (message.strCommandId.isEmpty())
 		message.strCommandId = QUuid::createUuid().toString(QUuid::WithoutBraces);
 	KPendingCommand pending;
@@ -71,6 +78,8 @@ void KTerminalCommandDispatcher::handleIncoming(
 		m_pending.erase(iterator);
 		emit commandCompleted(pending.message.type, message.strRequestId,
 			message.strCommandId, message.bSuccess, message.strErrorCode, nGeneration);
+		if (pending.message.type == ResizeTerminalMessageType)
+			sendDeferredResize();
 		return;
 	}
 	if (!KTerminalMessageCodec::isReliableCommand(message.type))
@@ -104,6 +113,8 @@ void KTerminalCommandDispatcher::clear()
 	m_pending.clear();
 	m_recentResults.clear();
 	m_recentResultIds.clear();
+	m_deferredResize = KTerminalMessage();
+	m_nDeferredResizeGeneration = 0;
 }
 
 void KTerminalCommandDispatcher::handleTimer()
@@ -135,9 +146,33 @@ void KTerminalCommandDispatcher::handleTimer()
 		m_pending.erase(iterator);
 		emit commandTimedOut(pending.message.type, pending.message.strRequestId,
 			pending.message.strCommandId, pending.nGeneration);
+		if (pending.message.type == ResizeTerminalMessageType)
+			sendDeferredResize();
 	}
 	if (m_pending.isEmpty())
 		m_pTimer->stop();
+}
+
+bool KTerminalCommandDispatcher::hasPendingResize() const
+{
+	for (auto iterator = m_pending.cbegin(); iterator != m_pending.cend(); ++iterator)
+	{
+		if (iterator->message.type == ResizeTerminalMessageType)
+			return true;
+	}
+	return false;
+}
+
+void KTerminalCommandDispatcher::sendDeferredResize()
+{
+	if (m_deferredResize.type != ResizeTerminalMessageType)
+		return;
+	const KTerminalMessage message = m_deferredResize;
+	const quint64 nGeneration = m_nDeferredResizeGeneration;
+	m_deferredResize = KTerminalMessage();
+	m_nDeferredResizeGeneration = 0;
+	QTimer::singleShot(0, this, [this, message, nGeneration]()
+		{ send(message, nGeneration); });
 }
 
 void KTerminalCommandDispatcher::rememberResult(const KTerminalMessage &result)

@@ -17,7 +17,7 @@ Windows Terminal 只是控制端的原生终端界面。真正的 PowerShell 进
 
 ## 组件
 
-- `KTerminalSessionService`：管理终端审批、generation、单实例、断网暂停和有界输入/输出队列。
+- `KTerminalSessionService`：管理终端审批、generation、单实例、断网暂停和同时受消息数、总字节数约束的输入/输出队列。
 - `KTerminalCommandDispatcher`：为有副作用的 Open、Accepted、Resize、Close、Exited 和 Error 命令提供 command ID、ACK、有限重试、超时和幂等结果缓存。
 - `KWindowsTerminalFrontend`：检测 `wt.exe` 和 Relay，创建随机命名管道与一次性 token，启动或聚焦专用 Windows Terminal 窗口。
 - `wrcTerminalRelay.exe`：无 Qt 的本地字节中继，把 Windows Terminal 的 stdin/stdout 与主程序命名管道相连，并上报终端尺寸。
@@ -29,11 +29,12 @@ Windows Terminal 只是控制端的原生终端界面。真正的 PowerShell 进
 - 只允许一个 Relay 客户端；首帧必须是 `Hello`，验证失败立即断开。
 - 本地帧类型为 `Hello / Input / Output / Resize / Close`，单帧最大 64 KiB，解码器支持拆包和粘包。
 - 帧头和 Resize payload 显式使用小端序，累计接收缓冲、待输出队列和 `QLocalSocket` 写缓冲均有上限及高低水位。
+- 主程序启动 Relay 前会持有 `wrcTerminalRelay.exe` 的只读文件句柄，并禁止写入和删除共享直到终端关闭，避免校验与启动之间被替换；正式安装目录的 ACL 仍应由安装程序配置。
 - Relay 不连接网络、不解析命令，不记录 token、输入或输出内容。
 
 ## 权限和生命周期
 
-内部状态由 `KTerminalStateMachine` 约束为 `Closed -> AwaitingApproval -> Opening -> Running -> Closing/Failed`。同一 generation 中允许后，关闭并重新打开无需再次询问；完整重连会产生新 generation，因此必须重新审批。
+内部状态由 `KTerminalStateMachine` 约束为 `Closed -> AwaitingApproval -> Opening -> Running -> Closing/Failed`。每次打开都会产生新的终端 `requestId` 并重新审批；完整重连产生新 generation 后同样必须重新审批。
 
 每个 terminal 二进制消息都带固定格式头：`magic + version + direction + requestId + sequence + payloadLength`。接收端只接受当前终端实例，拒绝旧 requestId、重复或倒序 sequence。DataChannel 背压时输入进入 256 KiB/256 条的有界队列；超过上限会明确关闭本次终端，不会在命令中间静默丢字。
 

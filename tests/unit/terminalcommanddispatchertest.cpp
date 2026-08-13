@@ -41,6 +41,16 @@ KTerminalMessage OpenCommand()
 	return message;
 }
 
+KTerminalMessage ResizeCommand(const QString &strRequestId, int nColumns)
+{
+	KTerminalMessage message;
+	message.type = ResizeTerminalMessageType;
+	message.strRequestId = strRequestId;
+	message.nColumns = nColumns;
+	message.nRows = 30;
+	return message;
+}
+
 void TestDuplicateCommandIsIdempotent()
 {
 	KTerminalCommandDispatcher dispatcher;
@@ -132,6 +142,34 @@ void TestSynchronousAckIsNotLost()
 	Check(dispatcher.send(OpenCommand(), 13), "synchronous ACK command is accepted");
 	Check(nCompletedCount == 1, "synchronous ACK is observed exactly once");
 }
+
+void TestResizeCoalescesToLatestPendingSize()
+{
+	KTerminalCommandDispatcher dispatcher;
+	QVector<KTerminalMessage> transmitted;
+	dispatcher.setTransmitFunction([&transmitted](const KTerminalMessage &message)
+		{
+			transmitted.append(message);
+			return true;
+		});
+	const QString strRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+	Check(dispatcher.send(ResizeCommand(strRequestId, 100), 15),
+		"first resize is sent");
+	Check(dispatcher.send(ResizeCommand(strRequestId, 120), 15)
+		&& dispatcher.send(ResizeCommand(strRequestId, 140), 15),
+		"later resizes are accepted while one is pending");
+	Check(transmitted.size() == 1 && transmitted.first().nColumns == 100,
+		"only one resize remains in flight");
+	KTerminalMessage result;
+	result.type = CommandResultTerminalMessageType;
+	result.strRequestId = strRequestId;
+	result.strCommandId = transmitted.first().strCommandId;
+	result.bSuccess = true;
+	dispatcher.handleIncoming(result, 15);
+	ProcessEventsFor(20);
+	Check(transmitted.size() == 2 && transmitted.last().nColumns == 140,
+		"completion sends only the latest deferred resize");
+}
 }
 
 int main(int argc, char *argv[])
@@ -141,5 +179,6 @@ int main(int argc, char *argv[])
 	TestAckLossRetriesThenTimesOut();
 	TestAckCompletesWithoutRetry();
 	TestSynchronousAckIsNotLost();
+	TestResizeCoalescesToLatestPendingSize();
 	return g_nFailureCount == 0 ? 0 : 1;
 }

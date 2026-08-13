@@ -213,6 +213,8 @@ add_library(wrc_session_application STATIC
 	src/input/inputinjector.h
 	src/session/accessapprovalcontroller.cpp
 	src/session/accessapprovalcontroller.h
+	src/session/accesssessionflow.cpp
+	src/session/accesssessionflow.h
 	src/session/capabilitysessionflow.cpp
 	src/session/capabilitysessionflow.h
 	src/session/mediasessioncontroller.cpp

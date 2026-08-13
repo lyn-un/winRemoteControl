@@ -82,6 +82,8 @@ bool KWindowsTerminalFrontend::open(
 		return false;
 	}
 	clearLocalState(false);
+	if (!lockRelayExecutable(pErrorMessage))
+		return false;
 	m_nGeneration = nGeneration;
 	m_bClosing = false;
 	m_strToken = QUuid::createUuid().toString(QUuid::WithoutBraces).remove('-');
@@ -355,6 +357,7 @@ void KWindowsTerminalFrontend::clearLocalState(bool bEmitClosed)
 	m_strPipeName.clear();
 	m_strToken.clear();
 	m_strWindowName.clear();
+	unlockRelayExecutable();
 	if (bEmitClosed)
 		emit closed(nGeneration);
 }
@@ -368,6 +371,30 @@ QString KWindowsTerminalFrontend::relayPath() const
 QString KWindowsTerminalFrontend::windowsTerminalPath() const
 {
 	return QStandardPaths::findExecutable(QStringLiteral("wt.exe"));
+}
+
+bool KWindowsTerminalFrontend::lockRelayExecutable(QString *pErrorMessage)
+{
+	unlockRelayExecutable();
+	const std::wstring strRelayPath = QDir::toNativeSeparators(relayPath()).toStdWString();
+	m_hRelayExecutable = ::CreateFileW(strRelayPath.c_str(), GENERIC_READ,
+		FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (m_hRelayExecutable != INVALID_HANDLE_VALUE)
+		return true;
+	if (pErrorMessage != nullptr)
+	{
+		*pErrorMessage = QStringLiteral("无法锁定 wrcTerminalRelay.exe（win32=%1）")
+			.arg(::GetLastError());
+	}
+	return false;
+}
+
+void KWindowsTerminalFrontend::unlockRelayExecutable()
+{
+	if (m_hRelayExecutable == INVALID_HANDLE_VALUE)
+		return;
+	::CloseHandle(m_hRelayExecutable);
+	m_hRelayExecutable = INVALID_HANDLE_VALUE;
 }
 
 void KWindowsTerminalFrontend::writeTrace(

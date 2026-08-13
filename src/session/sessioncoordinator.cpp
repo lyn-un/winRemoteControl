@@ -1,6 +1,7 @@
 #include "session/sessioncoordinator.h"
 
 #include "session/accessapprovalcontroller.h"
+#include "session/accesssessionflow.h"
 #include "session/capabilitysessionflow.h"
 #include "session/mediasessioncontroller.h"
 #include "session/peerlifecyclecontroller.h"
@@ -77,6 +78,7 @@ KSessionCoordinator::KSessionCoordinator(
 	, m_pSignaling(m_spSignalingTransport.get())
 	, m_pInputInjector(new KInputInjector(std::move(spInputInjector), this))
 	, m_pAccessApprovalController(new KAccessApprovalController(this))
+	, m_pAccessSessionFlow(new KAccessSessionFlow(m_pSignaling, this))
 	, m_pCapabilitySessionFlow(new KCapabilitySessionFlow(this))
 	, m_pMediaSessionController(new KMediaSessionController(this))
 	, m_pPeerLifecycleController(new KPeerLifecycleController(
@@ -88,9 +90,6 @@ KSessionCoordinator::KSessionCoordinator(
 	Q_ASSERT(m_spRemotePeerTransport != nullptr);
 	Q_ASSERT(m_pSignaling != nullptr);
 	initializeProtocolRoutes();
-	KAccessMessage busy;
-	busy.type = ServerBusyAccessMessageType;
-	m_pSignaling->setServerBusyMessage(KAccessMessageCodec::encode(busy));
 	initializeSessionHandlers();
 	connect(m_pAccessApprovalController, &KAccessApprovalController::timedOut,
 		this, &KSessionCoordinator::handleApprovalTimeout);
@@ -118,22 +117,22 @@ KSessionCoordinator::KSessionCoordinator(
 		this, &KSessionCoordinator::handleSessionCommandCompleted);
 	connect(m_pSessionCommandDispatcher, &KSessionCommandDispatcher::commandTimedOut,
 		this, &KSessionCoordinator::handleSessionCommandTimeout);
-	connect(m_pSignaling, &KSignalingTransport::stateChanged,
+	connect(m_pAccessSessionFlow, &KAccessSessionFlow::stateChanged,
 		this, &KSessionCoordinator::signalingChanged);
-	connect(m_pSignaling, &KSignalingTransport::signalingError,
+	connect(m_pAccessSessionFlow, &KAccessSessionFlow::signalingError,
 		this, [this](const QString &strMessage)
 		{
 			reportSessionError(SignalingSessionErrorDomain,
 				ConnectionFailedSessionErrorCode, ConnectingSessionErrorStage,
 				true, strMessage);
 		});
-	connect(m_pSignaling, &KSignalingTransport::outgoingConnectionEstablished,
+	connect(m_pAccessSessionFlow, &KAccessSessionFlow::outgoingConnectionEstablished,
 		this, &KSessionCoordinator::handleOutgoingConnectionEstablished);
-	connect(m_pSignaling, &KSignalingTransport::outgoingConnectionFailed,
+	connect(m_pAccessSessionFlow, &KAccessSessionFlow::outgoingConnectionFailed,
 		this, &KSessionCoordinator::handleOutgoingConnectionFailed);
-	connect(m_pSignaling, &KSignalingTransport::incomingConnectionEstablished,
+	connect(m_pAccessSessionFlow, &KAccessSessionFlow::incomingConnectionEstablished,
 		this, &KSessionCoordinator::handleIncomingConnectionEstablished);
-	connect(m_pSignaling, &KSignalingTransport::connectionLost,
+	connect(m_pAccessSessionFlow, &KAccessSessionFlow::connectionLost,
 		this, &KSessionCoordinator::handleSignalingConnectionLost);
 	connect(m_pInputInjector, &KInputInjector::inputError,
 		this, [this](const QString &strMessage)
@@ -168,8 +167,7 @@ bool KSessionCoordinator::matchesCurrentEndpoint(
 {
 	return m_sessionStateMachine.role() == ControllerSessionRole
 		&& m_sessionStateMachine.state() != IdleSessionState
-		&& m_strLastConnectionHost.compare(strHost, Qt::CaseInsensitive) == 0
-		&& m_nLastConnectionPort == nPort;
+		&& m_pAccessSessionFlow->matchesEndpoint(strHost, nPort);
 }
 
 void KSessionCoordinator::setTerminalCapabilitiesAvailable(
@@ -336,8 +334,7 @@ void KSessionCoordinator::setRole(const QString &strRole)
 		m_sessionStateMachine.setRole(role);
 	if (role == ControlledSessionRole)
 	{
-		m_strLastConnectionHost.clear();
-		m_nLastConnectionPort = 0;
+		m_pAccessSessionFlow->clearLastEndpoint();
 	}
 
 	emit webRtcStateChanged(QStringLiteral("Role:%1")
@@ -353,7 +350,7 @@ void KSessionCoordinator::startSignalingServer(quint16 nPort)
 			false, QStringLiteral("Cannot listen while shutdown is incomplete"));
 		return;
 	}
-	m_bSignalingConnected = false;
+	m_pAccessSessionFlow->setConnected(false);
 	if (!m_applicationSettings.bRemoteAccessEnabled)
 	{
 		reportSessionError(ConfigurationSessionErrorDomain,
@@ -385,7 +382,7 @@ void KSessionCoordinator::startSignalingServer(quint16 nPort)
 	}
 
 	QString strError;
-	if (!m_pSignaling->startServer(nPort, &strError))
+	if (!m_pAccessSessionFlow->startListening(nPort, &strError))
 	{
 		updateListeningAvailability(false);
 		m_spRemotePeerTransport->requestShutdown(m_nActivePeerGeneration);
@@ -424,9 +421,7 @@ void KSessionCoordinator::connectSignaling(const QString &strHost, quint16 nPort
 		m_nPendingPort = nPort;
 		return;
 	}
-	m_strLastConnectionHost = strTargetHost;
-	m_nLastConnectionPort = nPort;
-	m_bSignalingConnected = false;
+	m_pAccessSessionFlow->setConnected(false);
 	if (m_sessionStateMachine.state() != IdleSessionState)
 	{
 		m_pendingRequestType = ConnectPendingRequest;
@@ -435,7 +430,7 @@ void KSessionCoordinator::connectSignaling(const QString &strHost, quint16 nPort
 		finishSession(NewConnectionSessionEndReason, QString(), false, true, false);
 		return;
 	}
-	m_pSignaling->stop();
+	m_pAccessSessionFlow->stop();
 	const KPeerInitializationResult initializationResult =
 		initializePeer(ControllerSessionRole);
 	if (!initializationResult.succeeded())
@@ -448,15 +443,14 @@ void KSessionCoordinator::connectSignaling(const QString &strHost, quint16 nPort
 
 	m_sessionStateMachine.beginConnecting();
 	publishSessionState();
-	m_pSignaling->connectToHost(strTargetHost, nPort);
+	m_pAccessSessionFlow->connectToHost(strTargetHost, nPort);
 }
 
 void KSessionCoordinator::retryLastConnection()
 {
 	if (m_sessionStateMachine.role() != ControllerSessionRole
 		|| m_sessionStateMachine.state() != IdleSessionState
-		|| m_strLastConnectionHost.isEmpty()
-		|| m_nLastConnectionPort == 0)
+		|| !m_pAccessSessionFlow->hasLastEndpoint())
 	{
 		reportSessionError(ConfigurationSessionErrorDomain,
 			InvalidArgumentSessionErrorCode, ConnectingSessionErrorStage,
@@ -464,8 +458,8 @@ void KSessionCoordinator::retryLastConnection()
 		return;
 	}
 
-	const QString strHost = m_strLastConnectionHost;
-	const quint16 nPort = m_nLastConnectionPort;
+	const QString strHost = m_pAccessSessionFlow->lastHost();
+	const quint16 nPort = m_pAccessSessionFlow->lastPort();
 	connectSignaling(strHost, nPort);
 	KSessionTraceLogger::write(QStringLiteral("controller"),
 		QStringLiteral("session_reconnect_requested"),
@@ -872,7 +866,7 @@ void KSessionCoordinator::continueStoppingTeardown()
 	}
 	m_pRecoveryController->clear();
 	m_pCapabilitySessionFlow->reset();
-	m_bSignalingConnected = false;
+	m_pAccessSessionFlow->setConnected(false);
 	clearApprovalState(strReason);
 	m_bDeviceInfoRequested = false;
 	m_nInvalidSignalingMessages = 0;
@@ -932,9 +926,9 @@ void KSessionCoordinator::handleStopWatchdog(quint64 nGeneration,
 	m_strPendingHost.clear();
 	m_nPendingPort = 0;
 	if (m_stopRole == ControlledSessionRole)
-		m_pSignaling->disconnectPeer();
+		m_pAccessSessionFlow->disconnectPeer();
 	else
-		m_pSignaling->stop();
+		m_pAccessSessionFlow->stop();
 	if (!m_sessionStateMachine.markShutdownTimedOut())
 		return;
 	publishSessionState();
@@ -972,7 +966,7 @@ void KSessionCoordinator::finishStopping(quint64 nGeneration,
 	bool bListening = false;
 	if (bKeepListening && role == ControlledSessionRole)
 	{
-		m_pSignaling->disconnectPeer();
+		m_pAccessSessionFlow->disconnectPeer();
 		const KPeerInitializationResult initializationResult =
 			initializePeer(ControlledSessionRole);
 		if (initializationResult.succeeded())
@@ -984,7 +978,7 @@ void KSessionCoordinator::finishStopping(quint64 nGeneration,
 		}
 		else
 		{
-			m_pSignaling->stop();
+			m_pAccessSessionFlow->stop();
 			m_sessionStateMachine.finish(false);
 			publishSessionState();
 			reportSessionError(WebRtcSessionErrorDomain,
@@ -994,7 +988,7 @@ void KSessionCoordinator::finishStopping(quint64 nGeneration,
 	}
 	else
 	{
-		m_pSignaling->stop();
+		m_pAccessSessionFlow->stop();
 		m_sessionStateMachine.finish(false);
 		publishSessionState();
 	}
@@ -1092,9 +1086,9 @@ void KSessionCoordinator::wirePeer()
 		this, [this](quint64 nGeneration, const QString &strMessage)
 		{
 			if (nGeneration == m_nActivePeerGeneration)
-				m_pSignaling->sendMessage(strMessage);
+				m_pAccessSessionFlow->sendSignalingMessage(strMessage);
 		});
-	connect(m_pSignaling, &KSignalingTransport::messageReceived,
+	connect(m_pAccessSessionFlow, &KAccessSessionFlow::messageReceived,
 		this, &KSessionCoordinator::handleSignalingMessage);
 	connect(pTransport, &KRemotePeerTransport::stateChanged,
 		this, [this](quint64 nGeneration, const QString &strState)
@@ -1643,7 +1637,7 @@ void KSessionCoordinator::handleOutgoingConnectionEstablished()
 {
 	if (!m_sessionStateMachine.isConnecting())
 		return;
-	m_bSignalingConnected = true;
+	m_pAccessSessionFlow->setConnected(true);
 
 	if (!m_sessionStateMachine.beginAwaitingApproval())
 		return;
@@ -1668,7 +1662,7 @@ void KSessionCoordinator::handleOutgoingConnectionEstablished()
 
 void KSessionCoordinator::handleOutgoingConnectionFailed(const QString &strMessage)
 {
-	m_bSignalingConnected = false;
+	m_pAccessSessionFlow->setConnected(false);
 	if (!m_sessionStateMachine.isConnecting())
 		return;
 
@@ -1688,7 +1682,7 @@ void KSessionCoordinator::handleIncomingConnectionEstablished(
 
 	if (!m_sessionStateMachine.beginAwaitingApproval())
 		return;
-	m_bSignalingConnected = true;
+	m_pAccessSessionFlow->setConnected(true);
 	m_pAccessApprovalController->beginIncoming(strSourceAddress,
 		m_sessionStateMachine.generation(), kInitialApprovalResponseTimeoutMs);
 	updateListeningAvailability(false);
@@ -2004,7 +1998,7 @@ void KSessionCoordinator::rejectIncomingAccess(const QString &strReason, bool bN
 	m_pAccessApprovalController->stopTimeout();
 	clearApprovalState(strReason);
 	m_sessionStateMachine.rejectConnection();
-	m_pSignaling->disconnectPeer();
+	m_pAccessSessionFlow->disconnectPeer();
 	updateListeningAvailability(true, m_nListeningPort);
 	publishSessionState();
 }
@@ -2021,7 +2015,7 @@ void KSessionCoordinator::clearApprovalState(const QString &strReason)
 
 void KSessionCoordinator::sendAccessMessage(const KAccessMessage &message)
 {
-	m_pSignaling->sendMessage(KAccessMessageCodec::encode(message));
+	m_pAccessSessionFlow->sendAccessMessage(message);
 }
 
 void KSessionCoordinator::updateListeningAvailability(bool bAvailable, quint16 nPort)
@@ -2041,7 +2035,7 @@ void KSessionCoordinator::updateListeningAvailability(bool bAvailable, quint16 n
 
 void KSessionCoordinator::handleSignalingConnectionLost()
 {
-	m_bSignalingConnected = false;
+	m_pAccessSessionFlow->setConnected(false);
 	if (m_sessionStateMachine.isNegotiating())
 	{
 		finishSession(SignalingLostSessionEndReason,
@@ -2067,12 +2061,12 @@ void KSessionCoordinator::handlePeerConnectionInterrupted()
 		-1,
 		QStringLiteral("generation=%1 signalingAvailable=%2 timeoutMs=%3")
 			.arg(nGeneration)
-			.arg(m_bSignalingConnected ? 1 : 0)
+			.arg(m_pAccessSessionFlow->isConnected() ? 1 : 0)
 			.arg(kReconnectTimeoutMs));
 
 	if (m_sessionStateMachine.role() != ControllerSessionRole)
 		return;
-	if (!m_bSignalingConnected)
+	if (!m_pAccessSessionFlow->isConnected())
 	{
 		KSessionTraceLogger::write(QStringLiteral("controller"),
 			QStringLiteral("ice_restart_skipped"),

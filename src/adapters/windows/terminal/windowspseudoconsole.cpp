@@ -13,6 +13,7 @@
 namespace
 {
 	constexpr qsizetype kMaximumInputQueueBytes = 256 * 1024;
+	constexpr qsizetype kMaximumInputQueueMessages = 256;
 	constexpr DWORD kProcessStopWaitMs = 2000;
 
 	void CloseNativeHandle(HANDLE *pHandle)
@@ -241,7 +242,8 @@ bool KWindowsPseudoConsole::writeInput(quint64 nGeneration, const QByteArray &da
 		return false;
 	}
 	std::lock_guard<std::mutex> guard(m_mutex);
-	if (m_nQueuedInputBytes + data.size() > kMaximumInputQueueBytes)
+	if (static_cast<qsizetype>(m_inputQueue.size()) >= kMaximumInputQueueMessages
+		|| m_nQueuedInputBytes + data.size() > kMaximumInputQueueBytes)
 		return false;
 	m_inputQueue.push_back(data);
 	m_nQueuedInputBytes += data.size();
@@ -371,7 +373,12 @@ void KWindowsPseudoConsole::waitForProcess(quint64 nGeneration)
 {
 	if (m_hProcess == nullptr)
 		return;
-	::WaitForSingleObject(m_hProcess, INFINITE);
+	DWORD nWaitResult = WAIT_TIMEOUT;
+	while (!m_bStopping && nGeneration == m_nGeneration.load()
+		&& nWaitResult == WAIT_TIMEOUT)
+	{
+		nWaitResult = ::WaitForSingleObject(m_hProcess, 100);
+	}
 	if (!m_bStopping && nGeneration == m_nGeneration.load())
 	{
 		QMetaObject::invokeMethod(this,

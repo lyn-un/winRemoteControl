@@ -7,6 +7,8 @@
 #include <QtCore/QByteArray>
 #include <QtCore/QQueue>
 
+#include <Windows.h>
+
 class QLocalServer;
 class QLocalSocket;
 class QTimer;
@@ -39,11 +41,14 @@ private:
 	void clearLocalState(bool bEmitClosed);
 	QString relayPath() const;
 	QString windowsTerminalPath() const;
+	bool lockRelayExecutable(QString *pErrorMessage);
+	void unlockRelayExecutable();
 	void writeTrace(const QString &strStage, const QString &strExtra = QString()) const;
 
 	QLocalServer *m_pServer = nullptr;
 	QLocalSocket *m_pSocket = nullptr;
 	QTimer *m_pHandshakeTimer = nullptr;
+	HANDLE m_hRelayExecutable = INVALID_HANDLE_VALUE;
 	KTerminalRelayFrameCodec m_frameCodec;
 	QQueue<QByteArray> m_pendingOutput;
 	qsizetype m_nPendingOutputBytes = 0;

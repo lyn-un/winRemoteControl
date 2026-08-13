@@ -13,6 +13,7 @@
 namespace
 {
 	constexpr qsizetype kMaximumOutputQueueBytes = 1024 * 1024;
+	constexpr qsizetype kMaximumOutputQueueMessages = 256;
 	constexpr qsizetype kMaximumInputQueueBytes = 256 * 1024;
 	constexpr qsizetype kMaximumInputQueueMessages = 256;
 	constexpr qsizetype kOutputChunkBytes = 16 * 1024;
@@ -66,6 +67,7 @@ KTerminalSessionService::KTerminalSessionService(
 				QStringLiteral("终端控制命令超时，终端已中止"));
 		});
 	m_pApprovalTimer->setSingleShot(true);
+	m_pApprovalTimer->setTimerType(Qt::PreciseTimer);
 	m_pStopTimer->setSingleShot(true);
 	m_pStopTimer->setInterval(kHostStopTimeoutMs);
 	connect(m_pApprovalTimer, &QTimer::timeout,
@@ -132,9 +134,8 @@ KTerminalSessionService::KTerminalSessionService(
 				return;
 			writeTrace(QStringLiteral("terminal_host_error"),
 				QStringLiteral("code=%1").arg(strCode));
-			reportTerminalError(TerminalUnavailableSessionErrorCode,
-				QStringLiteral("%1: %2").arg(strCode, strTechnical));
-			failTerminal(strCode, QStringLiteral("终端运行失败"));
+			failTerminal(strCode,
+				QStringLiteral("终端运行失败：%1").arg(strTechnical));
 		});
 	if (m_spTerminalFrontend != nullptr)
 	{
@@ -284,7 +285,6 @@ void KTerminalSessionService::respondIncomingRequest(
 		writeTrace(QStringLiteral("terminal_rejected"));
 		return;
 	}
-	m_bPermissionGranted = true;
 	writeTrace(QStringLiteral("terminal_accepted"));
 	startHost(m_strRequestId, m_nColumns, m_nRows);
 }
@@ -413,8 +413,6 @@ bool KTerminalSessionService::executeControlMessage(
 		m_nLastReceivedSequence = 0;
 		m_nColumns = message.nColumns;
 		m_nRows = message.nRows;
-		if (m_bPermissionGranted)
-			return startHost(m_strRequestId, m_nColumns, m_nRows);
 		KTerminalMessage pending;
 		pending.type = ApprovalPendingTerminalMessageType;
 		pending.strRequestId = m_strRequestId;
@@ -582,8 +580,9 @@ void KTerminalSessionService::handleTerminalData(const QByteArray &data)
 			|| !m_spTerminalFrontend->writeOutput(
 				m_pSessionController->sessionGeneration(), payload))
 		{
-			reportTerminalError(TerminalUnavailableSessionErrorCode,
-				QStringLiteral("Unable to write terminal relay output"));
+			failTerminal(QStringLiteral("relay_write_failed"),
+				QStringLiteral("本地终端输出失败，终端已关闭"));
+			return;
 		}
 		emit outputReady(payload);
 	}
@@ -705,8 +704,8 @@ bool KTerminalSessionService::startHost(
 	accepted.strRequestId = strRequestId;
 	if (!sendControl(accepted))
 	{
-		m_spTerminalHost->requestStop(m_pSessionController->sessionGeneration());
 		setState(FailedTerminalState, QStringLiteral("终端启动确认发送失败"));
+		stopHost(false, QStringLiteral("accepted_send_failed"));
 		return false;
 	}
 	setState(OpeningTerminalState, QStringLiteral("等待终端启动确认"));
@@ -764,7 +763,6 @@ void KTerminalSessionService::resetSession()
 	m_capabilities = KNegotiatedCapabilities();
 	m_bChannelOpen = false;
 	m_bFrontendConnected = false;
-	m_bPermissionGranted = false;
 	m_bPermissionDenied = false;
 	m_bOpenAfterConnect = false;
 	m_strRequestId.clear();
@@ -809,7 +807,8 @@ void KTerminalSessionService::enqueueOutput(const QByteArray &data)
 	for (qsizetype nOffset = 0; nOffset < data.size(); nOffset += kOutputChunkBytes)
 	{
 		const QByteArray chunk = data.mid(nOffset, kOutputChunkBytes);
-		if (m_nQueuedOutputBytes + chunk.size() > kMaximumOutputQueueBytes)
+		if (m_outputQueue.size() >= kMaximumOutputQueueMessages
+			|| m_nQueuedOutputBytes + chunk.size() > kMaximumOutputQueueBytes)
 		{
 			failTerminal(QStringLiteral("output_overflow"),
 				QStringLiteral("终端输出过快，已关闭终端"));
@@ -823,7 +822,8 @@ void KTerminalSessionService::enqueueOutput(const QByteArray &data)
 
 void KTerminalSessionService::enqueuePendingControllerOutput(const QByteArray &data)
 {
-	if (m_nPendingControllerOutputBytes + data.size() > kMaximumOutputQueueBytes)
+	if (m_pendingControllerOutputQueue.size() >= kMaximumOutputQueueMessages
+		|| m_nPendingControllerOutputBytes + data.size() > kMaximumOutputQueueBytes)
 	{
 		failTerminal(QStringLiteral("pending_output_overflow"),
 			QStringLiteral("终端首屏输出过多，已关闭终端"));
@@ -840,8 +840,14 @@ void KTerminalSessionService::flushPendingControllerOutput()
 		const QByteArray data = m_pendingControllerOutputQueue.dequeue();
 		m_nPendingControllerOutputBytes -= data.size();
 		m_nOutputBytes += static_cast<quint64>(data.size());
-		if (m_spTerminalFrontend != nullptr)
-			m_spTerminalFrontend->writeOutput(m_pSessionController->sessionGeneration(), data);
+		if (m_spTerminalFrontend == nullptr
+			|| !m_spTerminalFrontend->writeOutput(
+				m_pSessionController->sessionGeneration(), data))
+		{
+			failTerminal(QStringLiteral("relay_write_failed"),
+				QStringLiteral("本地终端输出失败，终端已关闭"));
+			return;
+		}
 		emit outputReady(data);
 	}
 }

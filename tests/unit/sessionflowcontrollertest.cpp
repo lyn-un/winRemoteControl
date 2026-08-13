@@ -1,5 +1,8 @@
+#include "session/accesssessionflow.h"
 #include "session/capabilitysessionflow.h"
 #include "session/mediasessioncontroller.h"
+
+#include "core/transport/signalingtransport.h"
 
 #include <QtCore/QCoreApplication>
 
@@ -8,6 +11,39 @@
 namespace
 {
 int g_nFailureCount = 0;
+
+class KFakeSignalingTransport final : public KSignalingTransport
+{
+public:
+	bool startServer(quint16 nPort, QString *) override
+	{
+		nListeningPort = nPort;
+		return true;
+	}
+	void connectToHost(const QString &strHost, quint16 nPort) override
+	{
+		strConnectedHost = strHost;
+		nConnectedPort = nPort;
+	}
+	void disconnectPeer() override { ++nDisconnectCount; }
+	void stop() override { ++nStopCount; }
+	void setServerBusyMessage(const QString &strMessage) override
+	{
+		strBusyMessage = strMessage;
+	}
+	void sendMessage(const QString &strMessage) override
+	{
+		strLastMessage = strMessage;
+	}
+
+	QString strConnectedHost;
+	QString strBusyMessage;
+	QString strLastMessage;
+	quint16 nListeningPort = 0;
+	quint16 nConnectedPort = 0;
+	int nDisconnectCount = 0;
+	int nStopCount = 0;
+};
 
 void Check(bool bCondition, const char *pDescription)
 {
@@ -40,6 +76,29 @@ void TestCapabilityFlow()
 		"capability flow stores negotiated result");
 	flow.reset();
 	Check(!flow.isComplete(), "capability reset clears negotiated state");
+}
+
+void TestAccessFlowOwnsTransportBoundary()
+{
+	KFakeSignalingTransport transport;
+	KAccessSessionFlow flow(&transport);
+	Check(transport.strBusyMessage.contains(QStringLiteral("serverBusy")),
+		"access flow configures typed server busy response");
+	QString strError;
+	Check(flow.startListening(39000, &strError)
+		&& flow.listeningPort() == 39000,
+		"access flow owns listening endpoint");
+	flow.connectToHost(QStringLiteral("127.0.0.1"), 39001);
+	Check(flow.matchesEndpoint(QStringLiteral("127.0.0.1"), 39001)
+		&& flow.hasLastEndpoint(),
+		"access flow owns the last outgoing endpoint");
+	KAccessMessage request;
+	request.type = RequestAccessMessageType;
+	request.strRequestId = QStringLiteral("17698aa1-9108-405c-a0eb-dc1b78777ad4");
+	request.strDeviceName = QStringLiteral("controller");
+	flow.sendAccessMessage(request);
+	Check(transport.strLastMessage.contains(QStringLiteral("accessRequest")),
+		"access flow encodes business messages before transport");
 }
 
 void TestMediaFlow()
@@ -80,6 +139,7 @@ int main(int argc, char *argv[])
 {
 	QCoreApplication application(argc, argv);
 	TestCapabilityFlow();
+	TestAccessFlowOwnsTransportBoundary();
 	TestMediaFlow();
 	return g_nFailureCount == 0 ? 0 : 1;
 }
