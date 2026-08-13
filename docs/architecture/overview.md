@@ -31,12 +31,13 @@ flowchart TB
 ## 关键对象与所有权
 
 - `KApplicationComposition` 创建并持有进程级服务和适配器，负责应用关闭的异步收尾。
-- `KSessionCoordinator` 是会话生命周期的权威来源，协调 TCP 信令、审批、WebRTC、采集、输入与恢复。
+- `KSessionCoordinator` 保留跨模块编排和主状态迁移；Peer 初始化/回滚、Access 审批、能力交换、媒体采集、可靠 Session 命令、恢复与关闭分别委托给小型 Controller。
+- `KPeerLifecycleController` 隔离 WebRTC generation、初始化回滚及异步关闭完成；`KCapabilitySessionFlow` 管理三秒能力交换与协商结果；`KMediaSessionController` 管理流配置约束和幂等 Capture 启停。
 - `KSessionStateMachine` 只表达合法状态转换和权限判断，不执行外部 I/O。
 - `KRemotePeerTransport` 是核心层面向远端 Peer 的端口；`KWebRtcPeer` 是其 WebRTC 实现。
 - `KCaptureService` 管理采集线程、generation 和 FrameSink；DXGI 采集源不依赖 WebRTC。
 - ViewModel 和 bridge 将 C++ 状态映射给 React，不创建或拥有网络、采集对象。
-- `KTerminalSessionService` 管理终端审批、generation、流控和状态；控制端由 `KWindowsTerminalFrontend + wrcTerminalRelay.exe` 接入 Windows Terminal，被控端由 `KWindowsPseudoConsole` 托管 ConPTY/Job Object。
+- `KTerminalSessionService` 与 `KTerminalCommandDispatcher` 管理终端审批、实例序号、可靠命令、流控和状态；控制端由 `KWindowsTerminalFrontend + wrcTerminalRelay.exe` 接入 Windows Terminal，被控端由 `KWindowsPseudoConsole` 托管 ConPTY/Job Object。
 
 ## 线程模型
 

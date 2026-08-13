@@ -23,8 +23,11 @@ class IKDeviceInfoProvider;
 class IKInputInjector;
 class KInputInjector;
 class KAccessApprovalController;
+class KCapabilitySessionFlow;
+class KMediaSessionController;
 class KRecoveryController;
 class KSessionCommandDispatcher;
+class KPeerLifecycleController;
 struct KSessionCommandTransmitResult;
 class KSignalingTransport;
 class KShutdownCoordinator;
@@ -80,8 +83,9 @@ private:
 		RolePendingRequest
 	};
 	KPeerInitializationResult initializePeer(KSessionRole role);
-	void beginPeerInitializationRollback(quint64 nGeneration);
-	void handlePeerInitializationRollbackTimeout();
+	void handlePeerInitializationRollbackTimeout(quint64 nGeneration, int nTimeoutMs);
+	void handlePeerInitializationRollbackFinished(quint64 nGeneration,
+		bool bFinishedAfterTimeout);
 	void wirePeer();
 	void initializeProtocolRoutes();
 	void initializeSessionHandlers();
@@ -96,7 +100,6 @@ private:
 		const QString &strRequestId,
 		quint64 nGeneration);
 	void continueStoppingTeardown();
-	KStreamConfig constrainedStreamConfig(const KStreamConfig &config) const;
 	void finishSession(KSessionEndReason reason,
 		const QString &strDetail,
 		bool bKeepListening,
@@ -171,7 +174,6 @@ private:
 	bool m_bControllerTerminalCapabilityAvailable = false;
 	bool m_bControlledTerminalCapabilityAvailable = false;
 	bool m_bSessionChannelOpen = false;
-	bool m_bCaptureActive = false;
 	quint64 m_nLastInjectedInputSeq = 0;
 	quint64 m_nActivePeerGeneration = 0;
 	qint64 m_nLastInjectedInputMs = -1;
@@ -181,24 +183,20 @@ private:
 	quint16 m_nLastConnectionPort = 0;
 	QString m_strLastConnectionHost;
 	KApplicationSettings m_applicationSettings;
-	KAccessApprovalController *m_pAccessApprovalController = nullptr;
-	int m_nInvalidSignalingMessages = 0;
 	std::unique_ptr<IKDeviceInfoProvider> m_spDeviceInfoProvider;
 	std::unique_ptr<KRemotePeerTransport> m_spRemotePeerTransport;
 	std::unique_ptr<KSignalingTransport> m_spSignalingTransport;
+	KAccessApprovalController *m_pAccessApprovalController = nullptr;
+	KCapabilitySessionFlow *m_pCapabilitySessionFlow = nullptr;
+	KMediaSessionController *m_pMediaSessionController = nullptr;
+	KPeerLifecycleController *m_pPeerLifecycleController = nullptr;
+	int m_nInvalidSignalingMessages = 0;
 	KSignalingTransport *m_pSignaling = nullptr;
 	KInputInjector *m_pInputInjector = nullptr;
-	QTimer *m_pCapabilityTimer = nullptr;
-	QTimer *m_pPeerInitializationRollbackTimer = nullptr;
-	bool m_bPeerInitializationRollbackPending = false;
-	bool m_bPeerInitializationRollbackTimedOut = false;
-	quint64 m_nPeerInitializationRollbackGeneration = 0;
 	bool m_bStopKeepListening = false;
 	bool m_bStopReportError = false;
 	bool m_bStopRecovering = false;
 	KSessionRole m_stopRole = ControllerSessionRole;
-	KNegotiatedCapabilities m_negotiatedCapabilities;
-	bool m_bCapabilitiesReceived = false;
 	QString m_strStopReason;
 	quint64 m_nStoppingGeneration = 0;
 	QString m_strPendingEndCommandId;

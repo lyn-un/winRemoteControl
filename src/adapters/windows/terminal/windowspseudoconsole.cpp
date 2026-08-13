@@ -2,6 +2,7 @@
 #include "adapters/windows/terminal/powershelllaunchpolicy.h"
 
 #include "common/sessiontracelogger.h"
+#include "core/terminal/terminalwriteall.h"
 
 #include <QtCore/QDir>
 #include <QtCore/QMetaObject>
@@ -255,6 +256,9 @@ bool KWindowsPseudoConsole::resize(quint64 nGeneration, int nColumns, int nRows)
 	{
 		return false;
 	}
+	std::lock_guard<std::mutex> guard(m_consoleMutex);
+	if (m_hPseudoConsole == nullptr || m_bStopping)
+		return false;
 	const COORD size = { static_cast<SHORT>(nColumns), static_cast<SHORT>(nRows) };
 	return SUCCEEDED(m_pResizePseudoConsole(m_hPseudoConsole, size));
 }
@@ -331,10 +335,33 @@ void KWindowsPseudoConsole::writeInputLoop(quint64 nGeneration)
 		}
 		if (nGeneration != m_nGeneration.load())
 			break;
-		DWORD nWritten = 0;
-		if (!::WriteFile(m_hInputWrite, data.constData(), static_cast<DWORD>(data.size()),
-			&nWritten, nullptr))
+		const KTerminalWriteResult result = WriteAllTerminalData(data,
+			[this](const char *pData, qsizetype nBytes, qsizetype *pBytesWritten,
+				quint32 *pErrorCode)
+			{
+				DWORD nWritten = 0;
+				const BOOL bWritten = ::WriteFile(m_hInputWrite, pData,
+					static_cast<DWORD>(nBytes), &nWritten, nullptr);
+				*pBytesWritten = static_cast<qsizetype>(nWritten);
+				*pErrorCode = bWritten ? ERROR_SUCCESS : ::GetLastError();
+				return bWritten != FALSE;
+			},
+			[this, nGeneration]()
+			{
+				return !m_bStopping && nGeneration == m_nGeneration.load();
+			});
+		if (!result.bSucceeded && !m_bStopping
+			&& nGeneration == m_nGeneration.load())
 		{
+			const quint32 nErrorCode = result.nErrorCode;
+			QMetaObject::invokeMethod(this,
+				[this, nGeneration, nErrorCode]()
+				{
+					emit terminalError(nGeneration, QStringLiteral("write_failed"),
+						windowsError(QStringLiteral("Write ConPTY input failed"),
+							static_cast<DWORD>(nErrorCode)));
+					requestStop(nGeneration);
+				}, Qt::QueuedConnection);
 			break;
 		}
 	}
@@ -370,11 +397,7 @@ void KWindowsPseudoConsole::teardown(quint64 nGeneration)
 		::WaitForSingleObject(m_hProcess, kProcessStopWaitMs);
 	if (m_processThread.joinable())
 		m_processThread.join();
-	if (m_hPseudoConsole != nullptr)
-	{
-		m_pClosePseudoConsole(m_hPseudoConsole);
-		m_hPseudoConsole = nullptr;
-	}
+	closePseudoConsole();
 	if (m_readThread.joinable())
 		m_readThread.join();
 	CloseNativeHandle(&m_hOutputRead);
@@ -391,6 +414,15 @@ void KWindowsPseudoConsole::teardown(quint64 nGeneration)
 	m_bStopping = false;
 	emit processExited(nGeneration, static_cast<int>(nExitCode));
 	emit stopped(nGeneration);
+}
+
+void KWindowsPseudoConsole::closePseudoConsole()
+{
+	std::lock_guard<std::mutex> guard(m_consoleMutex);
+	if (m_hPseudoConsole == nullptr)
+		return;
+	m_pClosePseudoConsole(m_hPseudoConsole);
+	m_hPseudoConsole = nullptr;
 }
 
 void KWindowsPseudoConsole::resetHandles()

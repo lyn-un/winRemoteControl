@@ -1,6 +1,7 @@
 #include "adapters/signaling/tcpsignalingtransport.h"
 
 #include "common/latencytracelogger.h"
+#include "core/protocol/accessmessage.h"
 #include "core/protocol/protocolconstraints.h"
 
 #include <QtCore/QTimer>
@@ -20,6 +21,9 @@ KTcpSignalingTransport::KTcpSignalingTransport(QObject *pParent)
 	, m_pConnectTimeoutTimer(new QTimer(this))
 	, m_pReadTimeoutTimer(new QTimer(this))
 {
+	KAccessMessage busy;
+	busy.type = ServerBusyAccessMessageType;
+	m_serverBusyMessage = KAccessMessageCodec::encode(busy).toUtf8();
 	m_pConnectTimeoutTimer->setSingleShot(true);
 	m_pReadTimeoutTimer->setSingleShot(true);
 	connect(m_pConnectTimeoutTimer, &QTimer::timeout,
@@ -72,6 +76,11 @@ void KTcpSignalingTransport::connectToHost(const QString &strHost, quint16 nPort
 			.arg(nPort)
 			.arg(kConnectTimeoutMs));
 	pSocket->connectToHost(strHost, nPort);
+}
+
+void KTcpSignalingTransport::setServerBusyMessage(const QString &strMessage)
+{
+	m_serverBusyMessage = strMessage.toUtf8();
 }
 
 void KTcpSignalingTransport::disconnectPeer()
@@ -139,7 +148,9 @@ void KTcpSignalingTransport::handleNewConnection()
 	pSocket->setProxy(QNetworkProxy::NoProxy);
 	if (m_bPeerBusy || isConnected())
 	{
-		pSocket->write(QByteArrayLiteral("{\"type\":\"busy\"}\n"));
+		QByteArray response = m_serverBusyMessage;
+		response.append('\n');
+		pSocket->write(response);
 		pSocket->flush();
 		pSocket->disconnectFromHost();
 		pSocket->deleteLater();

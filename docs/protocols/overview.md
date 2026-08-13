@@ -22,6 +22,7 @@ Codec 校验版本、字段类型、UUID、数值范围和消息大小。当前 
 - `accessPending`
 - `accessAccepted`
 - `accessRejected`
+- `serverBusy`（接入槽在读取请求前已被占用时使用的统一 Envelope）
 
 审批通过前到达的 SDP/ICE 被拒绝。审批完成后，TCP 继续传递 WebRTC Offer、Answer 和 ICE Candidate；连接 generation 与 request ID 用于隔离旧消息。
 
@@ -51,7 +52,7 @@ Session DataChannel 打开后交换 `KSessionCapabilities`，包括：
 
 各通道有独立、有上限的发送队列和背压策略。输入序号用于拒绝重复或倒序事件；剪贴板使用 UUID 去重，日志不记录正文。
 
-终端控制消息通过 `session` DataChannel 传输，包括申请、审批、尺寸、关闭、退出和错误；终端字节流不经过 JSON。单次二进制消息最大 64 KiB，实际输出按 16 KiB 分块。`terminal` 是可选能力，没有交集时不影响桌面、输入和剪贴板。
+终端控制消息通过 `session` DataChannel 传输，包括申请、审批、尺寸、关闭、退出和结构化错误；有副作用的命令具有 command ID、ACK、最多一次重试及幂等结果缓存。终端字节流不经过 JSON，每帧显式携带当前 terminal requestId 和单调 sequence；旧实例、重复和倒序数据会被拒绝。单帧总长最大 64 KiB，实际正文按 16 KiB 分块。`terminal` 是可选能力，没有交集时不影响桌面、输入和剪贴板。
 
 ## 安全与兼容边界
 

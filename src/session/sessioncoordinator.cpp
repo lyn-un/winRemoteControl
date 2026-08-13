@@ -1,6 +1,9 @@
 #include "session/sessioncoordinator.h"
 
 #include "session/accessapprovalcontroller.h"
+#include "session/capabilitysessionflow.h"
+#include "session/mediasessioncontroller.h"
+#include "session/peerlifecyclecontroller.h"
 #include "session/recoverycontroller.h"
 #include "session/sessioncommanddispatcher.h"
 #include "session/shutdowncoordinator.h"
@@ -27,7 +30,6 @@ namespace
 	constexpr int kReconnectTimeoutMs = 10000;
 	constexpr int kInitialApprovalResponseTimeoutMs = 5000;
 	constexpr int kApprovalResponseGraceMs = 5000;
-	constexpr int kPeerInitializationRollbackTimeoutMs = 3000;
 
 	static QString roleToString(KSessionRole role)
 	{
@@ -75,20 +77,21 @@ KSessionCoordinator::KSessionCoordinator(
 	, m_pSignaling(m_spSignalingTransport.get())
 	, m_pInputInjector(new KInputInjector(std::move(spInputInjector), this))
 	, m_pAccessApprovalController(new KAccessApprovalController(this))
+	, m_pCapabilitySessionFlow(new KCapabilitySessionFlow(this))
+	, m_pMediaSessionController(new KMediaSessionController(this))
+	, m_pPeerLifecycleController(new KPeerLifecycleController(
+		m_spRemotePeerTransport.get(), this))
 	, m_pSessionCommandDispatcher(new KSessionCommandDispatcher(this))
 	, m_pRecoveryController(new KRecoveryController(this))
 	, m_pShutdownCoordinator(new KShutdownCoordinator(this))
-	, m_pCapabilityTimer(new QTimer(this))
-	, m_pPeerInitializationRollbackTimer(new QTimer(this))
 {
 	Q_ASSERT(m_spRemotePeerTransport != nullptr);
 	Q_ASSERT(m_pSignaling != nullptr);
 	initializeProtocolRoutes();
+	KAccessMessage busy;
+	busy.type = ServerBusyAccessMessageType;
+	m_pSignaling->setServerBusyMessage(KAccessMessageCodec::encode(busy));
 	initializeSessionHandlers();
-	m_pCapabilityTimer->setSingleShot(true);
-	m_pPeerInitializationRollbackTimer->setSingleShot(true);
-	m_pPeerInitializationRollbackTimer->setInterval(
-		kPeerInitializationRollbackTimeoutMs);
 	connect(m_pAccessApprovalController, &KAccessApprovalController::timedOut,
 		this, &KSessionCoordinator::handleApprovalTimeout);
 	connect(m_pRecoveryController, &KRecoveryController::timedOut,
@@ -97,10 +100,18 @@ KSessionCoordinator::KSessionCoordinator(
 		this, &KSessionCoordinator::finishStopping);
 	connect(m_pShutdownCoordinator, &KShutdownCoordinator::watchdogExpired,
 		this, &KSessionCoordinator::handleStopWatchdog);
-	connect(m_pCapabilityTimer, &QTimer::timeout,
+	connect(m_pCapabilitySessionFlow, &KCapabilitySessionFlow::timedOut,
 		this, &KSessionCoordinator::handleCapabilityTimeout);
-	connect(m_pPeerInitializationRollbackTimer, &QTimer::timeout,
+	connect(m_pMediaSessionController, &KMediaSessionController::startCaptureRequested,
+		this, &KSessionCoordinator::startCaptureRequested);
+	connect(m_pMediaSessionController, &KMediaSessionController::stopCaptureRequested,
+		this, &KSessionCoordinator::stopCaptureRequested);
+	connect(m_pPeerLifecycleController, &KPeerLifecycleController::rollbackTimeout,
 		this, &KSessionCoordinator::handlePeerInitializationRollbackTimeout);
+	connect(m_pPeerLifecycleController, &KPeerLifecycleController::rollbackFinished,
+		this, &KSessionCoordinator::handlePeerInitializationRollbackFinished);
+	connect(m_pPeerLifecycleController, &KPeerLifecycleController::peerShutdownFinished,
+		this, &KSessionCoordinator::handlePeerShutdownFinished);
 	m_pSessionCommandDispatcher->setTransmitFunction(
 		[this](const KSessionMessage &message) { return transmitSessionMessage(message); });
 	connect(m_pSessionCommandDispatcher, &KSessionCommandDispatcher::commandCompleted,
@@ -229,7 +240,8 @@ void KSessionCoordinator::initializeProtocolRoutes()
 	m_protocolRouter.registerHandler(SignalingProtocolChannel,
 		KAccessMessageCodec::typeName(RejectedAccessMessageType),
 		eitherAwaitingApproval, accessHandler);
-	m_protocolRouter.registerHandler(SignalingProtocolChannel, QStringLiteral("busy"),
+	m_protocolRouter.registerHandler(SignalingProtocolChannel,
+		KAccessMessageCodec::typeName(ServerBusyAccessMessageType),
 		controllerAwaitingApproval,
 		[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
 		{ return handleBusyEnvelope(envelope); });
@@ -306,7 +318,7 @@ void KSessionCoordinator::setRole(const QString &strRole)
 	KSessionRole role;
 	if (!KSessionStateMachine::roleFromString(strRole, &role))
 		return;
-	if (m_bPeerInitializationRollbackPending)
+	if (m_pPeerLifecycleController->rollbackPending())
 	{
 		m_pendingRequestType = RolePendingRequest;
 		m_pendingRole = role;
@@ -349,7 +361,7 @@ void KSessionCoordinator::startSignalingServer(quint16 nPort)
 			false, QStringLiteral("Remote access is disabled"));
 		return;
 	}
-	if (m_bPeerInitializationRollbackPending)
+	if (m_pPeerLifecycleController->rollbackPending())
 	{
 		m_pendingRequestType = ListenPendingRequest;
 		m_nPendingPort = nPort;
@@ -376,7 +388,6 @@ void KSessionCoordinator::startSignalingServer(quint16 nPort)
 	if (!m_pSignaling->startServer(nPort, &strError))
 	{
 		updateListeningAvailability(false);
-		beginPeerInitializationRollback(m_nActivePeerGeneration);
 		m_spRemotePeerTransport->requestShutdown(m_nActivePeerGeneration);
 		reportSessionError(SignalingSessionErrorDomain,
 			ConnectionFailedSessionErrorCode, ListeningSessionErrorStage,
@@ -406,7 +417,7 @@ void KSessionCoordinator::connectSignaling(const QString &strHost, quint16 nPort
 			false, QStringLiteral("Invalid controlled endpoint"));
 		return;
 	}
-	if (m_bPeerInitializationRollbackPending)
+	if (m_pPeerLifecycleController->rollbackPending())
 	{
 		m_pendingRequestType = ConnectPendingRequest;
 		m_strPendingHost = strTargetHost;
@@ -468,7 +479,7 @@ void KSessionCoordinator::disconnectSession()
 	m_pendingRequestType = NoPendingRequest;
 	m_strPendingHost.clear();
 	m_nPendingPort = 0;
-	if (m_bPeerInitializationRollbackPending)
+	if (m_pPeerLifecycleController->rollbackPending())
 		return;
 	finishSession(LocalDisconnectSessionEndReason, QString(), false, true, false);
 }
@@ -532,7 +543,7 @@ void KSessionCoordinator::enterRemoteDesktop(const KStreamConfig &config)
 			.arg(config.nBitrateKbps));
 	KSessionMessage message;
 	message.type = StartStreamingSessionMessageType;
-	message.streamConfig = constrainedStreamConfig(config);
+	message.streamConfig = m_pMediaSessionController->constrainedConfig(config);
 	message.bHasStreamConfig = true;
 	sendSessionMessage(message);
 	m_sessionStateMachine.beginStreaming();
@@ -547,8 +558,7 @@ void KSessionCoordinator::leaveRemoteDesktop()
 	message.type = StopStreamingSessionMessageType;
 	sendSessionMessage(message);
 	m_sessionStateMachine.stopStreaming();
-	emit stopCaptureRequested(m_sessionStateMachine.generation());
-	m_bCaptureActive = false;
+	m_pMediaSessionController->stopCapture(m_sessionStateMachine.generation());
 	publishSessionState();
 }
 
@@ -564,8 +574,7 @@ void KSessionCoordinator::startStreaming()
 	if (!m_bSessionChannelOpen || !m_sessionStateMachine.canStartControlledStreaming())
 		return;
 
-	emit startCaptureRequested(m_sessionStateMachine.generation());
-	m_bCaptureActive = true;
+	m_pMediaSessionController->startCapture(m_sessionStateMachine.generation());
 	m_sessionStateMachine.beginStreaming();
 	publishSessionState();
 }
@@ -616,8 +625,9 @@ void KSessionCoordinator::sendClipboardMessage(const KClipboardMessage &message)
 
 bool KSessionCoordinator::sendTerminalControlMessage(const KTerminalMessage &message)
 {
-	if (!m_bCapabilitiesReceived
-		|| !m_negotiatedCapabilities.channels.contains(QStringLiteral("terminal")))
+	if (!m_pCapabilitySessionFlow->isComplete()
+		|| !m_pCapabilitySessionFlow->negotiatedCapabilities().channels.contains(
+			QStringLiteral("terminal")))
 	{
 		return false;
 	}
@@ -628,7 +638,8 @@ bool KSessionCoordinator::sendTerminalControlMessage(const KTerminalMessage &mes
 bool KSessionCoordinator::sendTerminalData(const QByteArray &data)
 {
 	if (!m_bTerminalChannelOpen
-		|| !m_negotiatedCapabilities.channels.contains(QStringLiteral("terminal")))
+		|| !m_pCapabilitySessionFlow->negotiatedCapabilities().channels.contains(
+			QStringLiteral("terminal")))
 	{
 		return false;
 	}
@@ -765,27 +776,8 @@ void KSessionCoordinator::sendStreamConfig(const KStreamConfig &config)
 		return;
 	KSessionMessage message;
 	message.type = StreamConfigSessionMessageType;
-	message.streamConfig = constrainedStreamConfig(config);
+	message.streamConfig = m_pMediaSessionController->constrainedConfig(config);
 	sendSessionMessage(message);
-}
-
-KStreamConfig KSessionCoordinator::constrainedStreamConfig(const KStreamConfig &config) const
-{
-	KStreamConfig result = config;
-	if (m_negotiatedCapabilities.bValid)
-	{
-		if (result.nWidth > 0)
-			result.nWidth = std::min(result.nWidth,
-				m_negotiatedCapabilities.nMaximumWidth);
-		if (result.nHeight > 0)
-			result.nHeight = std::min(result.nHeight,
-				m_negotiatedCapabilities.nMaximumHeight);
-		result.nFps = std::min(result.nFps,
-			m_negotiatedCapabilities.nMaximumFps);
-		result.nBitrateKbps = std::min(result.nBitrateKbps,
-			m_negotiatedCapabilities.nMaximumBitrateKbps);
-	}
-	return result;
 }
 
 void KSessionCoordinator::handleCaptureFailure()
@@ -879,7 +871,7 @@ void KSessionCoordinator::continueStoppingTeardown()
 				.arg(m_pRecoveryController->elapsedMs()));
 	}
 	m_pRecoveryController->clear();
-	m_pCapabilityTimer->stop();
+	m_pCapabilitySessionFlow->reset();
 	m_bSignalingConnected = false;
 	clearApprovalState(strReason);
 	m_bDeviceInfoRequested = false;
@@ -889,18 +881,16 @@ void KSessionCoordinator::continueStoppingTeardown()
 	m_bTerminalChannelOpen = false;
 	m_bTerminalChannelStatePublished = false;
 	m_bSessionChannelOpen = false;
-	m_bCapabilitiesReceived = false;
 	m_bTerminalChannelStatePublished = false;
-	m_negotiatedCapabilities = KNegotiatedCapabilities();
-	emit sessionCapabilitiesChanged(m_negotiatedCapabilities);
+	emit sessionCapabilitiesChanged(KNegotiatedCapabilities());
 	m_pSessionCommandDispatcher->failAll(QStringLiteral("session_stopping"));
-	m_pShutdownCoordinator->begin(nGeneration, m_bCaptureActive, true, 3000);
-	if (m_bCaptureActive)
-		emit stopCaptureRequested(nGeneration);
-	m_bCaptureActive = false;
+	m_pShutdownCoordinator->begin(nGeneration,
+		m_pMediaSessionController->isCaptureActive(), true, 3000);
+	m_pMediaSessionController->stopCapture(nGeneration);
+	m_pMediaSessionController->reset();
 	emit sessionChannelChanged(false);
 	emit networkStatsReady(KNetworkStats());
-	m_spRemotePeerTransport->requestShutdown(nGeneration);
+	m_pPeerLifecycleController->requestShutdown(nGeneration);
 }
 
 void KSessionCoordinator::handleCaptureShutdownFinished(quint64 nGeneration)
@@ -913,29 +903,6 @@ void KSessionCoordinator::handleCaptureShutdownFinished(quint64 nGeneration)
 
 void KSessionCoordinator::handlePeerShutdownFinished(quint64 nGeneration)
 {
-	if (m_bPeerInitializationRollbackPending
-		&& nGeneration == m_nPeerInitializationRollbackGeneration)
-	{
-		m_pPeerInitializationRollbackTimer->stop();
-		const bool bTimedOut = m_bPeerInitializationRollbackTimedOut;
-		m_bPeerInitializationRollbackPending = false;
-		m_bPeerInitializationRollbackTimedOut = false;
-		m_nPeerInitializationRollbackGeneration = 0;
-		if (bTimedOut && m_sessionStateMachine.isShutdownTimedOut())
-		{
-			m_sessionStateMachine.finish(false);
-			publishSessionState();
-		}
-		KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
-			QStringLiteral("peer_initialization_rollback"),
-			QStringLiteral("completed"), -1,
-			QStringLiteral("generation=%1 afterTimeout=%2")
-				.arg(nGeneration)
-				.arg(bTimedOut ? 1 : 0));
-		if (!bTimedOut)
-			executePendingRequest();
-		return;
-	}
 	if (nGeneration != m_nStoppingGeneration
 		|| !m_sessionStateMachine.canCompleteShutdown())
 		return;
@@ -1051,7 +1018,7 @@ void KSessionCoordinator::finishStopping(quint64 nGeneration,
 
 void KSessionCoordinator::executePendingRequest()
 {
-	if (m_bPeerInitializationRollbackPending)
+	if (m_pPeerLifecycleController->rollbackPending())
 		return;
 	const PendingRequestType requestType = m_pendingRequestType;
 	const QString strHost = m_strPendingHost;
@@ -1078,36 +1045,32 @@ void KSessionCoordinator::resetInputTraceState()
 KPeerInitializationResult KSessionCoordinator::initializePeer(KSessionRole role)
 {
 	m_bDeviceInfoRequested = false;
-	++m_nActivePeerGeneration;
-	const KPeerInitializationResult result =
-		m_spRemotePeerTransport->initialize(role, m_nActivePeerGeneration);
-	if (result.status == RollbackPendingPeerInitializationStatus)
-		beginPeerInitializationRollback(m_nActivePeerGeneration);
+	const KPeerInitializationResult result = m_pPeerLifecycleController->initialize(role);
+	m_nActivePeerGeneration = m_pPeerLifecycleController->generation();
 	return result;
 }
 
-void KSessionCoordinator::beginPeerInitializationRollback(quint64 nGeneration)
+void KSessionCoordinator::handlePeerInitializationRollbackFinished(
+	quint64 nGeneration, bool bFinishedAfterTimeout)
 {
-	m_bPeerInitializationRollbackPending = true;
-	m_bPeerInitializationRollbackTimedOut = false;
-	m_nPeerInitializationRollbackGeneration = nGeneration;
-	m_pPeerInitializationRollbackTimer->start();
 	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 		QStringLiteral("peer_initialization_rollback"),
-		QStringLiteral("started"), -1,
-		QStringLiteral("generation=%1 timeoutMs=%2")
+		QStringLiteral("completed"), -1,
+		QStringLiteral("generation=%1 afterTimeout=%2")
 			.arg(nGeneration)
-			.arg(kPeerInitializationRollbackTimeoutMs));
+			.arg(bFinishedAfterTimeout ? 1 : 0));
+	if (bFinishedAfterTimeout && m_sessionStateMachine.isShutdownTimedOut())
+	{
+		m_sessionStateMachine.finish(false);
+		publishSessionState();
+	}
+	if (!bFinishedAfterTimeout)
+		executePendingRequest();
 }
 
-void KSessionCoordinator::handlePeerInitializationRollbackTimeout()
+void KSessionCoordinator::handlePeerInitializationRollbackTimeout(
+	quint64 nGeneration, int nTimeoutMs)
 {
-	if (!m_bPeerInitializationRollbackPending
-		|| m_bPeerInitializationRollbackTimedOut)
-	{
-		return;
-	}
-	m_bPeerInitializationRollbackTimedOut = true;
 	m_pendingRequestType = NoPendingRequest;
 	m_strPendingHost.clear();
 	m_nPendingPort = 0;
@@ -1117,15 +1080,14 @@ void KSessionCoordinator::handlePeerInitializationRollbackTimeout()
 	reportSessionError(ShutdownSessionErrorDomain,
 		ShutdownTimeoutSessionErrorCode, ShutdownSessionErrorStage,
 		false,
-		QStringLiteral("WebRTC initialization rollback timed out; generation=%1")
-			.arg(m_nPeerInitializationRollbackGeneration));
+		QStringLiteral("WebRTC initialization rollback timed out; generation=%1 timeoutMs=%2")
+			.arg(nGeneration)
+			.arg(nTimeoutMs));
 }
 
 void KSessionCoordinator::wirePeer()
 {
 	KRemotePeerTransport *pTransport = m_spRemotePeerTransport.get();
-	connect(pTransport, &KRemotePeerTransport::shutdownFinished,
-		this, &KSessionCoordinator::handlePeerShutdownFinished);
 	connect(pTransport, &KRemotePeerTransport::signalingMessageReady,
 		this, [this](quint64 nGeneration, const QString &strMessage)
 		{
@@ -1209,10 +1171,11 @@ void KSessionCoordinator::wirePeer()
 			if (nGeneration != m_nActivePeerGeneration)
 				return;
 			m_bTerminalChannelOpen = bOpen;
-			if (!m_bCapabilitiesReceived)
+			if (!m_pCapabilitySessionFlow->isComplete())
 				return;
 			const bool bAvailable = bOpen
-				&& m_negotiatedCapabilities.channels.contains(QStringLiteral("terminal"));
+				&& m_pCapabilitySessionFlow->negotiatedCapabilities().channels.contains(
+					QStringLiteral("terminal"));
 			if (bAvailable || m_bTerminalChannelStatePublished)
 			{
 				m_bTerminalChannelStatePublished = bAvailable;
@@ -1374,7 +1337,8 @@ void KSessionCoordinator::handleClipboardChannelChanged(bool bOpen)
 		QStringLiteral("clipboard"),
 		-1,
 		QStringLiteral("open=%1").arg(bOpen ? 1 : 0));
-	emit clipboardChannelChanged(bOpen && m_negotiatedCapabilities.bClipboardText);
+	emit clipboardChannelChanged(bOpen
+		&& m_pCapabilitySessionFlow->negotiatedCapabilities().bClipboardText);
 }
 
 void KSessionCoordinator::handleSessionChannelChanged(bool bOpen)
@@ -1388,8 +1352,7 @@ void KSessionCoordinator::handleSessionChannelChanged(bool bOpen)
 		QStringLiteral("open=%1").arg(bOpen ? 1 : 0));
 	if (!bOpen)
 	{
-		m_pCapabilityTimer->stop();
-		m_bCapabilitiesReceived = false;
+		m_pCapabilitySessionFlow->reset();
 		m_bDeviceInfoRequested = false;
 		m_pSessionCommandDispatcher->failAll(QStringLiteral("session_channel_closed"));
 		if (m_sessionStateMachine.isStopping())
@@ -1407,23 +1370,19 @@ void KSessionCoordinator::handleSessionChannelChanged(bool bOpen)
 		}
 		return;
 	}
-	m_bCapabilitiesReceived = false;
-	m_negotiatedCapabilities = KNegotiatedCapabilities();
-	m_pCapabilityTimer->start(3000);
+	m_pCapabilitySessionFlow->begin(localCapabilities(), 3000);
 	KSessionMessage capabilitiesMessage;
 	capabilitiesMessage.type = CapabilitiesSessionMessageType;
-	capabilitiesMessage.capabilities = localCapabilities();
+	capabilitiesMessage.capabilities = m_pCapabilitySessionFlow->localCapabilities();
 	sendSessionMessage(capabilitiesMessage);
 }
 
 void KSessionCoordinator::completeCapabilityNegotiation(
 	const KNegotiatedCapabilities &capabilities)
 {
-	if (m_bCapabilitiesReceived || !m_bSessionChannelOpen)
+	if (!m_pCapabilitySessionFlow->isComplete() || !m_bSessionChannelOpen)
 		return;
-	m_bCapabilitiesReceived = true;
-	m_pCapabilityTimer->stop();
-	m_negotiatedCapabilities = capabilities;
+	m_pMediaSessionController->setCapabilities(capabilities);
 	m_bTerminalChannelStatePublished = m_bTerminalChannelOpen
 		&& capabilities.channels.contains(QStringLiteral("terminal"));
 	m_spRemotePeerTransport->setInputRealtimeEnabled(capabilities.bInputRealtime);
@@ -1490,8 +1449,8 @@ KProtocolHandlerResult KSessionCoordinator::handleCapabilitiesMessage(
 		return KProtocolHandlerResult::failure(ProtocolHandlerInvalidState,
 			QStringLiteral("Capabilities received outside negotiation"));
 	}
-	const KCapabilityNegotiationResult negotiation = KCapabilityNegotiator::negotiate(
-		localCapabilities(), message.capabilities);
+	const KCapabilityNegotiationResult negotiation =
+		m_pCapabilitySessionFlow->receive(message.capabilities);
 	if (!negotiation.succeeded())
 	{
 		KSessionMessage rejection;
@@ -1528,7 +1487,8 @@ KProtocolHandlerResult KSessionCoordinator::handleCapabilityRejectedMessage(
 
 void KSessionCoordinator::handleCapabilityTimeout()
 {
-	if (m_sessionStateMachine.state() != NegotiatingSessionState || m_bCapabilitiesReceived)
+	if (m_sessionStateMachine.state() != NegotiatingSessionState
+		|| m_pCapabilitySessionFlow->isComplete())
 		return;
 	finishSession(ConnectFailedSessionEndReason, QStringLiteral("capability_timeout"),
 		m_sessionStateMachine.shouldKeepListening(), false, false);
@@ -1545,7 +1505,7 @@ void KSessionCoordinator::handleSessionMessage(const KSessionMessage &message)
 			m_sessionStateMachine.generation());
 		return;
 	}
-	if (!m_bCapabilitiesReceived
+	if (!m_pCapabilitySessionFlow->isComplete()
 		&& message.type != CapabilitiesSessionMessageType
 		&& message.type != CapabilityRejectedSessionMessageType
 		&& message.type != EndSessionMessageType)
@@ -1629,8 +1589,7 @@ KProtocolHandlerResult KSessionCoordinator::handleStartStreamingMessage(
 	}
 	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 		QStringLiteral("emit"), QStringLiteral("startCaptureRequested"));
-	emit startCaptureRequested(m_sessionStateMachine.generation());
-	m_bCaptureActive = true;
+	m_pMediaSessionController->startCapture(m_sessionStateMachine.generation());
 	m_sessionStateMachine.beginStreaming();
 	publishSessionState();
 	return KProtocolHandlerResult::success();
@@ -1648,8 +1607,7 @@ KProtocolHandlerResult KSessionCoordinator::handleStopStreamingMessage(
 	m_sessionStateMachine.stopStreaming();
 	m_pInputInjector->releaseAllInputs();
 	resetInputTraceState();
-	emit stopCaptureRequested(m_sessionStateMachine.generation());
-	m_bCaptureActive = false;
+	m_pMediaSessionController->stopCapture(m_sessionStateMachine.generation());
 	publishSessionState();
 	return KProtocolHandlerResult::success();
 }

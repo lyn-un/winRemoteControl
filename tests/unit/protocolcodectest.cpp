@@ -5,6 +5,7 @@
 #include "core/protocol/protocolconstraints.h"
 #include "core/protocol/sessionmessage.h"
 #include "core/protocol/terminalmessage.h"
+#include "core/protocol/terminaldataframe.h"
 #include "core/protocol/webrtcsignalingmessage.h"
 
 #include <QtCore/QCoreApplication>
@@ -439,6 +440,13 @@ namespace
 			&& decoded.type == RejectedAccessMessageType
 			&& decoded.strReason == rejected.strReason,
 			QStringLiteral("access rejected round-trips"));
+
+		KAccessMessage busy;
+		busy.type = ServerBusyAccessMessageType;
+		check(KAccessMessageCodec::decode(KAccessMessageCodec::encode(busy), &decoded, nullptr)
+			&& decoded.type == ServerBusyAccessMessageType
+			&& decoded.strRequestId.isEmpty(),
+			QStringLiteral("server busy uses the typed signaling envelope"));
 	}
 
 	void testInvalidAccessMessages()
@@ -646,6 +654,7 @@ namespace
 		KTerminalMessage source;
 		source.type = OpenRequestTerminalMessageType;
 		source.strRequestId = QStringLiteral("550e8400-e29b-41d4-a716-446655440000");
+		source.strCommandId = QStringLiteral("6ba7b810-9dad-41d1-80b4-00c04fd430c8");
 		source.nColumns = 120;
 		source.nRows = 40;
 		KTerminalMessage decoded;
@@ -679,6 +688,35 @@ namespace
 				"\"payload\":{}}"), &decoded, nullptr),
 			QStringLiteral("terminal message rejects unknown control type"));
 	}
+
+	void testTerminalDataFrames()
+	{
+		KTerminalDataFrame source;
+		source.direction = InputTerminalDataDirection;
+		source.strRequestId = QStringLiteral("550e8400-e29b-41d4-a716-446655440000");
+		source.nSequence = 42;
+		source.payload = QByteArray("Get-ChildItem\r\n");
+		const QByteArray encoded = KTerminalDataFrameCodec::encode(source);
+		KTerminalDataFrame decoded;
+		check(KTerminalDataFrameCodec::decode(encoded, &decoded)
+			&& decoded.direction == source.direction
+			&& decoded.strRequestId == source.strRequestId
+			&& decoded.nSequence == source.nSequence
+			&& decoded.payload == source.payload,
+			QStringLiteral("terminal data frame round-trips"));
+
+		QByteArray malformed = encoded;
+		malformed[4] = 2;
+		check(!KTerminalDataFrameCodec::decode(malformed, &decoded),
+			QStringLiteral("terminal data rejects unsupported version"));
+		check(!KTerminalDataFrameCodec::decode(encoded.left(encoded.size() - 1),
+			&decoded), QStringLiteral("terminal data rejects truncated payload"));
+
+		source.payload = QByteArray(KTerminalDataFrameCodec::kMaximumPayloadBytes + 1,
+			'x');
+		check(KTerminalDataFrameCodec::encode(source).isEmpty(),
+			QStringLiteral("terminal data rejects oversized payload"));
+	}
 }
 
 int main(int nArgc, char *pArgv[])
@@ -706,6 +744,7 @@ int main(int nArgc, char *pArgv[])
 	testWebRtcSignalingMessages();
 	testSessionCapabilities();
 	testTerminalMessages();
+	testTerminalDataFrames();
 
 	if (g_nFailureCount == 0)
 		qInfo() << "All protocol codec tests passed";

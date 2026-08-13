@@ -39,6 +39,7 @@ private:
 	void writeInputLoop(quint64 nGeneration);
 	void waitForProcess(quint64 nGeneration);
 	void teardown(quint64 nGeneration);
+	void closePseudoConsole();
 	void resetHandles();
 	static QString windowsError(const QString &strPrefix, DWORD nError);
 
@@ -56,6 +57,7 @@ private:
 	std::thread m_processThread;
 	std::thread m_teardownThread;
 	std::mutex m_mutex;
+	std::mutex m_consoleMutex;
 	std::condition_variable m_inputCondition;
 	std::deque<QByteArray> m_inputQueue;
 	qsizetype m_nQueuedInputBytes = 0;

@@ -20,3 +20,20 @@ jobs:
         run: cmake --build --preset core-tests
       - name: Run core tests
         run: ctest --preset core-tests
+
+  terminal-tests:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          cache: true
+      - name: Configure terminal targets
+        run: cmake --preset terminal-tests
+      - name: Build terminal tests
+        run: cmake --build --preset terminal-tests
+      - name: Run terminal tests
+        run: ctest --preset terminal-tests

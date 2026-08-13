@@ -30,6 +30,20 @@ QString KSessionErrorPresenter::userMessage(const KSessionError &error)
 		return QStringLiteral("会话关闭超时，请重新启动程序");
 	if (error.code == CaptureFailedSessionErrorCode)
 		return QStringLiteral("屏幕采集失败");
+	if (error.code == TerminalUnavailableSessionErrorCode)
+		return QStringLiteral("远程终端当前不可用");
+	if (error.code == TerminalApprovalRejectedSessionErrorCode)
+		return QStringLiteral("被控端拒绝了终端请求");
+	if (error.code == TerminalInputOverflowSessionErrorCode)
+		return QStringLiteral("终端输入拥塞，已安全关闭终端");
+	if (error.code == TerminalOutputOverflowSessionErrorCode)
+		return QStringLiteral("终端输出拥塞，已安全关闭终端");
+	if (error.code == TerminalHostStartFailedSessionErrorCode)
+		return QStringLiteral("无法启动远程 PowerShell");
+	if (error.code == TerminalRelayHandshakeFailedSessionErrorCode)
+		return QStringLiteral("无法连接本地 Windows Terminal");
+	if (error.code == TerminalCommandTimeoutSessionErrorCode)
+		return QStringLiteral("终端控制命令超时，已安全关闭终端");
 	if (error.code == InvalidArgumentSessionErrorCode)
 		return QStringLiteral("连接参数无效");
 	if (error.domain == ProtocolSessionErrorDomain)

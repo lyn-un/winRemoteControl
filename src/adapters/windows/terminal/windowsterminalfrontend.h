@@ -30,6 +30,9 @@ private:
 	void handleNewConnection();
 	void handleReadyRead();
 	void handleDisconnected();
+	void handleBytesWritten();
+	bool enqueueOutput(const QByteArray &data);
+	void flushPendingOutput();
 	bool sendFrame(quint16 nType, const QByteArray &payload = QByteArray());
 	bool launchRelay(const QString &strTitle, QString *pErrorMessage);
 	void rejectSocket(QLocalSocket *pSocket);
@@ -51,6 +54,7 @@ private:
 	bool m_bAuthenticated = false;
 	bool m_bClosing = false;
 	bool m_bInputObserved = false;
+	bool m_bRelayBackpressured = false;
 };
 
 #endif // _WINREMOTECONTROL_ADAPTERS_WINDOWS_TERMINAL_WINDOWSTERMINALFRONTEND_H_

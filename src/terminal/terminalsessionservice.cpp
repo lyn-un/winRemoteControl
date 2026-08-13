@@ -4,6 +4,7 @@
 #include "core/terminal/terminalfrontend.h"
 #include "core/terminal/terminalhost.h"
 #include "session/sessioncontroller.h"
+#include "terminal/terminalcommanddispatcher.h"
 
 #include <QtCore/QDateTime>
 #include <QtCore/QTimer>
@@ -12,7 +13,11 @@
 namespace
 {
 	constexpr qsizetype kMaximumOutputQueueBytes = 1024 * 1024;
+	constexpr qsizetype kMaximumInputQueueBytes = 256 * 1024;
+	constexpr qsizetype kMaximumInputQueueMessages = 256;
 	constexpr qsizetype kOutputChunkBytes = 16 * 1024;
+	constexpr qsizetype kInputChunkBytes = 16 * 1024;
+	constexpr int kHostStopTimeoutMs = 3000;
 }
 
 KTerminalSessionService::KTerminalSessionService(
@@ -24,13 +29,56 @@ KTerminalSessionService::KTerminalSessionService(
 	, m_spTerminalHost(std::move(spTerminalHost))
 	, m_spTerminalFrontend(std::move(spTerminalFrontend))
 	, m_pSessionController(pSessionController)
+	, m_pCommandDispatcher(new KTerminalCommandDispatcher(this))
 	, m_pApprovalTimer(new QTimer(this))
+	, m_pStopTimer(new QTimer(this))
 {
 	Q_ASSERT(m_spTerminalHost != nullptr);
 	Q_ASSERT(m_pSessionController != nullptr);
+	m_pCommandDispatcher->setTransmitFunction([this](const KTerminalMessage &message)
+		{ return m_pSessionController->sendTerminalControlMessage(message); });
+	m_pCommandDispatcher->setHandler([this](const KTerminalMessage &message,
+		QString *pErrorCode)
+		{ return executeControlMessage(message, pErrorCode); });
+	connect(m_pCommandDispatcher, &KTerminalCommandDispatcher::commandCompleted,
+		this, [this](KTerminalMessageType type, const QString &strRequestId,
+			const QString &, bool bSuccess, const QString &strErrorCode,
+			quint64 nGeneration)
+		{
+			handleCommandCompleted(type, strRequestId, bSuccess,
+				strErrorCode, nGeneration);
+		});
+	connect(m_pCommandDispatcher, &KTerminalCommandDispatcher::commandTimedOut,
+		this, [this](KTerminalMessageType type, const QString &strRequestId,
+			const QString &, quint64 nGeneration)
+		{
+			if (nGeneration != m_pSessionController->sessionGeneration()
+				|| strRequestId != m_strRequestId)
+				return;
+			if (type == CloseTerminalMessageType || type == ExitedTerminalMessageType)
+			{
+				writeTrace(QStringLiteral("terminal_command_timeout"),
+					QStringLiteral("type=%1 remoteStateUnknown=1")
+						.arg(KTerminalMessageCodec::typeName(type)));
+				return;
+			}
+			failTerminal(QStringLiteral("command_timeout"),
+				QStringLiteral("终端控制命令超时，终端已中止"));
+		});
 	m_pApprovalTimer->setSingleShot(true);
+	m_pStopTimer->setSingleShot(true);
+	m_pStopTimer->setInterval(kHostStopTimeoutMs);
 	connect(m_pApprovalTimer, &QTimer::timeout,
 		this, &KTerminalSessionService::handleApprovalTimeout);
+	connect(m_pStopTimer, &QTimer::timeout, this, [this]()
+		{
+			if (!m_bHostStopPending)
+				return;
+			reportTerminalError(ShutdownTimeoutSessionErrorCode,
+				QStringLiteral("ConPTY shutdown timed out"));
+			setState(FailedTerminalState, QStringLiteral("终端关闭超时"));
+			writeTrace(QStringLiteral("terminal_stop_timeout"));
+		});
 	connect(m_pSessionController, &KSessionController::sessionStateChanged,
 		this, &KTerminalSessionService::handleSessionStateChanged);
 	connect(m_pSessionController, &KSessionController::sessionCapabilitiesChanged,
@@ -42,7 +90,11 @@ KTerminalSessionService::KTerminalSessionService(
 	connect(m_pSessionController, &KSessionController::terminalChannelChanged,
 		this, &KTerminalSessionService::handleChannelChanged);
 	connect(m_pSessionController, &KSessionController::terminalLowWatermarkReached,
-		this, &KTerminalSessionService::flushOutput);
+		this, [this]()
+		{
+			flushInput();
+			flushOutput();
+		});
 	connect(m_pSessionController, &KSessionController::incomingAccessObserved,
 		this, [this](const QString &strDeviceName, const QString &strSourceAddress)
 		{
@@ -60,6 +112,19 @@ KTerminalSessionService::KTerminalSessionService(
 		this, &KTerminalSessionService::handleHostOutput);
 	connect(m_spTerminalHost.get(), &KTerminalHost::processExited,
 		this, &KTerminalSessionService::handleHostExited);
+	connect(m_spTerminalHost.get(), &KTerminalHost::stopped,
+		this, [this](quint64 nGeneration)
+		{
+			if (nGeneration != m_pSessionController->sessionGeneration()
+				|| !m_bHostStopPending)
+			{
+				return;
+			}
+			m_bHostStopPending = false;
+			m_pStopTimer->stop();
+			setState(ClosedTerminalState, QStringLiteral("终端已关闭"));
+			writeTrace(QStringLiteral("terminal_stop_finished"));
+		});
 	connect(m_spTerminalHost.get(), &KTerminalHost::terminalError,
 		this, [this](quint64 nGeneration, const QString &strCode, const QString &strTechnical)
 		{
@@ -67,8 +132,9 @@ KTerminalSessionService::KTerminalSessionService(
 				return;
 			writeTrace(QStringLiteral("terminal_host_error"),
 				QStringLiteral("code=%1").arg(strCode));
-			emit terminalError(strTechnical);
-			setState(FailedTerminalState, QStringLiteral("终端运行失败"));
+			reportTerminalError(TerminalUnavailableSessionErrorCode,
+				QStringLiteral("%1: %2").arg(strCode, strTechnical));
+			failTerminal(strCode, QStringLiteral("终端运行失败"));
 		});
 	if (m_spTerminalFrontend != nullptr)
 	{
@@ -101,10 +167,17 @@ KTerminalSessionService::KTerminalSessionService(
 				stopHost(true, QStringLiteral("terminal_relay_closed"));
 			});
 		connect(m_spTerminalFrontend.get(), &KTerminalFrontend::terminalError,
-			this, [this](quint64 nGeneration, const QString &, const QString &strTechnical)
+			this, [this](quint64 nGeneration, const QString &strCode,
+				const QString &strTechnical)
 			{
 				if (nGeneration == m_pSessionController->sessionGeneration())
-					emit terminalError(strTechnical);
+				{
+					reportTerminalError(strCode == QStringLiteral("relay_handshake_timeout")
+						|| strCode == QStringLiteral("relay_auth_failed")
+						? TerminalRelayHandshakeFailedSessionErrorCode
+						: TerminalUnavailableSessionErrorCode,
+						QStringLiteral("%1: %2").arg(strCode, strTechnical));
+				}
 			});
 	}
 }
@@ -149,6 +222,8 @@ void KTerminalSessionService::openCurrentTerminal(int nColumns, int nRows)
 	}
 	m_spTerminalFrontend->focus();
 	m_strRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+	m_nNextSendSequence = 1;
+	m_nLastReceivedSequence = 0;
 	KTerminalMessage message;
 	message.type = OpenRequestTerminalMessageType;
 	message.strRequestId = m_strRequestId;
@@ -164,7 +239,7 @@ void KTerminalSessionService::openTerminalForEndpoint(const QString &strHost, qu
 	QString strSupportReason;
 	if (!isFrontendSupported(&strSupportReason))
 	{
-		emit terminalError(strSupportReason);
+		reportTerminalError(TerminalUnavailableSessionErrorCode, strSupportReason);
 		setState(FailedTerminalState, QStringLiteral("Windows Terminal 不可用"));
 		return;
 	}
@@ -173,7 +248,8 @@ void KTerminalSessionService::openTerminalForEndpoint(const QString &strHost, qu
 		if (m_pSessionController->matchesCurrentEndpoint(strHost, nPort))
 			openCurrentTerminal(m_nColumns, m_nRows);
 		else
-			emit terminalError(QStringLiteral("请先断开当前设备，再打开其他设备的终端"));
+			reportTerminalError(TerminalUnavailableSessionErrorCode,
+				QStringLiteral("Another endpoint is already connected"));
 		return;
 	}
 	m_strPendingHost = strHost;
@@ -217,21 +293,9 @@ void KTerminalSessionService::sendInput(const QByteArray &data)
 {
 	if (!m_bController || m_state != RunningTerminalState || data.isEmpty())
 		return;
-	if (m_pSessionController->isTerminalBackpressured())
-	{
-		emit terminalError(QStringLiteral("终端输入暂时拥塞"));
+	if (!enqueueInput(data))
 		return;
-	}
-	m_nInputBytes += static_cast<quint64>(data.size());
-	for (qsizetype nOffset = 0; nOffset < data.size(); nOffset += 64 * 1024)
-	{
-		const QByteArray chunk = data.mid(nOffset, 64 * 1024);
-		if (!m_pSessionController->sendTerminalData(chunk))
-		{
-			emit terminalError(QStringLiteral("终端输入发送失败"));
-			return;
-		}
-	}
+	flushInput();
 }
 
 void KTerminalSessionService::resizeTerminal(int nColumns, int nRows)
@@ -319,6 +383,14 @@ void KTerminalSessionService::handleCapabilitiesChanged(
 
 void KTerminalSessionService::handleControlMessage(const KTerminalMessage &message)
 {
+	m_pCommandDispatcher->handleIncoming(message,
+		m_pSessionController->sessionGeneration());
+}
+
+bool KTerminalSessionService::executeControlMessage(
+	const KTerminalMessage &message,
+	QString *pErrorCode)
+{
 	if (message.type == OpenRequestTerminalMessageType)
 	{
 		const bool bBusy = m_state != ClosedTerminalState
@@ -331,17 +403,18 @@ void KTerminalSessionService::handleControlMessage(const KTerminalMessage &messa
 			rejection.strReason = bBusy
 				? QStringLiteral("busy") : QStringLiteral("unavailable");
 			sendControl(rejection);
-			return;
+			if (pErrorCode != nullptr)
+				*pErrorCode = rejection.strReason;
+			return false;
 		}
 		m_bController = false;
 		m_strRequestId = message.strRequestId;
+		m_nNextSendSequence = 1;
+		m_nLastReceivedSequence = 0;
 		m_nColumns = message.nColumns;
 		m_nRows = message.nRows;
 		if (m_bPermissionGranted)
-		{
-			startHost(m_strRequestId, m_nColumns, m_nRows);
-			return;
-		}
+			return startHost(m_strRequestId, m_nColumns, m_nRows);
 		KTerminalMessage pending;
 		pending.type = ApprovalPendingTerminalMessageType;
 		pending.strRequestId = m_strRequestId;
@@ -352,25 +425,53 @@ void KTerminalSessionService::handleControlMessage(const KTerminalMessage &messa
 		emit incomingRequest(m_strRequestId, m_strDeviceName, m_strDeviceSource,
 			QDateTime::currentMSecsSinceEpoch() + m_nApprovalTimeoutSeconds * 1000LL);
 		writeTrace(QStringLiteral("terminal_approval_pending"));
-		return;
+		return true;
 	}
 	if (message.strRequestId != m_strRequestId)
-		return;
-	if (message.type == AcceptedTerminalMessageType && m_bController)
 	{
+		if (pErrorCode != nullptr)
+			*pErrorCode = QStringLiteral("request_mismatch");
+		return false;
+	}
+	if (message.type == ApprovalPendingTerminalMessageType && m_bController
+		&& m_state == AwaitingApprovalTerminalState)
+	{
+		setState(AwaitingApprovalTerminalState, QStringLiteral("等待被控端确认终端访问"));
+	}
+	else if (message.type == AcceptedTerminalMessageType && m_bController
+		&& (m_state == AwaitingApprovalTerminalState
+			|| m_state == OpeningTerminalState))
+	{
+		setState(OpeningTerminalState, QStringLiteral("正在建立终端数据通道"));
 		setState(RunningTerminalState, QStringLiteral("PowerShell 已连接"));
 		flushPendingControllerOutput();
 	}
-	else if (message.type == RejectedTerminalMessageType && m_bController)
+	else if (message.type == RejectedTerminalMessageType && m_bController
+		&& (m_state == AwaitingApprovalTerminalState
+			|| m_state == OpeningTerminalState))
 	{
 		setState(FailedTerminalState, QStringLiteral("被控端拒绝了终端请求"));
-		emit terminalError(QStringLiteral("被控端拒绝了终端请求"));
+		reportTerminalError(TerminalApprovalRejectedSessionErrorCode,
+			message.strReason);
 		if (m_spTerminalFrontend != nullptr)
 			m_spTerminalFrontend->close(m_pSessionController->sessionGeneration());
 	}
 	else if (message.type == ResizeTerminalMessageType && !m_bController)
-		m_spTerminalHost->resize(m_pSessionController->sessionGeneration(),
-			message.nColumns, message.nRows);
+	{
+		if (m_state != RunningTerminalState && m_state != PausedTerminalState)
+		{
+			if (pErrorCode != nullptr)
+				*pErrorCode = QStringLiteral("invalid_state");
+			return false;
+		}
+		if (!m_spTerminalHost->resize(m_pSessionController->sessionGeneration(),
+			message.nColumns, message.nRows))
+		{
+			if (pErrorCode != nullptr)
+				*pErrorCode = QStringLiteral("resize_failed");
+			return false;
+		}
+	}
 	else if (message.type == CloseTerminalMessageType)
 		stopHost(false, message.strReason);
 	else if (message.type == ExitedTerminalMessageType && m_bController)
@@ -383,9 +484,49 @@ void KTerminalSessionService::handleControlMessage(const KTerminalMessage &messa
 	else if (message.type == ErrorTerminalMessageType)
 	{
 		setState(FailedTerminalState, QStringLiteral("远程终端发生错误"));
-		emit terminalError(QStringLiteral("远程终端发生错误：%1").arg(message.strErrorCode));
+		reportTerminalError(message.strErrorCode == QStringLiteral("input_overflow")
+			? TerminalInputOverflowSessionErrorCode
+			: (message.strErrorCode == QStringLiteral("output_overflow")
+				? TerminalOutputOverflowSessionErrorCode
+				: TerminalUnavailableSessionErrorCode),
+			message.strErrorCode);
 		if (m_bController && m_spTerminalFrontend != nullptr)
 			m_spTerminalFrontend->close(m_pSessionController->sessionGeneration());
+	}
+	else
+	{
+		if (pErrorCode != nullptr)
+			*pErrorCode = QStringLiteral("invalid_state");
+		return false;
+	}
+	return true;
+}
+
+void KTerminalSessionService::handleCommandCompleted(
+	KTerminalMessageType type,
+	const QString &strRequestId,
+	bool bSuccess,
+	const QString &strErrorCode,
+	quint64 nGeneration)
+{
+	if (nGeneration != m_pSessionController->sessionGeneration()
+		|| strRequestId != m_strRequestId)
+	{
+		return;
+	}
+	if (type == AcceptedTerminalMessageType && !m_bController)
+	{
+		if (bSuccess)
+		{
+			setState(RunningTerminalState, QStringLiteral("远程终端正在运行"));
+			flushOutput();
+			writeTrace(QStringLiteral("terminal_started"));
+		}
+		else
+		{
+			failTerminal(strErrorCode.isEmpty() ? QStringLiteral("accepted_failed")
+				: strErrorCode, QStringLiteral("终端启动确认失败，已安全关闭"));
+		}
 	}
 }
 
@@ -393,30 +534,67 @@ void KTerminalSessionService::handleTerminalData(const QByteArray &data)
 {
 	if (data.isEmpty())
 		return;
+	KTerminalDataFrame frame;
+	QString strDecodeError;
+	if (!KTerminalDataFrameCodec::decode(data, &frame, &strDecodeError))
+	{
+		writeTrace(QStringLiteral("terminal_data_dropped"),
+			QStringLiteral("reason=malformed"));
+		return;
+	}
+	if (frame.strRequestId != m_strRequestId)
+	{
+		writeTrace(QStringLiteral("terminal_data_dropped"),
+			QStringLiteral("reason=request_mismatch sequence=%1")
+				.arg(frame.nSequence));
+		return;
+	}
+	if (frame.nSequence <= m_nLastReceivedSequence)
+	{
+		writeTrace(QStringLiteral("terminal_data_dropped"),
+			QStringLiteral("reason=sequence sequence=%1 lastSequence=%2")
+				.arg(frame.nSequence)
+				.arg(m_nLastReceivedSequence));
+		return;
+	}
+	const KTerminalDataDirection expectedDirection = m_bController
+		? OutputTerminalDataDirection : InputTerminalDataDirection;
+	if (frame.direction != expectedDirection)
+	{
+		writeTrace(QStringLiteral("terminal_data_dropped"),
+			QStringLiteral("reason=direction sequence=%1").arg(frame.nSequence));
+		return;
+	}
+	m_nLastReceivedSequence = frame.nSequence;
+	const QByteArray &payload = frame.payload;
 	if (m_bController)
 	{
 		if (m_state == AwaitingApprovalTerminalState
 			|| m_state == OpeningTerminalState)
 		{
-			enqueuePendingControllerOutput(data);
+			enqueuePendingControllerOutput(payload);
 			return;
 		}
 		if (m_state != RunningTerminalState)
 			return;
-		m_nOutputBytes += static_cast<quint64>(data.size());
+		m_nOutputBytes += static_cast<quint64>(payload.size());
 		if (m_spTerminalFrontend == nullptr
 			|| !m_spTerminalFrontend->writeOutput(
-				m_pSessionController->sessionGeneration(), data))
+				m_pSessionController->sessionGeneration(), payload))
 		{
-			emit terminalError(QStringLiteral("无法写入 Windows Terminal"));
+			reportTerminalError(TerminalUnavailableSessionErrorCode,
+				QStringLiteral("Unable to write terminal relay output"));
 		}
-		emit outputReady(data);
+		emit outputReady(payload);
 	}
 	else if (m_state == RunningTerminalState && !m_spTerminalHost->writeInput(
-		m_pSessionController->sessionGeneration(), data))
-		emit terminalError(QStringLiteral("PowerShell 输入队列已满"));
+		m_pSessionController->sessionGeneration(), payload))
+	{
+		failTerminal(QStringLiteral("input_overflow"),
+			QStringLiteral("PowerShell 输入队列已满，终端已中止"));
+	}
 	else if (m_state == RunningTerminalState)
-		m_nInputBytes += static_cast<quint64>(data.size());
+		m_nInputBytes += static_cast<quint64>(payload.size());
 }
 
 void KTerminalSessionService::handleChannelChanged(bool bOpen)
@@ -443,7 +621,8 @@ bool KTerminalSessionService::ensureFrontendOpen()
 {
 	if (m_spTerminalFrontend == nullptr)
 	{
-		emit terminalError(QStringLiteral("当前程序未配置 Windows Terminal 前端"));
+		reportTerminalError(TerminalUnavailableSessionErrorCode,
+			QStringLiteral("Windows Terminal frontend is not configured"));
 		return false;
 	}
 	QString strError;
@@ -454,7 +633,7 @@ bool KTerminalSessionService::ensureFrontendOpen()
 	{
 		return true;
 	}
-	emit terminalError(strError);
+	reportTerminalError(TerminalUnavailableSessionErrorCode, strError);
 	setState(FailedTerminalState, QStringLiteral("Windows Terminal 不可用"));
 	return false;
 }
@@ -471,8 +650,7 @@ void KTerminalSessionService::handleHostOutput(
 	{
 		return;
 	}
-	m_nOutputBytes += static_cast<quint64>(data.size());
-	enqueueOutput(data);
+		enqueueOutput(data);
 }
 
 void KTerminalSessionService::handleHostExited(quint64 nGeneration, int nExitCode)
@@ -519,16 +697,19 @@ bool KTerminalSessionService::startHost(
 		error.strErrorCode = QStringLiteral("host_start_failed");
 		sendControl(error);
 		setState(FailedTerminalState, QStringLiteral("PowerShell 启动失败"));
-		emit terminalError(strError);
+		reportTerminalError(TerminalHostStartFailedSessionErrorCode, strError);
 		return false;
 	}
 	KTerminalMessage accepted;
 	accepted.type = AcceptedTerminalMessageType;
 	accepted.strRequestId = strRequestId;
-	sendControl(accepted);
-	setState(RunningTerminalState, QStringLiteral("远程终端正在运行"));
-	flushOutput();
-	writeTrace(QStringLiteral("terminal_started"));
+	if (!sendControl(accepted))
+	{
+		m_spTerminalHost->requestStop(m_pSessionController->sessionGeneration());
+		setState(FailedTerminalState, QStringLiteral("终端启动确认发送失败"));
+		return false;
+	}
+	setState(OpeningTerminalState, QStringLiteral("等待终端启动确认"));
 	return true;
 }
 
@@ -552,22 +733,32 @@ void KTerminalSessionService::stopHost(bool bNotifyRemote, const QString &strRea
 	}
 	setState(ClosingTerminalState, QStringLiteral("正在关闭终端"));
 	if (!m_bController)
+	{
+		m_bHostStopPending = true;
+		m_pStopTimer->start();
 		m_spTerminalHost->requestStop(m_pSessionController->sessionGeneration());
+	}
 	else
 		setState(ClosedTerminalState, QStringLiteral("终端已关闭"));
 	if (m_bController && m_spTerminalFrontend != nullptr)
 		m_spTerminalFrontend->close(m_pSessionController->sessionGeneration());
 	m_outputQueue.clear();
 	m_nQueuedOutputBytes = 0;
+	m_inputQueue.clear();
+	m_nQueuedInputBytes = 0;
 	m_pendingControllerOutputQueue.clear();
 	m_nPendingControllerOutputBytes = 0;
 	m_nInputBytes = 0;
 	m_nOutputBytes = 0;
+	m_nNextSendSequence = 1;
+	m_nLastReceivedSequence = 0;
 }
 
 void KTerminalSessionService::resetSession()
 {
 	m_pApprovalTimer->stop();
+	m_pStopTimer->stop();
+	m_bHostStopPending = false;
 	if (m_spTerminalFrontend != nullptr)
 		m_spTerminalFrontend->close(m_pSessionController->sessionGeneration());
 	m_capabilities = KNegotiatedCapabilities();
@@ -583,13 +774,25 @@ void KTerminalSessionService::resetSession()
 	m_nPendingPort = 0;
 	m_outputQueue.clear();
 	m_nQueuedOutputBytes = 0;
+	m_inputQueue.clear();
+	m_nQueuedInputBytes = 0;
 	m_pendingControllerOutputQueue.clear();
 	m_nPendingControllerOutputBytes = 0;
+	m_nNextSendSequence = 1;
+	m_nLastReceivedSequence = 0;
+	m_pCommandDispatcher->clear();
 	setState(ClosedTerminalState, QStringLiteral("终端未连接"));
 }
 
 void KTerminalSessionService::setState(KTerminalState state, const QString &strStatus)
 {
+	if (!m_stateMachine.transitionTo(state))
+	{
+		writeTrace(QStringLiteral("terminal_state_rejected"),
+			QStringLiteral("from=%1 to=%2")
+				.arg(TerminalStateName(m_stateMachine.state()), TerminalStateName(state)));
+		return;
+	}
 	m_state = state;
 	m_strStatus = strStatus;
 	QString strReason;
@@ -608,13 +811,8 @@ void KTerminalSessionService::enqueueOutput(const QByteArray &data)
 		const QByteArray chunk = data.mid(nOffset, kOutputChunkBytes);
 		if (m_nQueuedOutputBytes + chunk.size() > kMaximumOutputQueueBytes)
 		{
-			KTerminalMessage error;
-			error.type = ErrorTerminalMessageType;
-			error.strRequestId = m_strRequestId;
-			error.strErrorCode = QStringLiteral("output_overflow");
-			sendControl(error);
-			emit terminalError(QStringLiteral("终端输出过快，已关闭终端"));
-			stopHost(false, QStringLiteral("output_overflow"));
+			failTerminal(QStringLiteral("output_overflow"),
+				QStringLiteral("终端输出过快，已关闭终端"));
 			return;
 		}
 		m_outputQueue.enqueue(chunk);
@@ -627,8 +825,8 @@ void KTerminalSessionService::enqueuePendingControllerOutput(const QByteArray &d
 {
 	if (m_nPendingControllerOutputBytes + data.size() > kMaximumOutputQueueBytes)
 	{
-		emit terminalError(QStringLiteral("终端首屏输出过多，已关闭终端"));
-		stopHost(true, QStringLiteral("pending_output_overflow"));
+		failTerminal(QStringLiteral("pending_output_overflow"),
+			QStringLiteral("终端首屏输出过多，已关闭终端"));
 		return;
 	}
 	m_pendingControllerOutputQueue.enqueue(data);
@@ -655,17 +853,116 @@ void KTerminalSessionService::flushOutput()
 		&& !m_pSessionController->isTerminalBackpressured())
 	{
 		const QByteArray data = m_outputQueue.head();
-		if (!m_pSessionController->sendTerminalData(data))
+		if (!sendDataFrame(OutputTerminalDataDirection, data, &m_nNextSendSequence))
 			return;
 		m_outputQueue.dequeue();
 		m_nQueuedOutputBytes -= data.size();
 	}
 }
 
-void KTerminalSessionService::sendControl(const KTerminalMessage &message)
+bool KTerminalSessionService::enqueueInput(const QByteArray &data)
 {
-	if (!m_pSessionController->sendTerminalControlMessage(message))
-		emit terminalError(QStringLiteral("终端控制消息发送失败"));
+	for (qsizetype nOffset = 0; nOffset < data.size(); nOffset += kInputChunkBytes)
+	{
+		const QByteArray chunk = data.mid(nOffset, kInputChunkBytes);
+		if (m_inputQueue.size() >= kMaximumInputQueueMessages
+			|| m_nQueuedInputBytes + chunk.size() > kMaximumInputQueueBytes)
+		{
+			failTerminal(QStringLiteral("input_overflow"),
+				QStringLiteral("终端输入队列已满，终端已中止"));
+			return false;
+		}
+		m_inputQueue.enqueue(chunk);
+		m_nQueuedInputBytes += chunk.size();
+	}
+	return true;
+}
+
+void KTerminalSessionService::flushInput()
+{
+	while (!m_inputQueue.isEmpty()
+		&& m_state == RunningTerminalState
+		&& !m_pSessionController->isTerminalBackpressured())
+	{
+		const QByteArray data = m_inputQueue.head();
+		if (!sendDataFrame(InputTerminalDataDirection, data, &m_nNextSendSequence))
+			return;
+		m_inputQueue.dequeue();
+		m_nQueuedInputBytes -= data.size();
+		m_nInputBytes += static_cast<quint64>(data.size());
+	}
+}
+
+bool KTerminalSessionService::sendDataFrame(
+	KTerminalDataDirection direction,
+	const QByteArray &payload,
+	quint64 *pSequence)
+{
+	if (pSequence == nullptr || m_strRequestId.isEmpty())
+		return false;
+	KTerminalDataFrame frame;
+	frame.direction = direction;
+	frame.strRequestId = m_strRequestId;
+	frame.nSequence = *pSequence;
+	frame.payload = payload;
+	const QByteArray encoded = KTerminalDataFrameCodec::encode(frame);
+	if (encoded.isEmpty() || !m_pSessionController->sendTerminalData(encoded))
+		return false;
+	++(*pSequence);
+	return true;
+}
+
+void KTerminalSessionService::failTerminal(
+	const QString &strErrorCode,
+	const QString &strMessage)
+{
+	if (m_state == ClosingTerminalState || m_state == ClosedTerminalState
+		|| m_state == FailedTerminalState)
+	{
+		return;
+	}
+	KTerminalMessage error;
+	error.type = ErrorTerminalMessageType;
+	error.strRequestId = m_strRequestId;
+	error.strErrorCode = strErrorCode;
+	sendControl(error);
+	KSessionErrorCode code = TerminalUnavailableSessionErrorCode;
+	if (strErrorCode == QStringLiteral("input_overflow"))
+		code = TerminalInputOverflowSessionErrorCode;
+	else if (strErrorCode == QStringLiteral("output_overflow")
+		|| strErrorCode == QStringLiteral("pending_output_overflow"))
+		code = TerminalOutputOverflowSessionErrorCode;
+	else if (strErrorCode == QStringLiteral("command_timeout"))
+		code = TerminalCommandTimeoutSessionErrorCode;
+	reportTerminalError(code, strErrorCode);
+	setState(FailedTerminalState, strMessage);
+	stopHost(true, strErrorCode);
+}
+
+void KTerminalSessionService::reportTerminalError(
+	KSessionErrorCode code,
+	const QString &strTechnicalMessage,
+	bool bRetryable)
+{
+	KSessionError error;
+	error.domain = TerminalSessionErrorDomain;
+	error.code = code;
+	error.stage = ConnectedSessionErrorStage;
+	error.bRetryable = bRetryable;
+	error.strTechnicalMessage = strTechnicalMessage;
+	emit structuredTerminalError(error);
+}
+
+bool KTerminalSessionService::sendControl(const KTerminalMessage &message)
+{
+	if (!m_pCommandDispatcher->send(message,
+		m_pSessionController->sessionGeneration()))
+	{
+		reportTerminalError(TerminalUnavailableSessionErrorCode,
+			QStringLiteral("Unable to send terminal control command"));
+		return false;
+	}
+	return true;
 }
 
 bool KTerminalSessionService::isSessionReady() const

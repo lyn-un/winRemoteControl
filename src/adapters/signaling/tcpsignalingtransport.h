@@ -27,6 +27,7 @@ public:
 	void connectToHost(const QString &strHost, quint16 nPort) override;
 	void disconnectPeer() override;
 	void stop() override;
+	void setServerBusyMessage(const QString &strMessage) override;
 	bool isConnected() const;
 
 public slots:
@@ -52,6 +53,7 @@ private:
 	QTimer *m_pConnectTimeoutTimer = nullptr;
 	QTimer *m_pReadTimeoutTimer = nullptr;
 	QByteArray m_readBuffer;
+	QByteArray m_serverBusyMessage;
 	QElapsedTimer m_connectElapsedTimer;
 	bool m_bOutgoingConnectionPending = false;
 	bool m_bPeerBusy = false;

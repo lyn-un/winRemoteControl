@@ -41,6 +41,21 @@
       "displayName": "Windows release",
       "inherits": "dev",
       "binaryDir": "${sourceDir}/build/cmake-release"
+    },
+    {
+      "name": "terminal-tests",
+      "displayName": "Dependency-light terminal tests",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/terminal-tests",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "$env{QTDIR}",
+        "WRC_BUILD_APP": "OFF",
+        "WRC_BUILD_TESTS": "ON",
+        "WRC_ENABLE_WEBRTC": "OFF",
+        "WRC_ENABLE_FFMPEG": "OFF",
+        "WRC_ENABLE_WEBVIEW2": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -58,6 +73,20 @@
       "name": "release",
       "configurePreset": "release",
       "configuration": "Release"
+    },
+    {
+      "name": "terminal-tests",
+      "configurePreset": "terminal-tests",
+      "configuration": "Release",
+      "targets": [
+        "wrc_terminal_session_tests",
+        "wrc_terminal_command_dispatcher_tests",
+        "wrc_terminal_relay_frame_codec_tests",
+        "wrc_terminal_shell_policy_tests",
+        "wrc_windows_pseudoconsole_tests",
+        "wrc_terminal_write_all_tests",
+        "wrc_terminal_state_machine_tests"
+      ]
     }
   ],
   "testPresets": [
@@ -73,6 +102,25 @@
       "name": "release",
       "configurePreset": "release",
       "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "terminal-tests",
+      "configurePreset": "terminal-tests",
+      "configuration": "Release",
+      "environment": {
+        "PATH": "$env{QTDIR}\\bin;$penv{PATH}"
+      },
+      "filter": {
+        "include": {
+          "name": "^wrc_(terminal|windows_pseudoconsole)"
+        }
+      },
+      "execution": {
+        "timeout": 30
+      },
       "output": {
         "outputOnFailure": true
       }

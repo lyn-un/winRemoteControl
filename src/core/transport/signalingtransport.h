@@ -23,6 +23,7 @@ public:
 	virtual void connectToHost(const QString &strHost, quint16 nPort) = 0;
 	virtual void disconnectPeer() = 0;
 	virtual void stop() = 0;
+	virtual void setServerBusyMessage(const QString &strMessage) = 0;
 
 public slots:
 	virtual void sendMessage(const QString &strMessage) = 0;

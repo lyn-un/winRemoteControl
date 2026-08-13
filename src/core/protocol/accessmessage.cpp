@@ -14,6 +14,7 @@ namespace
 	constexpr char kAccessPending[] = "accessPending";
 	constexpr char kAccessAccepted[] = "accessAccepted";
 	constexpr char kAccessRejected[] = "accessRejected";
+	constexpr char kServerBusy[] = "serverBusy";
 
 	bool FailDecode(const QString &strError, QString *pErrorMessage)
 	{
@@ -32,6 +33,8 @@ namespace
 			return AcceptedAccessMessageType;
 		if (strName == QString::fromLatin1(kAccessRejected))
 			return RejectedAccessMessageType;
+		if (strName == QString::fromLatin1(kServerBusy))
+			return ServerBusyAccessMessageType;
 		return InvalidAccessMessageType;
 	}
 }
@@ -80,7 +83,7 @@ bool KAccessMessageCodec::decode(const KProtocolEnvelope &envelope,
 		return FailDecode(QStringLiteral("Unknown access message type"), pErrorMessage);
 
 	const QString strRequestId = envelope.strRequestId;
-	if (QUuid(strRequestId).isNull())
+	if (type != ServerBusyAccessMessageType && QUuid(strRequestId).isNull())
 		return FailDecode(QStringLiteral("Invalid access request id"), pErrorMessage);
 
 	KAccessMessage message;
@@ -140,6 +143,8 @@ QString KAccessMessageCodec::typeName(KAccessMessageType type)
 		return QString::fromLatin1(kAccessAccepted);
 	if (type == RejectedAccessMessageType)
 		return QString::fromLatin1(kAccessRejected);
+	if (type == ServerBusyAccessMessageType)
+		return QString::fromLatin1(kServerBusy);
 	return QStringLiteral("invalid");
 }
 

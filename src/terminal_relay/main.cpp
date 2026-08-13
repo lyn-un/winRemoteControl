@@ -125,13 +125,14 @@ namespace
 	bool SendFrame(HANDLE hPipe, std::uint16_t nType,
 		const void *pPayload = nullptr, std::uint32_t nPayloadBytes = 0)
 	{
-		if (nPayloadBytes > KTerminalRelayProtocol::kMaximumPayloadBytes)
+		if (!KTerminalRelayProtocol::IsKnownFrameType(nType)
+			|| nPayloadBytes > KTerminalRelayProtocol::kMaximumPayloadBytes)
 			return false;
-		KTerminalRelayProtocol::FrameHeader header;
-		header.nType = nType;
-		header.nPayloadBytes = nPayloadBytes;
+		const auto header = KTerminalRelayProtocol::EncodeFrameHeader(nType,
+			nPayloadBytes);
 		std::scoped_lock lock(g_writeMutex);
-		return WritePipeExact(hPipe, &header, sizeof(header))
+		return WritePipeExact(hPipe, header.data(),
+			static_cast<DWORD>(header.size()))
 			&& (nPayloadBytes == 0 || WritePipeExact(hPipe, pPayload, nPayloadBytes));
 	}
 
@@ -360,11 +361,11 @@ namespace
 				if ((nColumns != nLastColumns || nRows != nLastRows)
 					&& nColumns >= 20 && nColumns <= 400 && nRows >= 5 && nRows <= 200)
 				{
-					KTerminalRelayProtocol::ResizePayload resize;
-					resize.nColumns = static_cast<std::uint16_t>(nColumns);
-					resize.nRows = static_cast<std::uint16_t>(nRows);
+					const auto resize = KTerminalRelayProtocol::EncodeResizePayload(
+						static_cast<std::uint16_t>(nColumns),
+						static_cast<std::uint16_t>(nRows));
 					if (!SendFrame(hPipe, KTerminalRelayProtocol::ResizeFrameType,
-						&resize, sizeof(resize)))
+						resize.data(), static_cast<std::uint32_t>(resize.size())))
 					{
 						break;
 					}
@@ -380,11 +381,13 @@ namespace
 	{
 		while (g_bRunning.load())
 		{
-			KTerminalRelayProtocol::FrameHeader header;
-			if (!ReadPipeExact(hPipe, &header, sizeof(header)))
+			std::array<std::uint8_t, KTerminalRelayProtocol::kFrameHeaderBytes> headerBytes = {};
+			if (!ReadPipeExact(hPipe, headerBytes.data(),
+				static_cast<DWORD>(headerBytes.size())))
 				break;
-			if (header.nMagic != KTerminalRelayProtocol::kMagic
-				|| header.nVersion != KTerminalRelayProtocol::kVersion
+			KTerminalRelayProtocol::DecodedFrameHeader header;
+			if (!KTerminalRelayProtocol::DecodeFrameHeader(headerBytes.data(), &header)
+				|| !KTerminalRelayProtocol::IsKnownFrameType(header.nType)
 				|| header.nPayloadBytes > KTerminalRelayProtocol::kMaximumPayloadBytes)
 			{
 				break;

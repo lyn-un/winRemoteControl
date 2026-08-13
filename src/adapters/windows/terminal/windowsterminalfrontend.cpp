@@ -18,6 +18,8 @@
 namespace
 {
 	constexpr qsizetype kMaximumPendingOutputBytes = 1024 * 1024;
+	constexpr qint64 kRelayWriteHighWatermarkBytes = 1024 * 1024;
+	constexpr qint64 kRelayWriteLowWatermarkBytes = 256 * 1024;
 	constexpr int kRelayHandshakeTimeoutMs = 10000;
 }
 
@@ -121,18 +123,22 @@ bool KWindowsTerminalFrontend::writeOutput(quint64 nGeneration, const QByteArray
 	if (nGeneration != m_nGeneration || data.isEmpty())
 		return false;
 	if (!m_bAuthenticated)
-	{
-		if (m_nPendingOutputBytes + data.size() > kMaximumPendingOutputBytes)
-			return false;
-		m_pendingOutput.enqueue(data);
-		m_nPendingOutputBytes += data.size();
-		return true;
-	}
+		return enqueueOutput(data);
 	for (qsizetype nOffset = 0; nOffset < data.size();
 		nOffset += KTerminalRelayProtocol::kMaximumPayloadBytes)
 	{
-		if (!sendFrame(KTerminalRelayProtocol::OutputFrameType,
-			data.mid(nOffset, KTerminalRelayProtocol::kMaximumPayloadBytes)))
+		const QByteArray chunk = data.mid(nOffset,
+			KTerminalRelayProtocol::kMaximumPayloadBytes);
+		if (m_bRelayBackpressured || !m_pendingOutput.isEmpty()
+			|| (m_pSocket != nullptr
+				&& m_pSocket->bytesToWrite() >= kRelayWriteHighWatermarkBytes))
+		{
+			m_bRelayBackpressured = true;
+			if (!enqueueOutput(chunk))
+				return false;
+			continue;
+		}
+		if (!sendFrame(KTerminalRelayProtocol::OutputFrameType, chunk))
 		{
 			return false;
 		}
@@ -165,6 +171,8 @@ void KWindowsTerminalFrontend::handleNewConnection()
 			this, &KWindowsTerminalFrontend::handleReadyRead);
 		connect(pSocket, &QLocalSocket::disconnected,
 			this, &KWindowsTerminalFrontend::handleDisconnected);
+		connect(pSocket, &QLocalSocket::bytesWritten,
+			this, [this](qint64) { handleBytesWritten(); });
 	}
 }
 
@@ -199,13 +207,7 @@ void KWindowsTerminalFrontend::handleReadyRead()
 			m_pServer->close();
 			writeTrace(QStringLiteral("terminal_relay_connected"));
 			emit connected(m_nGeneration);
-			while (!m_pendingOutput.isEmpty())
-			{
-				const QByteArray output = m_pendingOutput.dequeue();
-				m_nPendingOutputBytes -= output.size();
-				if (!writeOutput(m_nGeneration, output))
-					break;
-			}
+			flushPendingOutput();
 		}
 		else if (frame.nType == InputFrameType)
 		{
@@ -218,13 +220,14 @@ void KWindowsTerminalFrontend::handleReadyRead()
 			emit inputReady(m_nGeneration, frame.payload);
 		}
 		else if (frame.nType == ResizeFrameType
-			&& frame.payload.size() == static_cast<qsizetype>(sizeof(ResizePayload)))
+			&& frame.payload.size() == static_cast<qsizetype>(kResizePayloadBytes))
 		{
-			ResizePayload resize;
-			std::memcpy(&resize, frame.payload.constData(), sizeof(resize));
-			if (resize.nColumns >= 20 && resize.nColumns <= 400
-				&& resize.nRows >= 5 && resize.nRows <= 200)
-				emit resizeRequested(m_nGeneration, resize.nColumns, resize.nRows);
+			const auto *pResize = reinterpret_cast<const std::uint8_t *>(
+				frame.payload.constData());
+			const quint16 nColumns = ReadUint16(pResize);
+			const quint16 nRows = ReadUint16(pResize + 2);
+			if (nColumns >= 20 && nColumns <= 400 && nRows >= 5 && nRows <= 200)
+				emit resizeRequested(m_nGeneration, nColumns, nRows);
 		}
 		else if (frame.nType == CloseFrameType)
 		{
@@ -250,6 +253,47 @@ void KWindowsTerminalFrontend::handleDisconnected()
 	clearLocalState(false);
 	if (bNotify)
 		emit closed(m_nGeneration);
+}
+
+void KWindowsTerminalFrontend::handleBytesWritten()
+{
+	if (m_pSocket == nullptr
+		|| m_pSocket->bytesToWrite() > kRelayWriteLowWatermarkBytes)
+	{
+		return;
+	}
+	m_bRelayBackpressured = false;
+	flushPendingOutput();
+}
+
+bool KWindowsTerminalFrontend::enqueueOutput(const QByteArray &data)
+{
+	if (data.isEmpty())
+		return true;
+	if (m_pendingOutput.size() >= 256
+		|| m_nPendingOutputBytes + data.size() > kMaximumPendingOutputBytes)
+	{
+		return false;
+	}
+	m_pendingOutput.enqueue(data);
+	m_nPendingOutputBytes += data.size();
+	return true;
+}
+
+void KWindowsTerminalFrontend::flushPendingOutput()
+{
+	while (m_bAuthenticated && m_pSocket != nullptr
+		&& !m_pendingOutput.isEmpty()
+		&& m_pSocket->bytesToWrite() < kRelayWriteHighWatermarkBytes)
+	{
+		const QByteArray output = m_pendingOutput.head();
+		if (!sendFrame(KTerminalRelayProtocol::OutputFrameType, output))
+			return;
+		m_pendingOutput.dequeue();
+		m_nPendingOutputBytes -= output.size();
+	}
+	if (!m_pendingOutput.isEmpty())
+		m_bRelayBackpressured = true;
 }
 
 bool KWindowsTerminalFrontend::sendFrame(quint16 nType, const QByteArray &payload)
@@ -307,6 +351,7 @@ void KWindowsTerminalFrontend::clearLocalState(bool bEmitClosed)
 	m_nPendingOutputBytes = 0;
 	m_bAuthenticated = false;
 	m_bInputObserved = false;
+	m_bRelayBackpressured = false;
 	m_strPipeName.clear();
 	m_strToken.clear();
 	m_strWindowName.clear();

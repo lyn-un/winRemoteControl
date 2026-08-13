@@ -11,7 +11,7 @@ QString KSessionError::domainName(KSessionErrorDomain domain)
 {
 	static const char *const names[] = {
 		"unknown", "configuration", "signaling", "access", "protocol",
-		"webrtc", "capture", "input", "clipboard", "shutdown"
+		"webrtc", "capture", "input", "clipboard", "shutdown", "terminal"
 	};
 	const int nIndex = static_cast<int>(domain);
 	return nIndex >= 0 && nIndex < static_cast<int>(std::size(names))
@@ -26,7 +26,10 @@ QString KSessionError::codeName(KSessionErrorCode code)
 		"approval_timeout", "incompatible_protocol", "malformed_message", "message_too_large",
 		"protocol_violation", "invalid_state", "initialization_failed", "send_failed",
 		"channel_closed", "recovery_failed", "capture_failed", "input_backpressure_overflow",
-		"command_timeout", "command_queue_overflow", "shutdown_timeout"
+		"command_timeout", "command_queue_overflow", "shutdown_timeout",
+		"terminal_unavailable", "terminal_approval_rejected", "terminal_input_overflow",
+		"terminal_output_overflow", "terminal_host_start_failed",
+		"terminal_relay_handshake_failed", "terminal_command_timeout"
 	};
 	const int nIndex = static_cast<int>(code);
 	return nIndex >= 0 && nIndex < static_cast<int>(std::size(names))

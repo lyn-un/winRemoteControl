@@ -15,19 +15,22 @@ enum KTerminalMessageType
 	ResizeTerminalMessageType,
 	CloseTerminalMessageType,
 	ExitedTerminalMessageType,
-	ErrorTerminalMessageType
+	ErrorTerminalMessageType,
+	CommandResultTerminalMessageType
 };
 
 struct KTerminalMessage
 {
 	KTerminalMessageType type = InvalidTerminalMessageType;
 	QString strRequestId;
+	QString strCommandId;
 	QString strReason;
 	QString strErrorCode;
 	int nColumns = 0;
 	int nRows = 0;
 	int nTimeoutSeconds = 0;
 	int nExitCode = 0;
+	bool bSuccess = false;
 };
 
 class KTerminalMessageCodec
@@ -41,6 +44,7 @@ public:
 		KTerminalMessage *pMessage,
 		QString *pErrorMessage);
 	static QString typeName(KTerminalMessageType type);
+	static bool isReliableCommand(KTerminalMessageType type);
 };
 
 #endif // _WINREMOTECONTROL_CORE_PROTOCOL_TERMINALMESSAGE_H_

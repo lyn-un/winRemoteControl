@@ -13,7 +13,8 @@ enum KAccessMessageType
 	RequestAccessMessageType,
 	PendingAccessMessageType,
 	AcceptedAccessMessageType,
-	RejectedAccessMessageType
+	RejectedAccessMessageType,
+	ServerBusyAccessMessageType
 };
 
 struct KAccessMessage

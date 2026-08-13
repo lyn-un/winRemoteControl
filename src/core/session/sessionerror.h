@@ -15,7 +15,8 @@ enum KSessionErrorDomain
 	CaptureSessionErrorDomain = 6,
 	InputSessionErrorDomain = 7,
 	ClipboardSessionErrorDomain = 8,
-	ShutdownSessionErrorDomain = 9
+	ShutdownSessionErrorDomain = 9,
+	TerminalSessionErrorDomain = 10
 };
 
 enum KSessionErrorCode
@@ -42,7 +43,14 @@ enum KSessionErrorCode
 	InputBackpressureOverflowSessionErrorCode = 19,
 	CommandTimeoutSessionErrorCode = 20,
 	CommandQueueOverflowSessionErrorCode = 21,
-	ShutdownTimeoutSessionErrorCode = 22
+	ShutdownTimeoutSessionErrorCode = 22,
+	TerminalUnavailableSessionErrorCode = 23,
+	TerminalApprovalRejectedSessionErrorCode = 24,
+	TerminalInputOverflowSessionErrorCode = 25,
+	TerminalOutputOverflowSessionErrorCode = 26,
+	TerminalHostStartFailedSessionErrorCode = 27,
+	TerminalRelayHandshakeFailedSessionErrorCode = 28,
+	TerminalCommandTimeoutSessionErrorCode = 29
 };
 
 enum KSessionErrorStage

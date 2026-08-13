@@ -16,6 +16,7 @@
 #include "devices/recentdeviceservice.h"
 #include "render/videorenderwidget.h"
 #include "session/sessionviewmodel.h"
+#include "session/sessionerrorpresenter.h"
 #include "transport/webrtc/webrtcpeer.h"
 #include "session/sessioncoordinator.h"
 #include "settings/applicationsettingsservice.h"
@@ -228,8 +229,11 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		pWebViewWidget, &KWebViewWidget::sendIncomingTerminalRequest);
 	connect(m_pTerminalSessionService, &KTerminalSessionService::incomingRequestCleared,
 		pWebViewWidget, &KWebViewWidget::sendIncomingTerminalRequestCleared);
-	connect(m_pTerminalSessionService, &KTerminalSessionService::terminalError,
-		pWebViewWidget, &KWebViewWidget::sendTerminalError);
+	connect(m_pTerminalSessionService, &KTerminalSessionService::structuredTerminalError,
+		pWebViewWidget, [pWebViewWidget](const KSessionError &error)
+		{
+			pWebViewWidget->sendTerminalError(KSessionErrorPresenter::userMessage(error));
+		});
 	QString strTerminalSupportReason;
 	const bool bTerminalFrontendSupported =
 		m_pTerminalSessionService->isFrontendSupported(&strTerminalSupportReason);

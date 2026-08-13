@@ -15,6 +15,9 @@ namespace
 	constexpr char kClose[] = "terminalClose";
 	constexpr char kExited[] = "terminalExited";
 	constexpr char kError[] = "terminalError";
+	constexpr char kCommandResult[] = "terminalCommandResult";
+	constexpr char kCommandId[] = "commandId";
+	constexpr char kSuccess[] = "success";
 	constexpr char kColumns[] = "columns";
 	constexpr char kRows[] = "rows";
 	constexpr char kTimeoutSeconds[] = "timeoutSeconds";
@@ -49,6 +52,8 @@ namespace
 QString KTerminalMessageCodec::encode(const KTerminalMessage &message)
 {
 	QJsonObject payload;
+	if (!message.strCommandId.isEmpty())
+		payload.insert(QString::fromLatin1(kCommandId), message.strCommandId);
 	if (message.type == OpenRequestTerminalMessageType
 		|| message.type == ResizeTerminalMessageType)
 	{
@@ -66,6 +71,12 @@ QString KTerminalMessageCodec::encode(const KTerminalMessage &message)
 		payload.insert(QString::fromLatin1(kErrorCode), message.strErrorCode);
 	if (message.type == ExitedTerminalMessageType)
 		payload.insert(QString::fromLatin1(kExitCode), message.nExitCode);
+	if (message.type == CommandResultTerminalMessageType)
+	{
+		payload.insert(QString::fromLatin1(kSuccess), message.bSuccess);
+		if (!message.strErrorCode.isEmpty())
+			payload.insert(QString::fromLatin1(kErrorCode), message.strErrorCode);
+	}
 	return KProtocolEnvelopeCodec::encode(SessionProtocolChannel,
 		typeName(message.type), message.strRequestId, 0, payload);
 }
@@ -97,7 +108,8 @@ bool KTerminalMessageCodec::decode(const KProtocolEnvelope &envelope,
 	for (KTerminalMessageType type : { OpenRequestTerminalMessageType,
 		ApprovalPendingTerminalMessageType, AcceptedTerminalMessageType,
 		RejectedTerminalMessageType, ResizeTerminalMessageType,
-		CloseTerminalMessageType, ExitedTerminalMessageType, ErrorTerminalMessageType })
+		CloseTerminalMessageType, ExitedTerminalMessageType, ErrorTerminalMessageType,
+		CommandResultTerminalMessageType })
 	{
 		if (strType == typeName(type))
 		{
@@ -109,6 +121,19 @@ bool KTerminalMessageCodec::decode(const KProtocolEnvelope &envelope,
 		return Fail(QStringLiteral("Unknown terminal message type"), pErrorMessage);
 	if (message.strRequestId.isEmpty() || QUuid(message.strRequestId).isNull())
 		return Fail(QStringLiteral("Terminal request id is invalid"), pErrorMessage);
+	const QJsonValue commandIdValue = envelope.payload.value(QString::fromLatin1(kCommandId));
+	if (!commandIdValue.isUndefined())
+	{
+		if (!commandIdValue.isString() || QUuid(commandIdValue.toString()).isNull())
+			return Fail(QStringLiteral("Terminal command id is invalid"), pErrorMessage);
+		message.strCommandId = commandIdValue.toString();
+	}
+	if ((isReliableCommand(message.type)
+		|| message.type == CommandResultTerminalMessageType)
+		&& message.strCommandId.isEmpty())
+	{
+		return Fail(QStringLiteral("Terminal command id is required"), pErrorMessage);
+	}
 
 	if (message.type == OpenRequestTerminalMessageType
 		|| message.type == ResizeTerminalMessageType)
@@ -149,6 +174,17 @@ bool KTerminalMessageCodec::decode(const KProtocolEnvelope &envelope,
 		if (!ReadInteger(envelope.payload, kExitCode, &message.nExitCode))
 			return Fail(QStringLiteral("Terminal exit code is invalid"), pErrorMessage);
 	}
+	else if (message.type == CommandResultTerminalMessageType)
+	{
+		const QJsonValue success = envelope.payload.value(QString::fromLatin1(kSuccess));
+		if (!success.isBool())
+			return Fail(QStringLiteral("Terminal command result is invalid"), pErrorMessage);
+		message.bSuccess = success.toBool();
+		const QJsonValue errorCode = envelope.payload.value(QString::fromLatin1(kErrorCode));
+		if (!message.bSuccess && (!errorCode.isString() || errorCode.toString().isEmpty()))
+			return Fail(QStringLiteral("Terminal command error is invalid"), pErrorMessage);
+		message.strErrorCode = errorCode.toString();
+	}
 
 	*pMessage = message;
 	return true;
@@ -166,7 +202,20 @@ QString KTerminalMessageCodec::typeName(KTerminalMessageType type)
 	case CloseTerminalMessageType: return QString::fromLatin1(kClose);
 	case ExitedTerminalMessageType: return QString::fromLatin1(kExited);
 	case ErrorTerminalMessageType: return QString::fromLatin1(kError);
+	case CommandResultTerminalMessageType: return QString::fromLatin1(kCommandResult);
 	case InvalidTerminalMessageType:
 	default: return QStringLiteral("invalid");
 	}
+}
+
+bool KTerminalMessageCodec::isReliableCommand(KTerminalMessageType type)
+{
+	return type == OpenRequestTerminalMessageType
+		|| type == ApprovalPendingTerminalMessageType
+		|| type == AcceptedTerminalMessageType
+		|| type == RejectedTerminalMessageType
+		|| type == ResizeTerminalMessageType
+		|| type == CloseTerminalMessageType
+		|| type == ExitedTerminalMessageType
+		|| type == ErrorTerminalMessageType;
 }

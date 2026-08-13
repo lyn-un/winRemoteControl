@@ -82,6 +82,8 @@ add_library(wrc_protocol STATIC
 	src/core/protocol/sessionmessage.h
 	src/core/protocol/terminalmessage.cpp
 	src/core/protocol/terminalmessage.h
+	src/core/protocol/terminaldataframe.cpp
+	src/core/protocol/terminaldataframe.h
 	src/core/protocol/webrtcsignalingmessage.cpp
 	src/core/protocol/webrtcsignalingmessage.h
 )
@@ -129,6 +131,10 @@ add_library(wrc_core STATIC
 	src/core/terminal/terminalrelayframecodec.h
 	src/core/terminal/terminalrelayprotocol.h
 	src/core/terminal/terminalstate.h
+	src/core/terminal/terminalstatemachine.cpp
+	src/core/terminal/terminalstatemachine.h
+	src/core/terminal/terminalwriteall.cpp
+	src/core/terminal/terminalwriteall.h
 )
 
 target_include_directories(wrc_core PUBLIC
@@ -141,7 +147,6 @@ target_link_libraries(wrc_core PUBLIC
 	Qt6::Core
 )
 
-if(WRC_BUILD_APP)
 add_library(wrc_diagnostics STATIC
 	src/common/latencytracelogger.cpp
 	src/common/latencytracelogger.h
@@ -159,6 +164,21 @@ target_link_libraries(wrc_diagnostics PUBLIC
 	Qt6::Core
 )
 
+add_library(wrc_session_contract STATIC
+	src/session/sessioncontroller.h
+)
+
+target_include_directories(wrc_session_contract PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_session_contract PUBLIC
+	wrc_core
+	wrc_protocol
+	Qt6::Core
+)
+
+if(WRC_BUILD_APP)
 add_library(wrc_windows_adapters STATIC
 	src/adapters/clipboard/clipboardchangefilter.cpp
 	src/adapters/clipboard/clipboardchangefilter.h
@@ -193,13 +213,18 @@ add_library(wrc_session_application STATIC
 	src/input/inputinjector.h
 	src/session/accessapprovalcontroller.cpp
 	src/session/accessapprovalcontroller.h
+	src/session/capabilitysessionflow.cpp
+	src/session/capabilitysessionflow.h
+	src/session/mediasessioncontroller.cpp
+	src/session/mediasessioncontroller.h
+	src/session/peerlifecyclecontroller.cpp
+	src/session/peerlifecyclecontroller.h
 	src/session/sessioncoordinator.cpp
 	src/session/sessioncoordinator.h
 	src/session/sessioncommanddispatcher.cpp
 	src/session/sessioncommanddispatcher.h
 	src/session/recoverycontroller.cpp
 	src/session/recoverycontroller.h
-	src/session/sessioncontroller.h
 	src/session/sessionerrorpresenter.cpp
 	src/session/sessionerrorpresenter.h
 	src/session/shutdowncoordinator.cpp
@@ -213,6 +238,7 @@ target_include_directories(wrc_session_application PUBLIC
 target_link_libraries(wrc_session_application PUBLIC
 	wrc_core
 	wrc_protocol
+	wrc_session_contract
 	wrc_diagnostics
 	Qt6::Core
 )
@@ -253,7 +279,11 @@ add_library(wrc_clipboard_application STATIC
 	src/clipboard/clipboardsyncservice.h
 )
 
+endif() # WRC_BUILD_APP
+
 add_library(wrc_terminal_application STATIC
+	src/terminal/terminalcommanddispatcher.cpp
+	src/terminal/terminalcommanddispatcher.h
 	src/terminal/terminalsessionservice.cpp
 	src/terminal/terminalsessionservice.h
 )
@@ -264,7 +294,7 @@ target_include_directories(wrc_terminal_application PUBLIC
 
 target_link_libraries(wrc_terminal_application PUBLIC
 	wrc_core
-	wrc_session_application
+	wrc_session_contract
 	wrc_diagnostics
 	Qt6::Core
 )
@@ -293,6 +323,7 @@ target_link_libraries(wrc_windows_terminal_adapter PUBLIC
 	Qt6::Core
 )
 
+if(WRC_BUILD_APP)
 add_library(wrc_windows_terminal_frontend_adapter STATIC
 	src/adapters/windows/terminal/windowsterminalfrontend.cpp
 	src/adapters/windows/terminal/windowsterminalfrontend.h
@@ -705,6 +736,24 @@ if(WRC_BUILD_TESTS)
 	)
 	add_test(NAME wrc_network_stats_tests COMMAND wrc_network_stats_tests)
 
+	add_executable(wrc_terminal_write_all_tests
+		tests/unit/terminalwritealltest.cpp
+	)
+	target_link_libraries(wrc_terminal_write_all_tests PRIVATE
+		wrc_core
+		Qt6::Core
+	)
+	add_test(NAME wrc_terminal_write_all_tests COMMAND wrc_terminal_write_all_tests)
+
+	add_executable(wrc_terminal_state_machine_tests
+		tests/unit/terminalstatemachinetest.cpp
+	)
+	target_link_libraries(wrc_terminal_state_machine_tests PRIVATE
+		wrc_core
+		Qt6::Core
+	)
+	add_test(NAME wrc_terminal_state_machine_tests COMMAND wrc_terminal_state_machine_tests)
+
 	add_executable(wrc_p1_core_tests
 		tests/unit/p1coretest.cpp
 	)
@@ -732,6 +781,8 @@ if(WRC_BUILD_TESTS)
 		wrc_protocol_robustness_tests
 		wrc_session_state_tests
 		wrc_network_stats_tests
+		wrc_terminal_write_all_tests
+		wrc_terminal_state_machine_tests
 		wrc_p1_core_tests
 		wrc_webrtc_callback_gate_tests
 		PROPERTIES ENVIRONMENT_MODIFICATION
@@ -805,6 +856,26 @@ if(WRC_BUILD_TESTS)
 		Qt6::Network
 	)
 	add_test(NAME wrc_session_service_tests COMMAND wrc_session_service_tests)
+
+	add_executable(wrc_peer_lifecycle_controller_tests
+		tests/unit/peerlifecyclecontrollertest.cpp
+	)
+	target_link_libraries(wrc_peer_lifecycle_controller_tests PRIVATE
+		wrc_session_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_peer_lifecycle_controller_tests
+		COMMAND wrc_peer_lifecycle_controller_tests)
+
+	add_executable(wrc_session_flow_controller_tests
+		tests/unit/sessionflowcontrollertest.cpp
+	)
+	target_link_libraries(wrc_session_flow_controller_tests PRIVATE
+		wrc_session_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_session_flow_controller_tests
+		COMMAND wrc_session_flow_controller_tests)
 	set_tests_properties(wrc_session_service_tests PROPERTIES
 		ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Network>"
 	)
@@ -891,6 +962,8 @@ if(WRC_BUILD_TESTS)
 	)
 	add_test(NAME wrc_clipboard_sync_tests COMMAND wrc_clipboard_sync_tests)
 
+	endif() # WRC_BUILD_APP
+
 	add_executable(wrc_terminal_session_tests
 		tests/unit/terminalsessionservicetest.cpp
 	)
@@ -899,6 +972,16 @@ if(WRC_BUILD_TESTS)
 		Qt6::Core
 	)
 	add_test(NAME wrc_terminal_session_tests COMMAND wrc_terminal_session_tests)
+
+	add_executable(wrc_terminal_command_dispatcher_tests
+		tests/unit/terminalcommanddispatchertest.cpp
+	)
+	target_link_libraries(wrc_terminal_command_dispatcher_tests PRIVATE
+		wrc_terminal_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_terminal_command_dispatcher_tests
+		COMMAND wrc_terminal_command_dispatcher_tests)
 
 	add_executable(wrc_terminal_relay_frame_codec_tests
 		tests/unit/terminalrelayframecodectest.cpp
@@ -930,6 +1013,7 @@ if(WRC_BUILD_TESTS)
 	add_test(NAME wrc_terminal_shell_policy_tests
 		COMMAND wrc_terminal_shell_policy_tests)
 
+	if(WRC_BUILD_APP)
 	add_executable(wrc_clipboard_change_filter_tests
 		tests/unit/clipboardchangefiltertest.cpp
 	)

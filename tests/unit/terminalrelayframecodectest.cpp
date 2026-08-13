@@ -4,8 +4,6 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDebug>
 
-#include <cstring>
-
 namespace
 {
 	int g_nFailureCount = 0;
@@ -40,20 +38,29 @@ namespace
 
 	void TestInvalidAndOversizedHeaders()
 	{
-		KTerminalRelayProtocol::FrameHeader header;
-		header.nVersion = KTerminalRelayProtocol::kVersion + 1;
-		QByteArray invalid(reinterpret_cast<const char *>(&header), sizeof(header));
+		auto header = KTerminalRelayProtocol::EncodeFrameHeader(
+			KTerminalRelayProtocol::InputFrameType, 0);
+		header[4] = static_cast<std::uint8_t>(KTerminalRelayProtocol::kVersion + 1);
+		QByteArray invalid(reinterpret_cast<const char *>(header.data()), header.size());
 		KTerminalRelayFrameCodec codec;
 		QVector<KTerminalRelayFrame> frames;
 		QString strError;
 		Check(!codec.append(invalid, &frames, &strError),
 			QStringLiteral("unknown relay protocol version is rejected"));
 
-		header = KTerminalRelayProtocol::FrameHeader();
-		header.nPayloadBytes = KTerminalRelayProtocol::kMaximumPayloadBytes + 1;
-		QByteArray oversized(reinterpret_cast<const char *>(&header), sizeof(header));
+		header = KTerminalRelayProtocol::EncodeFrameHeader(
+			KTerminalRelayProtocol::InputFrameType,
+			KTerminalRelayProtocol::kMaximumPayloadBytes + 1);
+		QByteArray oversized(reinterpret_cast<const char *>(header.data()), header.size());
 		Check(!codec.append(oversized, &frames, &strError),
 			QStringLiteral("oversized relay frame is rejected"));
+
+		header = KTerminalRelayProtocol::EncodeFrameHeader(99, 0);
+		QByteArray unknown(reinterpret_cast<const char *>(header.data()), header.size());
+		Check(!codec.append(unknown, &frames, &strError),
+			QStringLiteral("unknown relay frame type is rejected"));
+		Check(!codec.append(QByteArray(1024 * 1024 + 1, 'x'), &frames, &strError),
+			QStringLiteral("relay receive buffer is bounded"));
 	}
 }
 

@@ -2,9 +2,12 @@
 #define _WINREMOTECONTROL_TERMINAL_TERMINALSESSIONSERVICE_H_
 
 #include "core/protocol/sessionmessage.h"
+#include "core/protocol/terminaldataframe.h"
 #include "core/protocol/terminalmessage.h"
+#include "core/session/sessionerror.h"
 #include "core/session/sessionstatemachine.h"
 #include "core/terminal/terminalstate.h"
+#include "core/terminal/terminalstatemachine.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QObject>
@@ -15,6 +18,7 @@
 class KSessionController;
 class KTerminalFrontend;
 class KTerminalHost;
+class KTerminalCommandDispatcher;
 class QTimer;
 
 class KTerminalSessionService final : public QObject
@@ -51,12 +55,19 @@ signals:
 	void incomingRequest(const QString &strRequestId, const QString &strDeviceName,
 		const QString &strDeviceSource, qint64 nExpiresAtMs);
 	void incomingRequestCleared(const QString &strRequestId, const QString &strReason);
-	void terminalError(const QString &strMessage);
+	void structuredTerminalError(const KSessionError &error);
 
 private:
 	void handleSessionStateChanged(KSessionState state);
 	void handleCapabilitiesChanged(const KNegotiatedCapabilities &capabilities);
 	void handleControlMessage(const KTerminalMessage &message);
+	bool executeControlMessage(const KTerminalMessage &message,
+		QString *pErrorCode);
+	void handleCommandCompleted(KTerminalMessageType type,
+		const QString &strRequestId,
+		bool bSuccess,
+		const QString &strErrorCode,
+		quint64 nGeneration);
 	void handleTerminalData(const QByteArray &data);
 	void handleChannelChanged(bool bOpen);
 	void handleHostOutput(quint64 nGeneration, const QByteArray &data);
@@ -70,26 +81,42 @@ private:
 	void setState(KTerminalState state, const QString &strStatus);
 	void enqueueOutput(const QByteArray &data);
 	void flushOutput();
+	bool enqueueInput(const QByteArray &data);
+	void flushInput();
+	bool sendDataFrame(KTerminalDataDirection direction,
+		const QByteArray &payload,
+		quint64 *pSequence);
+	void reportTerminalError(KSessionErrorCode code,
+		const QString &strTechnicalMessage,
+		bool bRetryable = false);
+	void failTerminal(const QString &strErrorCode, const QString &strMessage);
 	void enqueuePendingControllerOutput(const QByteArray &data);
 	void flushPendingControllerOutput();
-	void sendControl(const KTerminalMessage &message);
+	bool sendControl(const KTerminalMessage &message);
 	bool isSessionReady() const;
 	void writeTrace(const QString &strStage, const QString &strExtra = QString()) const;
 
 	std::unique_ptr<KTerminalHost> m_spTerminalHost;
 	std::unique_ptr<KTerminalFrontend> m_spTerminalFrontend;
 	KSessionController *m_pSessionController = nullptr;
+	KTerminalCommandDispatcher *m_pCommandDispatcher = nullptr;
 	QTimer *m_pApprovalTimer = nullptr;
+	QTimer *m_pStopTimer = nullptr;
 	KTerminalState m_state = ClosedTerminalState;
+	KTerminalStateMachine m_stateMachine;
 	QString m_strStatus;
 	KSessionState m_sessionState = IdleSessionState;
 	KNegotiatedCapabilities m_capabilities;
 	QQueue<QByteArray> m_outputQueue;
 	qsizetype m_nQueuedOutputBytes = 0;
+	QQueue<QByteArray> m_inputQueue;
+	qsizetype m_nQueuedInputBytes = 0;
 	QQueue<QByteArray> m_pendingControllerOutputQueue;
 	qsizetype m_nPendingControllerOutputBytes = 0;
 	quint64 m_nInputBytes = 0;
 	quint64 m_nOutputBytes = 0;
+	quint64 m_nNextSendSequence = 1;
+	quint64 m_nLastReceivedSequence = 0;
 	QString m_strRequestId;
 	QString m_strDeviceName;
 	QString m_strDeviceSource;
@@ -104,6 +131,7 @@ private:
 	bool m_bPermissionGranted = false;
 	bool m_bPermissionDenied = false;
 	bool m_bOpenAfterConnect = false;
+	bool m_bHostStopPending = false;
 };
 
 #endif // _WINREMOTECONTROL_TERMINAL_TERMINALSESSIONSERVICE_H_
