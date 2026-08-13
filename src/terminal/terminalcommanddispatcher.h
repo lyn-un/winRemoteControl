@@ -39,6 +39,7 @@ private:
 		qint64 nSentMs = 0;
 		int nAttempts = 0;
 		quint64 nGeneration = 0;
+		qsizetype nEncodedBytes = 0;
 	};
 
 	void handleTimer();
@@ -51,6 +52,8 @@ private:
 	QQueue<QString> m_recentResultIds;
 	KTerminalMessage m_deferredResize;
 	quint64 m_nDeferredResizeGeneration = 0;
+	qsizetype m_nPendingBytes = 0;
+	qsizetype m_nRecentResultBytes = 0;
 	QElapsedTimer m_clock;
 	class QTimer *m_pTimer = nullptr;
 	TransmitFunction m_transmitFunction;

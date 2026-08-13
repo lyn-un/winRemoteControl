@@ -170,6 +170,16 @@ void TestResizeCoalescesToLatestPendingSize()
 	Check(transmitted.size() == 2 && transmitted.last().nColumns == 140,
 		"completion sends only the latest deferred resize");
 }
+
+void TestPendingCommandTableIsBounded()
+{
+	KTerminalCommandDispatcher dispatcher;
+	dispatcher.setTransmitFunction([](const KTerminalMessage &) { return true; });
+	for (int index = 0; index < 128; ++index)
+		Check(dispatcher.send(OpenCommand(), 17), "bounded command slot is accepted");
+	Check(!dispatcher.send(OpenCommand(), 17),
+		"pending reliable command table rejects overflow");
+}
 }
 
 int main(int argc, char *argv[])
@@ -180,5 +190,6 @@ int main(int argc, char *argv[])
 	TestAckCompletesWithoutRetry();
 	TestSynchronousAckIsNotLost();
 	TestResizeCoalescesToLatestPendingSize();
+	TestPendingCommandTableIsBounded();
 	return g_nFailureCount == 0 ? 0 : 1;
 }

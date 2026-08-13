@@ -2,9 +2,11 @@
 #define _WINREMOTECONTROL_SESSION_ACCESSSESSIONFLOW_H_
 
 #include "core/protocol/accessmessage.h"
+#include "core/settings/applicationsettings.h"
 
 #include <QtCore/QObject>
 
+class KAccessApprovalController;
 class KSignalingTransport;
 
 class KAccessSessionFlow final : public QObject
@@ -14,11 +16,20 @@ class KAccessSessionFlow final : public QObject
 public:
 	explicit KAccessSessionFlow(KSignalingTransport *pTransport,
 		QObject *pParent = nullptr);
+	void setApplicationSettings(const KApplicationSettings &settings);
 	bool startListening(quint16 nPort, QString *pErrorMessage);
 	void connectToHost(const QString &strHost, quint16 nPort);
 	void disconnectPeer();
 	void stop();
-	void sendAccessMessage(const KAccessMessage &message);
+	void beginOutgoing(quint64 nGeneration, const QString &strDeviceName);
+	void beginIncoming(const QString &strSourceAddress, quint64 nGeneration);
+	bool handleAccessMessage(const KAccessMessage &message, quint64 nGeneration);
+	void respondIncoming(const QString &strRequestId, bool bAccepted);
+	void rejectIncoming(const QString &strReason, bool bNotifyRemote);
+	void cancelApproval(const QString &strReason, bool bNotifyRemote,
+		bool bEmitOutcome = false);
+	void clearApproval(const QString &strReason);
+	bool hasApproval() const;
 	void sendSignalingMessage(const QString &strMessage);
 	void setConnected(bool bConnected);
 	bool isConnected() const;
@@ -38,9 +49,27 @@ signals:
 	void incomingConnectionEstablished(const QString &strSourceAddress,
 		quint16 nSourcePort);
 	void connectionLost();
+	void incomingAccessObserved(const QString &strDeviceName,
+		const QString &strSourceAddress);
+	void incomingAccessRequest(const QString &strRequestId,
+		const QString &strDeviceName,
+		const QString &strSourceAddress,
+		qint64 nExpiresAtMs);
+	void incomingAccessRequestCleared(const QString &strRequestId,
+		const QString &strReason);
+	void incomingAccessAccepted();
+	void incomingAccessRejected(const QString &strReason);
+	void outgoingAccessAccepted();
+	void outgoingAccessRejected(const QString &strReason);
 
 private:
+	void sendAccessMessage(const KAccessMessage &message);
+	void acceptIncoming();
+	void handleApprovalTimeout(const QString &strRequestId, quint64 nGeneration);
+
 	KSignalingTransport *m_pTransport = nullptr;
+	KAccessApprovalController *m_pApprovalController = nullptr;
+	KApplicationSettings m_settings;
 	QString m_strLastHost;
 	quint16 m_nLastPort = 0;
 	quint16 m_nListeningPort = 0;

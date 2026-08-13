@@ -22,7 +22,6 @@
 class IKDeviceInfoProvider;
 class IKInputInjector;
 class KInputInjector;
-class KAccessApprovalController;
 class KAccessSessionFlow;
 class KCapabilitySessionFlow;
 class KMediaSessionController;
@@ -142,12 +141,7 @@ private:
 	KProtocolHandlerResult handleWebRtcSignalingEnvelope(const KProtocolEnvelope &envelope);
 	KProtocolHandlerResult handleBusyEnvelope(const KProtocolEnvelope &envelope);
 	void handleInvalidSignalingMessage(KProtocolRouteStatus status, const QString &strError);
-	void handleAccessMessage(const KAccessMessage &message);
-	void handleApprovalTimeout(const QString &strRequestId, quint64 nGeneration);
-	void acceptIncomingAccess();
-	void rejectIncomingAccess(const QString &strReason, bool bNotifyRemote);
-	void clearApprovalState(const QString &strReason);
-	void sendAccessMessage(const KAccessMessage &message);
+	void handleOutgoingAccessRejected(const QString &strReason);
 	void handleSignalingConnectionLost();
 	void handlePeerConnectionInterrupted();
 	void handlePeerConnectionRestored();
@@ -186,7 +180,6 @@ private:
 	std::unique_ptr<KSignalingTransport> m_spSignalingTransport;
 	KSignalingTransport *m_pSignaling = nullptr;
 	KInputInjector *m_pInputInjector = nullptr;
-	KAccessApprovalController *m_pAccessApprovalController = nullptr;
 	KAccessSessionFlow *m_pAccessSessionFlow = nullptr;
 	KCapabilitySessionFlow *m_pCapabilitySessionFlow = nullptr;
 	KMediaSessionController *m_pMediaSessionController = nullptr;

@@ -21,6 +21,7 @@ public:
 		QString *pErrorMessage = nullptr) = 0;
 	virtual void focus() = 0;
 	virtual bool writeOutput(quint64 nGeneration, const QByteArray &data) = 0;
+	virtual void setInputPaused(bool bPaused) = 0;
 	virtual void close(quint64 nGeneration) = 0;
 
 signals:

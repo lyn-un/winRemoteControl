@@ -148,6 +148,18 @@ bool KWindowsTerminalFrontend::writeOutput(quint64 nGeneration, const QByteArray
 	return true;
 }
 
+void KWindowsTerminalFrontend::setInputPaused(bool bPaused)
+{
+	if (m_bInputPaused == bPaused)
+		return;
+	m_bInputPaused = bPaused;
+	if (m_pSocket != nullptr)
+		m_pSocket->setReadBufferSize(bPaused ? 64 * 1024 : 0);
+	if (!bPaused)
+		QMetaObject::invokeMethod(this, &KWindowsTerminalFrontend::handleReadyRead,
+			Qt::QueuedConnection);
+}
+
 void KWindowsTerminalFrontend::close(quint64 nGeneration)
 {
 	if (nGeneration != 0 && nGeneration != m_nGeneration)
@@ -180,7 +192,7 @@ void KWindowsTerminalFrontend::handleNewConnection()
 
 void KWindowsTerminalFrontend::handleReadyRead()
 {
-	if (m_pSocket == nullptr)
+	if (m_pSocket == nullptr || m_bInputPaused)
 		return;
 	QVector<KTerminalRelayFrame> frames;
 	QString strError;
@@ -354,6 +366,7 @@ void KWindowsTerminalFrontend::clearLocalState(bool bEmitClosed)
 	m_bAuthenticated = false;
 	m_bInputObserved = false;
 	m_bRelayBackpressured = false;
+	m_bInputPaused = false;
 	m_strPipeName.clear();
 	m_strToken.clear();
 	m_strWindowName.clear();

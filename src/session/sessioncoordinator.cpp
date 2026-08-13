@@ -1,6 +1,5 @@
 #include "session/sessioncoordinator.h"
 
-#include "session/accessapprovalcontroller.h"
 #include "session/accesssessionflow.h"
 #include "session/capabilitysessionflow.h"
 #include "session/mediasessioncontroller.h"
@@ -20,17 +19,12 @@
 #include "input/inputinjector.h"
 
 #include <QtCore/QTimer>
-#include <QtCore/QDateTime>
-#include <QtCore/QUuid>
-
 #include <utility>
 #include <algorithm>
 
 namespace
 {
 	constexpr int kReconnectTimeoutMs = 10000;
-	constexpr int kInitialApprovalResponseTimeoutMs = 5000;
-	constexpr int kApprovalResponseGraceMs = 5000;
 
 	static QString roleToString(KSessionRole role)
 	{
@@ -77,7 +71,6 @@ KSessionCoordinator::KSessionCoordinator(
 	, m_spSignalingTransport(std::move(spSignalingTransport))
 	, m_pSignaling(m_spSignalingTransport.get())
 	, m_pInputInjector(new KInputInjector(std::move(spInputInjector), this))
-	, m_pAccessApprovalController(new KAccessApprovalController(this))
 	, m_pAccessSessionFlow(new KAccessSessionFlow(m_pSignaling, this))
 	, m_pCapabilitySessionFlow(new KCapabilitySessionFlow(this))
 	, m_pMediaSessionController(new KMediaSessionController(this))
@@ -89,10 +82,9 @@ KSessionCoordinator::KSessionCoordinator(
 {
 	Q_ASSERT(m_spRemotePeerTransport != nullptr);
 	Q_ASSERT(m_pSignaling != nullptr);
+	m_pAccessSessionFlow->setApplicationSettings(m_applicationSettings);
 	initializeProtocolRoutes();
 	initializeSessionHandlers();
-	connect(m_pAccessApprovalController, &KAccessApprovalController::timedOut,
-		this, &KSessionCoordinator::handleApprovalTimeout);
 	connect(m_pRecoveryController, &KRecoveryController::timedOut,
 		this, &KSessionCoordinator::handleReconnectTimeout);
 	connect(m_pShutdownCoordinator, &KShutdownCoordinator::finished,
@@ -134,6 +126,44 @@ KSessionCoordinator::KSessionCoordinator(
 		this, &KSessionCoordinator::handleIncomingConnectionEstablished);
 	connect(m_pAccessSessionFlow, &KAccessSessionFlow::connectionLost,
 		this, &KSessionCoordinator::handleSignalingConnectionLost);
+	connect(m_pAccessSessionFlow, &KAccessSessionFlow::incomingAccessObserved,
+		this, &KSessionCoordinator::incomingAccessObserved);
+	connect(m_pAccessSessionFlow, &KAccessSessionFlow::incomingAccessRequest,
+		this, &KSessionCoordinator::incomingAccessRequest);
+	connect(m_pAccessSessionFlow, &KAccessSessionFlow::incomingAccessRequestCleared,
+		this, &KSessionCoordinator::incomingAccessRequestCleared);
+	connect(m_pAccessSessionFlow, &KAccessSessionFlow::incomingAccessAccepted,
+		this, [this]()
+		{
+			if (m_sessionStateMachine.role() != ControlledSessionRole
+				|| !m_sessionStateMachine.isAwaitingApproval()
+				|| !m_sessionStateMachine.approveConnection())
+				return;
+			publishSessionState();
+		});
+	connect(m_pAccessSessionFlow, &KAccessSessionFlow::incomingAccessRejected,
+		this, [this](const QString &)
+		{
+			if (m_sessionStateMachine.role() != ControlledSessionRole
+				|| !m_sessionStateMachine.isAwaitingApproval())
+				return;
+			m_sessionStateMachine.rejectConnection();
+			m_pAccessSessionFlow->disconnectPeer();
+			updateListeningAvailability(true, m_nListeningPort);
+			publishSessionState();
+		});
+	connect(m_pAccessSessionFlow, &KAccessSessionFlow::outgoingAccessAccepted,
+		this, [this]()
+		{
+			if (m_sessionStateMachine.role() != ControllerSessionRole
+				|| !m_sessionStateMachine.isAwaitingApproval()
+				|| !m_sessionStateMachine.approveConnection())
+				return;
+			publishSessionState();
+			m_spRemotePeerTransport->createOffer();
+		});
+	connect(m_pAccessSessionFlow, &KAccessSessionFlow::outgoingAccessRejected,
+		this, &KSessionCoordinator::handleOutgoingAccessRejected);
 	connect(m_pInputInjector, &KInputInjector::inputError,
 		this, [this](const QString &strMessage)
 		{
@@ -482,20 +512,16 @@ void KSessionCoordinator::applyApplicationSettings(const KApplicationSettings &s
 {
 	const bool bWasEnabled = m_applicationSettings.bRemoteAccessEnabled;
 	m_applicationSettings = SanitizeApplicationSettings(settings);
+	m_pAccessSessionFlow->setApplicationSettings(m_applicationSettings);
 	if (bWasEnabled && !m_applicationSettings.bRemoteAccessEnabled
 		&& m_sessionStateMachine.role() == ControlledSessionRole
 		&& m_sessionStateMachine.state() != IdleSessionState)
 	{
 		const bool bPendingApproval = m_sessionStateMachine.isAwaitingApproval()
-			&& m_pAccessApprovalController->hasRequestId();
+			&& m_pAccessSessionFlow->hasApproval();
 		if (bPendingApproval)
-		{
-			KAccessMessage rejected;
-			rejected.type = RejectedAccessMessageType;
-			rejected.strRequestId = m_pAccessApprovalController->request().strRequestId;
-			rejected.strReason = QStringLiteral("remote_access_disabled");
-			sendAccessMessage(rejected);
-		}
+			m_pAccessSessionFlow->cancelApproval(
+				QStringLiteral("remote_access_disabled"), true);
 		finishSession(LocalDisconnectSessionEndReason,
 			QStringLiteral("remote_access_disabled"), false, !bPendingApproval, false);
 	}
@@ -506,17 +532,11 @@ void KSessionCoordinator::respondIncomingAccessRequest(
 	bool bAccepted)
 {
 	if (m_sessionStateMachine.role() != ControlledSessionRole
-		|| !m_sessionStateMachine.isAwaitingApproval()
-		|| !m_pAccessApprovalController->matches(strRequestId,
-			m_sessionStateMachine.generation()))
+		|| !m_sessionStateMachine.isAwaitingApproval())
 	{
 		return;
 	}
-
-	if (bAccepted)
-		acceptIncomingAccess();
-	else
-		rejectIncomingAccess(QStringLiteral("user_rejected"), true);
+	m_pAccessSessionFlow->respondIncoming(strRequestId, bAccepted);
 }
 
 void KSessionCoordinator::enterRemoteDesktop(const KStreamConfig &config)
@@ -792,20 +812,8 @@ void KSessionCoordinator::finishSession(KSessionEndReason reason,
 	bool bReportError)
 {
 	const bool bRecovering = m_sessionStateMachine.isReconnecting();
-	if (bNotifyRemote
-		&& m_sessionStateMachine.isAwaitingApproval()
-		&& m_pAccessApprovalController->hasRequestId())
-	{
-		const QString strRequestId = m_pAccessApprovalController->request().strRequestId;
-		KAccessMessage message;
-		message.type = RejectedAccessMessageType;
-		message.strRequestId = strRequestId;
-		message.strReason = QStringLiteral("cancelled");
-		sendAccessMessage(message);
-		KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
-			QStringLiteral("access"), QStringLiteral("cancelled"), -1,
-			QStringLiteral("requestId=%1").arg(strRequestId));
-	}
+	if (m_sessionStateMachine.isAwaitingApproval())
+		m_pAccessSessionFlow->cancelApproval(QStringLiteral("cancelled"), bNotifyRemote);
 	if (!m_sessionStateMachine.beginStopping())
 		return;
 	updateListeningAvailability(false);
@@ -867,7 +875,7 @@ void KSessionCoordinator::continueStoppingTeardown()
 	m_pRecoveryController->clear();
 	m_pCapabilitySessionFlow->reset();
 	m_pAccessSessionFlow->setConnected(false);
-	clearApprovalState(strReason);
+	m_pAccessSessionFlow->clearApproval(strReason);
 	m_bDeviceInfoRequested = false;
 	m_nInvalidSignalingMessages = 0;
 	m_bInputChannelOpen = false;
@@ -1641,23 +1649,11 @@ void KSessionCoordinator::handleOutgoingConnectionEstablished()
 
 	if (!m_sessionStateMachine.beginAwaitingApproval())
 		return;
-	const KAccessApprovalRequest request = m_pAccessApprovalController->beginOutgoing(
-		m_sessionStateMachine.generation(), kInitialApprovalResponseTimeoutMs);
-	KAccessMessage message;
-	message.type = RequestAccessMessageType;
-	message.strRequestId = request.strRequestId;
-	message.strDeviceName = m_spDeviceInfoProvider != nullptr
+	m_pAccessSessionFlow->beginOutgoing(m_sessionStateMachine.generation(),
+		m_spDeviceInfoProvider != nullptr
 		? m_spDeviceInfoProvider->deviceName()
-		: QStringLiteral("Windows device");
-	sendAccessMessage(message);
+		: QStringLiteral("Windows device"));
 	publishSessionState();
-	KSessionTraceLogger::write(QStringLiteral("controller"),
-		QStringLiteral("access"),
-		QStringLiteral("request_sent"),
-		-1,
-		QStringLiteral("requestId=%1 generation=%2")
-			.arg(request.strRequestId)
-			.arg(request.nGeneration));
 }
 
 void KSessionCoordinator::handleOutgoingConnectionFailed(const QString &strMessage)
@@ -1683,8 +1679,8 @@ void KSessionCoordinator::handleIncomingConnectionEstablished(
 	if (!m_sessionStateMachine.beginAwaitingApproval())
 		return;
 	m_pAccessSessionFlow->setConnected(true);
-	m_pAccessApprovalController->beginIncoming(strSourceAddress,
-		m_sessionStateMachine.generation(), kInitialApprovalResponseTimeoutMs);
+	m_pAccessSessionFlow->beginIncoming(strSourceAddress,
+		m_sessionStateMachine.generation());
 	updateListeningAvailability(false);
 	publishSessionState();
 	KSessionTraceLogger::write(QStringLiteral("controlled"),
@@ -1694,7 +1690,7 @@ void KSessionCoordinator::handleIncomingConnectionEstablished(
 		QStringLiteral("source=%1 sourcePort=%2 generation=%3")
 			.arg(strSourceAddress)
 			.arg(nSourcePort)
-			.arg(m_pAccessApprovalController->request().nGeneration));
+			.arg(m_sessionStateMachine.generation()));
 }
 
 void KSessionCoordinator::handleSignalingMessage(const QString &strMessage)
@@ -1728,8 +1724,11 @@ KProtocolHandlerResult KSessionCoordinator::handleAccessEnvelope(
 	QString strError;
 	if (!KAccessMessageCodec::decode(envelope, &message, &strError))
 		return KProtocolHandlerResult::failure(ProtocolHandlerDecodeFailed, strError);
-	handleAccessMessage(message);
-	return KProtocolHandlerResult::success();
+	return m_pAccessSessionFlow->handleAccessMessage(message,
+		m_sessionStateMachine.generation())
+		? KProtocolHandlerResult::success()
+		: KProtocolHandlerResult::failure(ProtocolHandlerInvalidState,
+			QStringLiteral("Access message does not match the active request"));
 }
 
 KProtocolHandlerResult KSessionCoordinator::handleWebRtcSignalingEnvelope(
@@ -1772,7 +1771,7 @@ void KSessionCoordinator::handleInvalidSignalingMessage(KProtocolRouteStatus sta
 	if (m_sessionStateMachine.role() == ControlledSessionRole
 		&& bWasAwaitingApproval)
 	{
-		rejectIncomingAccess(QStringLiteral("invalid_request"), false);
+		m_pAccessSessionFlow->rejectIncoming(QStringLiteral("invalid_request"), false);
 	}
 	else if (bWasAwaitingApproval)
 	{
@@ -1801,221 +1800,31 @@ void KSessionCoordinator::handleInvalidSignalingMessage(KProtocolRouteStatus sta
 			? QStringLiteral("Unsupported or invalid signaling message") : strError);
 }
 
-void KSessionCoordinator::handleAccessMessage(const KAccessMessage &message)
+void KSessionCoordinator::handleOutgoingAccessRejected(const QString &strReason)
 {
-	if (!m_sessionStateMachine.isAwaitingApproval())
-		return;
-
-	if (m_sessionStateMachine.role() == ControlledSessionRole)
-	{
-		if (message.type == RejectedAccessMessageType
-			&& m_pAccessApprovalController->matches(message.strRequestId,
-				m_sessionStateMachine.generation()))
-		{
-			rejectIncomingAccess(QStringLiteral("cancelled"), false);
-			return;
-		}
-		if (message.type != RequestAccessMessageType
-			|| m_pAccessApprovalController->hasRequestId())
-			return;
-
-		if (!m_pAccessApprovalController->receiveIncomingRequest(message.strRequestId,
-			message.strDeviceName,
-			m_applicationSettings.nApprovalTimeoutSeconds * 1000))
-		{
-			return;
-		}
-		const KAccessApprovalRequest &request = m_pAccessApprovalController->request();
-		emit incomingAccessObserved(request.strDeviceName, request.strSourceAddress);
-		const KIncomingAccessDecision decision =
-			KAccessApprovalController::incomingDecision(m_applicationSettings);
-		if (decision == DisabledIncomingAccessDecision)
-		{
-			rejectIncomingAccess(QStringLiteral("remote_access_disabled"), true);
-			return;
-		}
-		if (decision == DenyIncomingAccessDecision)
-		{
-			rejectIncomingAccess(QStringLiteral("user_rejected"), true);
-			return;
-		}
-		if (decision == AcceptIncomingAccessDecision)
-		{
-			acceptIncomingAccess();
-			return;
-		}
-
-		KAccessMessage pending;
-		pending.type = PendingAccessMessageType;
-		pending.strRequestId = request.strRequestId;
-		pending.nTimeoutSeconds = m_applicationSettings.nApprovalTimeoutSeconds;
-		sendAccessMessage(pending);
-		const qint64 nExpiresAtMs = QDateTime::currentMSecsSinceEpoch()
-			+ m_applicationSettings.nApprovalTimeoutSeconds * 1000;
-		emit incomingAccessRequest(request.strRequestId,
-			request.strDeviceName,
-			request.strSourceAddress,
-			nExpiresAtMs);
-		KSessionTraceLogger::write(QStringLiteral("controlled"),
-			QStringLiteral("access"),
-			QStringLiteral("pending"),
-			-1,
-			QStringLiteral("requestId=%1 source=%2 timeoutSeconds=%3")
-				.arg(request.strRequestId)
-				.arg(request.strSourceAddress)
-				.arg(m_applicationSettings.nApprovalTimeoutSeconds));
-		return;
-	}
-
-	if (!m_pAccessApprovalController->matches(message.strRequestId,
-		m_sessionStateMachine.generation()))
-		return;
-	if (message.type == PendingAccessMessageType)
-	{
-		m_pAccessApprovalController->extendOutgoingTimeout(message.strRequestId,
-			message.nTimeoutSeconds * 1000 + kApprovalResponseGraceMs);
-		KSessionTraceLogger::write(QStringLiteral("controller"),
-			QStringLiteral("access"), QStringLiteral("pending"), -1,
-			QStringLiteral("requestId=%1 timeoutSeconds=%2")
-				.arg(message.strRequestId)
-				.arg(message.nTimeoutSeconds));
-		return;
-	}
-	if (message.type == AcceptedAccessMessageType)
-	{
-		m_pAccessApprovalController->stopTimeout();
-		if (!m_sessionStateMachine.approveConnection())
-			return;
-		clearApprovalState(QStringLiteral("accepted"));
-		publishSessionState();
-		m_spRemotePeerTransport->createOffer();
-		KSessionTraceLogger::write(QStringLiteral("controller"),
-			QStringLiteral("access"), QStringLiteral("accepted"));
-		return;
-	}
-	if (message.type == RejectedAccessMessageType)
-	{
-		const QString strReason = message.strReason;
-		KSessionTraceLogger::write(QStringLiteral("controller"),
-			QStringLiteral("access"), QStringLiteral("rejected"), -1,
-			QStringLiteral("requestId=%1 reason=%2")
-				.arg(message.strRequestId, strReason));
-		finishSession(ConnectFailedSessionEndReason, strReason, false, false, false);
-		KSessionErrorCode code = ApprovalRejectedSessionErrorCode;
-		bool bRetryable = false;
-		if (strReason == QStringLiteral("busy"))
-		{
-			code = RemoteBusySessionErrorCode;
-			bRetryable = true;
-		}
-		else if (strReason == QStringLiteral("timeout"))
-		{
-			code = ApprovalTimeoutSessionErrorCode;
-			bRetryable = true;
-		}
-		else if (strReason == QStringLiteral("remote_access_disabled"))
-		{
-			code = RemoteAccessDisabledSessionErrorCode;
-		}
-		reportSessionError(AccessSessionErrorDomain, code,
-			ApprovalSessionErrorStage, bRetryable,
-			QStringLiteral("Access rejected: %1").arg(strReason));
-	}
-}
-
-void KSessionCoordinator::handleApprovalTimeout(const QString &strRequestId,
-	quint64 nGeneration)
-{
-	if (!m_sessionStateMachine.isAwaitingApproval()
-		|| nGeneration != m_sessionStateMachine.generation())
-	{
-		return;
-	}
-	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
-		QStringLiteral("access"), QStringLiteral("timeout"), -1,
-		QStringLiteral("requestId=%1 generation=%2")
-			.arg(strRequestId)
-			.arg(nGeneration));
-
-	if (m_sessionStateMachine.role() == ControlledSessionRole)
-	{
-		rejectIncomingAccess(QStringLiteral("timeout"),
-			m_pAccessApprovalController->hasRequestId());
-		return;
-	}
-
-	finishSession(ConnectFailedSessionEndReason, QStringLiteral("approval_timeout"),
-		false, false, false);
-	reportSessionError(AccessSessionErrorDomain,
-		ApprovalTimeoutSessionErrorCode, ApprovalSessionErrorStage,
-		true, QStringLiteral("Approval response timed out"));
-}
-
-void KSessionCoordinator::acceptIncomingAccess()
-{
-	if (m_sessionStateMachine.role() != ControlledSessionRole
-		|| !m_pAccessApprovalController->hasRequestId()
-		|| !m_sessionStateMachine.approveConnection())
-	{
-		return;
-	}
-
-	const KAccessApprovalRequest request = m_pAccessApprovalController->request();
-	m_pAccessApprovalController->stopTimeout();
-	KAccessMessage accepted;
-	accepted.type = AcceptedAccessMessageType;
-	accepted.strRequestId = request.strRequestId;
-	sendAccessMessage(accepted);
-	KSessionTraceLogger::write(QStringLiteral("controlled"),
-		QStringLiteral("access"), QStringLiteral("accepted"), -1,
-		QStringLiteral("requestId=%1 source=%2")
-			.arg(request.strRequestId, request.strSourceAddress));
-	clearApprovalState(QStringLiteral("accepted"));
-	publishSessionState();
-}
-
-void KSessionCoordinator::rejectIncomingAccess(const QString &strReason, bool bNotifyRemote)
-{
-	if (m_sessionStateMachine.role() != ControlledSessionRole
+	if (m_sessionStateMachine.role() != ControllerSessionRole
 		|| !m_sessionStateMachine.isAwaitingApproval())
-	{
 		return;
-	}
-
-	const KAccessApprovalRequest request = m_pAccessApprovalController->request();
-	if (bNotifyRemote && !request.strRequestId.isEmpty())
+	finishSession(ConnectFailedSessionEndReason, strReason, false, false, false);
+	KSessionErrorCode code = ApprovalRejectedSessionErrorCode;
+	bool bRetryable = false;
+	if (strReason == QStringLiteral("busy"))
 	{
-		KAccessMessage rejected;
-		rejected.type = RejectedAccessMessageType;
-		rejected.strRequestId = request.strRequestId;
-		rejected.strReason = strReason;
-		sendAccessMessage(rejected);
+		code = RemoteBusySessionErrorCode;
+		bRetryable = true;
 	}
-	KSessionTraceLogger::write(QStringLiteral("controlled"),
-		QStringLiteral("access"), QStringLiteral("rejected"), -1,
-		QStringLiteral("requestId=%1 source=%2 reason=%3")
-			.arg(request.strRequestId, request.strSourceAddress, strReason));
-	m_pAccessApprovalController->stopTimeout();
-	clearApprovalState(strReason);
-	m_sessionStateMachine.rejectConnection();
-	m_pAccessSessionFlow->disconnectPeer();
-	updateListeningAvailability(true, m_nListeningPort);
-	publishSessionState();
-}
-
-void KSessionCoordinator::clearApprovalState(const QString &strReason)
-{
-	const KAccessApprovalRequest request = m_pAccessApprovalController->clear();
-	if (!request.strRequestId.isEmpty()
-		&& request.side == IncomingAccessApprovalSide)
+	else if (strReason == QStringLiteral("timeout"))
 	{
-		emit incomingAccessRequestCleared(request.strRequestId, strReason);
+		code = ApprovalTimeoutSessionErrorCode;
+		bRetryable = true;
 	}
-}
-
-void KSessionCoordinator::sendAccessMessage(const KAccessMessage &message)
-{
-	m_pAccessSessionFlow->sendAccessMessage(message);
+	else if (strReason == QStringLiteral("remote_access_disabled"))
+	{
+		code = RemoteAccessDisabledSessionErrorCode;
+	}
+	reportSessionError(AccessSessionErrorDomain, code,
+		ApprovalSessionErrorStage, bRetryable,
+		QStringLiteral("Access rejected: %1").arg(strReason));
 }
 
 void KSessionCoordinator::updateListeningAvailability(bool bAvailable, quint16 nPort)

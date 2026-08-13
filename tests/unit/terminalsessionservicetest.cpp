@@ -101,6 +101,11 @@ namespace
 			output.append(data);
 			return true;
 		}
+		void setInputPaused(bool bPaused) override
+		{
+			bInputPaused = bPaused;
+			++nInputPauseChanges;
+		}
 		void close(quint64) override { ++nCloseCount; }
 		void failHandshake(quint64 nGeneration)
 		{
@@ -115,8 +120,10 @@ namespace
 		quint64 nCurrentGeneration = 0;
 		int nFocusCount = 0;
 		int nCloseCount = 0;
+		int nInputPauseChanges = 0;
 		QByteArray output;
 		bool bWriteSucceeds = true;
+		bool bInputPaused = false;
 	};
 
 	class KFakeSessionController final : public KSessionController
@@ -382,6 +389,7 @@ namespace
 	{
 		auto spHost = std::make_unique<KFakeTerminalHost>();
 		auto spFrontend = std::make_unique<KFakeTerminalFrontend>();
+		KFakeTerminalFrontend *pFrontend = spFrontend.get();
 		KFakeSessionController controller;
 		KTerminalSessionService service(std::move(spHost), &controller,
 			std::move(spFrontend));
@@ -397,10 +405,14 @@ namespace
 		service.sendInput(QByteArray("second"));
 		Check(controller.dataMessages.isEmpty(),
 			QStringLiteral("backpressured terminal input is queued"));
+		Check(pFrontend->bInputPaused,
+			QStringLiteral("relay input reading pauses while data channel is congested"));
 		controller.bBackpressured = false;
 		emit controller.terminalLowWatermarkReached();
 		Check(controller.dataMessages.size() == 2,
 			QStringLiteral("queued terminal input flushes after low watermark"));
+		Check(!pFrontend->bInputPaused,
+			QStringLiteral("relay input reading resumes at low watermark"));
 		KTerminalDataFrame first;
 		KTerminalDataFrame second;
 		Check(KTerminalDataFrameCodec::decode(controller.dataMessages.value(0), &first)
@@ -683,7 +695,9 @@ namespace
 		hostService.respondIncomingRequest(request.strRequestId, true);
 		AcknowledgeLastCommand(&controlled);
 		pHost->fail(controlled.nGeneration);
-		Check(!hostErrors.isEmpty() && pHost->nStopCount > 0,
+		Check(!hostErrors.isEmpty() && pHost->nStopCount > 0
+			&& hostErrors.last().strTechnicalMessage
+				== QStringLiteral("injected runtime failure"),
 			QStringLiteral("host runtime failure reports and requests shutdown"));
 
 		auto spFrontendHost = std::make_unique<KFakeTerminalHost>();
@@ -789,6 +803,79 @@ namespace
 			&& errors.last().code == TerminalOutputOverflowSessionErrorCode,
 			QStringLiteral("pre-accept output queue overflow fails closed"));
 	}
+
+	void TestShutdownConvergesFromActiveStates()
+	{
+		{
+			auto spHost = std::make_unique<KFakeTerminalHost>();
+			KFakeSessionController controller;
+			KTerminalSessionService service(std::move(spHost), &controller);
+			QVector<KTerminalState> states;
+			QObject::connect(&service, &KTerminalSessionService::stateChanged,
+				[&states](KTerminalState state, bool, const QString &,
+					const QString &, const QString &) { states.append(state); });
+			service.shutdown();
+			service.requestState();
+			Check(states.last() == ClosedTerminalState,
+				QStringLiteral("shutdown keeps an idle terminal closed"));
+		}
+		{
+			auto spHost = std::make_unique<KFakeTerminalHost>();
+			auto spFrontend = std::make_unique<KFakeTerminalFrontend>();
+			KFakeSessionController controller;
+			KTerminalSessionService service(std::move(spHost), &controller,
+				std::move(spFrontend));
+			QVector<KTerminalState> states;
+			QObject::connect(&service, &KTerminalSessionService::stateChanged,
+				[&states](KTerminalState state, bool, const QString &,
+					const QString &, const QString &) { states.append(state); });
+			controller.makeReady();
+			service.openCurrentTerminal();
+			service.shutdown();
+			Check(!states.isEmpty() && states.last() == ClosedTerminalState,
+				QStringLiteral("shutdown closes a terminal awaiting remote approval"));
+		}
+		{
+			auto spHost = std::make_unique<KFakeTerminalHost>();
+			auto spFrontend = std::make_unique<KFakeTerminalFrontend>();
+			KFakeSessionController controller;
+			KTerminalSessionService service(std::move(spHost), &controller,
+				std::move(spFrontend));
+			QVector<KTerminalState> states;
+			QObject::connect(&service, &KTerminalSessionService::stateChanged,
+				[&states](KTerminalState state, bool, const QString &,
+					const QString &, const QString &) { states.append(state); });
+			controller.makeReady();
+			service.openCurrentTerminal();
+			KTerminalMessage accepted;
+			accepted.type = AcceptedTerminalMessageType;
+			accepted.strRequestId = controller.messages.first().strRequestId;
+			AssignCommandId(&accepted);
+			emit controller.terminalControlMessageReceived(accepted);
+			emit controller.sessionStateChanged(ReconnectingSessionState);
+			service.shutdown();
+			Check(states.contains(PausedTerminalState)
+				&& states.last() == ClosedTerminalState,
+				QStringLiteral("shutdown closes a paused running terminal"));
+		}
+		{
+			auto spHost = std::make_unique<KFakeTerminalHost>();
+			KFakeTerminalHost *pHost = spHost.get();
+			KFakeSessionController controlled;
+			KTerminalSessionService service(std::move(spHost), &controlled);
+			controlled.makeReady();
+			KTerminalMessage request;
+			request.type = OpenRequestTerminalMessageType;
+			request.strRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+			request.nColumns = 100;
+			request.nRows = 30;
+			AssignCommandId(&request);
+			emit controlled.terminalControlMessageReceived(request);
+			service.shutdown();
+			Check(pHost->nStopCount == 1,
+				QStringLiteral("shutdown cancels a local approval without leaking host state"));
+		}
+	}
 }
 
 int main(int argc, char *argv[])
@@ -811,5 +898,6 @@ int main(int argc, char *argv[])
 	TestHostRuntimeAndFrontendLifecycleFailures();
 	TestApprovalTimeoutAndRecoveryFailureConverge();
 	TestPendingOutputOverflowFailsClosed();
+	TestShutdownConvergesFromActiveStates();
 	return g_nFailureCount == 0 ? 0 : 1;
 }

@@ -711,6 +711,15 @@ namespace
 			QStringLiteral("terminal data rejects unsupported version"));
 		check(!KTerminalDataFrameCodec::decode(encoded.left(encoded.size() - 1),
 			&decoded), QStringLiteral("terminal data rejects truncated payload"));
+		KTerminalDataFrame invalid = source;
+		invalid.strRequestId = QStringLiteral("not-a-uuid");
+		check(KTerminalDataFrameCodec::encode(invalid).isEmpty(),
+			QStringLiteral("terminal data rejects invalid request id"));
+		QByteArray nullRequestId = encoded;
+		for (int nIndex = 8; nIndex < 24; ++nIndex)
+			nullRequestId[nIndex] = 0;
+		check(!KTerminalDataFrameCodec::decode(nullRequestId, &decoded),
+			QStringLiteral("terminal data rejects null request id"));
 
 		source.payload = QByteArray(KTerminalDataFrameCodec::kMaximumPayloadBytes + 1,
 			'x');

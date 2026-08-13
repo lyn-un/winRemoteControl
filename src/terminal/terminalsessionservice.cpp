@@ -94,6 +94,8 @@ KTerminalSessionService::KTerminalSessionService(
 	connect(m_pSessionController, &KSessionController::terminalLowWatermarkReached,
 		this, [this]()
 		{
+			if (m_spTerminalFrontend != nullptr)
+				m_spTerminalFrontend->setInputPaused(false);
 			flushInput();
 			flushOutput();
 		});
@@ -135,7 +137,7 @@ KTerminalSessionService::KTerminalSessionService(
 			writeTrace(QStringLiteral("terminal_host_error"),
 				QStringLiteral("code=%1").arg(strCode));
 			failTerminal(strCode,
-				QStringLiteral("终端运行失败：%1").arg(strTechnical));
+				QStringLiteral("终端运行失败，终端已关闭"), strTechnical);
 		});
 	if (m_spTerminalFrontend != nullptr)
 	{
@@ -186,6 +188,9 @@ KTerminalSessionService::KTerminalSessionService(
 KTerminalSessionService::~KTerminalSessionService()
 {
 	shutdown();
+	disconnect(m_spTerminalHost.get(), nullptr, this, nullptr);
+	if (m_spTerminalFrontend != nullptr)
+		disconnect(m_spTerminalFrontend.get(), nullptr, this, nullptr);
 }
 
 bool KTerminalSessionService::isHostSupported(QString *pReason) const
@@ -295,6 +300,12 @@ void KTerminalSessionService::sendInput(const QByteArray &data)
 		return;
 	if (!enqueueInput(data))
 		return;
+	if (m_pSessionController->isTerminalBackpressured())
+	{
+		if (m_spTerminalFrontend != nullptr)
+			m_spTerminalFrontend->setInputPaused(true);
+		setState(RunningTerminalState, QStringLiteral("网络拥塞，终端输入正在排队"));
+	}
 	flushInput();
 }
 
@@ -722,6 +733,8 @@ void KTerminalSessionService::stopHost(bool bNotifyRemote, const QString &strRea
 			.arg(m_nInputBytes)
 			.arg(m_nOutputBytes));
 	m_pApprovalTimer->stop();
+	if (m_spTerminalFrontend != nullptr)
+		m_spTerminalFrontend->setInputPaused(false);
 	if (bNotifyRemote && !m_strRequestId.isEmpty() && m_bChannelOpen)
 	{
 		KTerminalMessage message;
@@ -759,7 +772,10 @@ void KTerminalSessionService::resetSession()
 	m_pStopTimer->stop();
 	m_bHostStopPending = false;
 	if (m_spTerminalFrontend != nullptr)
+	{
+		m_spTerminalFrontend->setInputPaused(false);
 		m_spTerminalFrontend->close(m_pSessionController->sessionGeneration());
+	}
 	m_capabilities = KNegotiatedCapabilities();
 	m_bChannelOpen = false;
 	m_bFrontendConnected = false;
@@ -897,6 +913,11 @@ void KTerminalSessionService::flushInput()
 		m_nQueuedInputBytes -= data.size();
 		m_nInputBytes += static_cast<quint64>(data.size());
 	}
+	if (m_inputQueue.isEmpty() && m_state == RunningTerminalState
+		&& m_strStatus == QStringLiteral("网络拥塞，终端输入正在排队"))
+	{
+		setState(RunningTerminalState, QStringLiteral("PowerShell 已连接"));
+	}
 }
 
 bool KTerminalSessionService::sendDataFrame(
@@ -920,7 +941,8 @@ bool KTerminalSessionService::sendDataFrame(
 
 void KTerminalSessionService::failTerminal(
 	const QString &strErrorCode,
-	const QString &strMessage)
+	const QString &strMessage,
+	const QString &strTechnicalMessage)
 {
 	if (m_state == ClosingTerminalState || m_state == ClosedTerminalState
 		|| m_state == FailedTerminalState)
@@ -940,7 +962,8 @@ void KTerminalSessionService::failTerminal(
 		code = TerminalOutputOverflowSessionErrorCode;
 	else if (strErrorCode == QStringLiteral("command_timeout"))
 		code = TerminalCommandTimeoutSessionErrorCode;
-	reportTerminalError(code, strErrorCode);
+	reportTerminalError(code, strTechnicalMessage.isEmpty()
+		? strErrorCode : strTechnicalMessage);
 	setState(FailedTerminalState, strMessage);
 	stopHost(true, strErrorCode);
 }

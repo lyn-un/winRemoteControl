@@ -92,13 +92,55 @@ void TestAccessFlowOwnsTransportBoundary()
 	Check(flow.matchesEndpoint(QStringLiteral("127.0.0.1"), 39001)
 		&& flow.hasLastEndpoint(),
 		"access flow owns the last outgoing endpoint");
-	KAccessMessage request;
-	request.type = RequestAccessMessageType;
-	request.strRequestId = QStringLiteral("17698aa1-9108-405c-a0eb-dc1b78777ad4");
-	request.strDeviceName = QStringLiteral("controller");
-	flow.sendAccessMessage(request);
+	flow.beginOutgoing(7, QStringLiteral("controller"));
 	Check(transport.strLastMessage.contains(QStringLiteral("accessRequest")),
-		"access flow encodes business messages before transport");
+		"access flow creates and encodes access requests before transport");
+}
+
+void TestAccessFlowOwnsApprovalLifecycle()
+{
+	KFakeSignalingTransport transport;
+	KAccessSessionFlow flow(&transport);
+	flow.beginOutgoing(11, QStringLiteral("controller"));
+	KAccessMessage request;
+	QString strError;
+	Check(KAccessMessageCodec::decode(transport.strLastMessage, &request, &strError)
+		&& request.type == RequestAccessMessageType,
+		"outgoing access flow emits a typed request");
+	int nOutgoingAccepted = 0;
+	QObject::connect(&flow, &KAccessSessionFlow::outgoingAccessAccepted,
+		[&nOutgoingAccepted]() { ++nOutgoingAccepted; });
+	KAccessMessage accepted;
+	accepted.type = AcceptedAccessMessageType;
+	accepted.strRequestId = request.strRequestId;
+	Check(flow.handleAccessMessage(accepted, 11) && nOutgoingAccepted == 1
+		&& !flow.hasApproval(),
+		"matching acceptance completes and clears outgoing approval");
+
+	KApplicationSettings settings;
+	settings.approvalMode = AskRemoteApprovalMode;
+	settings.nApprovalTimeoutSeconds = 10;
+	flow.setApplicationSettings(settings);
+	flow.beginIncoming(QStringLiteral("192.0.2.10"), 12);
+	int nIncomingRequests = 0;
+	int nIncomingAccepted = 0;
+	QObject::connect(&flow, &KAccessSessionFlow::incomingAccessRequest,
+		[&nIncomingRequests](const QString &, const QString &, const QString &, qint64)
+			{ ++nIncomingRequests; });
+	QObject::connect(&flow, &KAccessSessionFlow::incomingAccessAccepted,
+		[&nIncomingAccepted]() { ++nIncomingAccepted; });
+	KAccessMessage incoming;
+	incoming.type = RequestAccessMessageType;
+	incoming.strRequestId = QStringLiteral("17698aa1-9108-405c-a0eb-dc1b78777ad4");
+	incoming.strDeviceName = QStringLiteral("controller");
+	Check(flow.handleAccessMessage(incoming, 12) && nIncomingRequests == 1,
+		"incoming ask policy publishes one approval request");
+	flow.respondIncoming(incoming.strRequestId, true);
+	KAccessMessage response;
+	Check(KAccessMessageCodec::decode(transport.strLastMessage, &response, &strError)
+		&& response.type == AcceptedAccessMessageType
+		&& nIncomingAccepted == 1 && !flow.hasApproval(),
+		"incoming approval sends acceptance and clears flow state");
 }
 
 void TestMediaFlow()
@@ -140,6 +182,7 @@ int main(int argc, char *argv[])
 	QCoreApplication application(argc, argv);
 	TestCapabilityFlow();
 	TestAccessFlowOwnsTransportBoundary();
+	TestAccessFlowOwnsApprovalLifecycle();
 	TestMediaFlow();
 	return g_nFailureCount == 0 ? 0 : 1;
 }

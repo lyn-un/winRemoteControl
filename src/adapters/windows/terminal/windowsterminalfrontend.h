@@ -26,6 +26,7 @@ public:
 		QString *pErrorMessage = nullptr) override;
 	void focus() override;
 	bool writeOutput(quint64 nGeneration, const QByteArray &data) override;
+	void setInputPaused(bool bPaused) override;
 	void close(quint64 nGeneration) override;
 
 private:
@@ -60,6 +61,7 @@ private:
 	bool m_bClosing = false;
 	bool m_bInputObserved = false;
 	bool m_bRelayBackpressured = false;
+	bool m_bInputPaused = false;
 };
 
 #endif // _WINREMOTECONTROL_ADAPTERS_WINDOWS_TERMINAL_WINDOWSTERMINALFRONTEND_H_

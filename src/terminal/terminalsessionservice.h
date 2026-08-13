@@ -89,7 +89,8 @@ private:
 	void reportTerminalError(KSessionErrorCode code,
 		const QString &strTechnicalMessage,
 		bool bRetryable = false);
-	void failTerminal(const QString &strErrorCode, const QString &strMessage);
+	void failTerminal(const QString &strErrorCode, const QString &strMessage,
+		const QString &strTechnicalMessage = QString());
 	void enqueuePendingControllerOutput(const QByteArray &data);
 	void flushPendingControllerOutput();
 	bool sendControl(const KTerminalMessage &message);

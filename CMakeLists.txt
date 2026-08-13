@@ -1015,6 +1015,21 @@ if(WRC_BUILD_TESTS)
 	add_test(NAME wrc_terminal_shell_policy_tests
 		COMMAND wrc_terminal_shell_policy_tests)
 
+	# Keep the dependency-light terminal preset runnable without relying on the
+	# caller to export QTDIR. GitHub Actions does export it, but local preset
+	# runs should resolve the same Qt runtime from the imported target.
+	set_tests_properties(
+		wrc_terminal_write_all_tests
+		wrc_terminal_state_machine_tests
+		wrc_terminal_session_tests
+		wrc_terminal_command_dispatcher_tests
+		wrc_terminal_relay_frame_codec_tests
+		wrc_windows_pseudoconsole_tests
+		wrc_terminal_shell_policy_tests
+		PROPERTIES
+		ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+	)
+
 	if(WRC_BUILD_APP)
 	add_executable(wrc_clipboard_change_filter_tests
 		tests/unit/clipboardchangefiltertest.cpp
