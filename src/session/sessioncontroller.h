@@ -12,6 +12,7 @@
 #include "core/settings/applicationsettings.h"
 #include "core/session/sessionerror.h"
 #include "core/session/sessionstatemachine.h"
+#include "core/security/permissionscope.h"
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
@@ -51,6 +52,9 @@ public slots:
 	virtual void handleCaptureFailure() = 0;
 	virtual void applyApplicationSettings(const KApplicationSettings &settings) = 0;
 	virtual void respondIncomingAccessRequest(const QString &strRequestId, bool bAccepted) = 0;
+	virtual void respondPairingRequest(const QString &strRequestId,
+		bool bAccepted,
+		KPermissionScopes permissions) = 0;
 
 public:
 	virtual quint64 sessionGeneration() const = 0;
@@ -91,6 +95,17 @@ signals:
 		const QString &strSourceAddress,
 		qint64 nExpiresAtMs);
 	void incomingAccessRequestCleared(const QString &strRequestId, const QString &strReason);
+	void pairingRequested(const QString &strRequestId,
+		const QString &strDeviceName,
+		const QString &strFingerprint,
+		const QString &strPairingCode,
+		KPermissionScopes requestedPermissions,
+		qint64 nExpiresAtMs);
+	void pairingCleared(const QString &strRequestId, const QString &strReason);
+	void deviceAuthenticationStateChanged(const QString &strState,
+		const QString &strDeviceId,
+		const QString &strFingerprint,
+		bool bTrusted);
 	void captureShutdownFinished(quint64 nGeneration);
 };
 

@@ -78,6 +78,8 @@ add_library(wrc_protocol STATIC
 	src/core/protocol/protocolrouter.h
 	src/core/protocol/inputmessage.cpp
 	src/core/protocol/inputmessage.h
+	src/core/protocol/identitymessage.cpp
+	src/core/protocol/identitymessage.h
 	src/core/protocol/sessionmessage.cpp
 	src/core/protocol/sessionmessage.h
 	src/core/protocol/terminalmessage.cpp
@@ -249,6 +251,8 @@ target_link_libraries(wrc_windows_adapters PUBLIC
 add_library(wrc_session_application STATIC
 	src/input/inputinjector.cpp
 	src/input/inputinjector.h
+	src/session/deviceauthenticationflow.cpp
+	src/session/deviceauthenticationflow.h
 	src/session/accessapprovalcontroller.cpp
 	src/session/accessapprovalcontroller.h
 	src/session/accesssessionflow.cpp
@@ -943,6 +947,16 @@ if(WRC_BUILD_TESTS)
 		Qt6::Core
 	)
 	add_test(NAME wrc_access_approval_tests COMMAND wrc_access_approval_tests)
+
+	add_executable(wrc_device_authentication_tests
+		tests/unit/deviceauthenticationtest.cpp
+	)
+	target_link_libraries(wrc_device_authentication_tests PRIVATE
+		wrc_session_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_device_authentication_tests
+		COMMAND wrc_device_authentication_tests)
 
 	add_executable(wrc_session_command_dispatcher_tests
 		tests/unit/sessioncommanddispatchertest.cpp

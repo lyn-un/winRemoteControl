@@ -9,6 +9,7 @@
 #include "core/session/sessionerror.h"
 #include "core/protocol/sessionmessage.h"
 #include "core/terminal/terminalstate.h"
+#include "core/security/permissionscope.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QPoint>
@@ -62,6 +63,17 @@ public slots:
 		const QString &strSourceAddress,
 		qint64 nExpiresAtMs);
 	void sendIncomingAccessRequestCleared(const QString &strRequestId, const QString &strReason);
+	void sendPairingRequest(const QString &strRequestId,
+		const QString &strDeviceName,
+		const QString &strFingerprint,
+		const QString &strPairingCode,
+		KPermissionScopes requestedPermissions,
+		qint64 nExpiresAtMs);
+	void sendPairingCleared(const QString &strRequestId, const QString &strReason);
+	void sendDeviceAuthenticationStateChanged(const QString &strState,
+		const QString &strDeviceId,
+		const QString &strFingerprint,
+		bool bTrusted);
 	void sendClipboardSyncStateChanged(bool bEnabled,
 		bool bAvailable,
 		bool bActive,
@@ -107,6 +119,9 @@ signals:
 		int nApprovalTimeoutSeconds,
 		int nDefaultListenPort);
 	void respondIncomingAccessRequestRequested(const QString &strRequestId, bool bAccepted);
+	void respondPairingRequestRequested(const QString &strRequestId,
+		bool bAccepted,
+		KPermissionScopes permissions);
 	void disconnectSessionRequested();
 	void startStreamingRequested();
 	void stopStreamingRequested();

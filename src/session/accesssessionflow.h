@@ -3,11 +3,14 @@
 
 #include "core/protocol/accessmessage.h"
 #include "core/settings/applicationsettings.h"
+#include "session/deviceauthenticationflow.h"
 
 #include <QtCore/QObject>
 
 class KAccessApprovalController;
 class KSignalingTransport;
+class KDeviceIdentityProvider;
+class KTrustedDeviceStore;
 
 class KAccessSessionFlow final : public QObject
 {
@@ -15,6 +18,8 @@ class KAccessSessionFlow final : public QObject
 
 public:
 	explicit KAccessSessionFlow(KSignalingTransport *pTransport,
+		KDeviceIdentityProvider *pIdentityProvider,
+		KTrustedDeviceStore *pTrustedDeviceStore,
 		QObject *pParent = nullptr);
 	void setApplicationSettings(const KApplicationSettings &settings);
 	bool startListening(quint16 nPort, QString *pErrorMessage);
@@ -22,8 +27,14 @@ public:
 	void disconnectPeer();
 	void stop();
 	void beginOutgoing(quint64 nGeneration, const QString &strDeviceName);
-	void beginIncoming(const QString &strSourceAddress, quint64 nGeneration);
+	void beginIncoming(const QString &strSourceAddress,
+		quint64 nGeneration,
+		const QString &strDeviceName);
 	bool handleAccessMessage(const KAccessMessage &message, quint64 nGeneration);
+	bool handleIdentityMessage(const KIdentityMessage &message, quint64 nGeneration);
+	void respondPairing(const QString &strRequestId,
+		bool bAccepted,
+		KPermissionScopes permissions);
 	void respondIncoming(const QString &strRequestId, bool bAccepted);
 	void rejectIncoming(const QString &strReason, bool bNotifyRemote);
 	void cancelApproval(const QString &strReason, bool bNotifyRemote,
@@ -38,6 +49,7 @@ public:
 	QString lastHost() const;
 	quint16 lastPort() const;
 	quint16 listeningPort() const;
+	KDeviceAuthenticationContext authenticationContext() const;
 	void clearLastEndpoint();
 
 signals:
@@ -61,19 +73,31 @@ signals:
 	void incomingAccessRejected(const QString &strReason);
 	void outgoingAccessAccepted();
 	void outgoingAccessRejected(const QString &strReason);
+	void pairingRequested(const QString &strRequestId,
+		const QString &strDeviceName,
+		const QString &strFingerprint,
+		const QString &strPairingCode,
+		KPermissionScopes requestedPermissions,
+		qint64 nExpiresAtMs);
+	void pairingCleared(const QString &strRequestId, const QString &strReason);
+	void identityAuthenticated(const KDeviceAuthenticationContext &context);
 
 private:
 	void sendAccessMessage(const KAccessMessage &message);
 	void acceptIncoming();
 	void handleApprovalTimeout(const QString &strRequestId, quint64 nGeneration);
+	void handleAuthenticationSucceeded(const KDeviceAuthenticationContext &context);
+	void handleAuthenticationRejected(const QString &strReason);
 
 	KSignalingTransport *m_pTransport = nullptr;
 	KAccessApprovalController *m_pApprovalController = nullptr;
+	KDeviceAuthenticationFlow *m_pAuthenticationFlow = nullptr;
 	KApplicationSettings m_settings;
 	QString m_strLastHost;
 	quint16 m_nLastPort = 0;
 	quint16 m_nListeningPort = 0;
 	bool m_bConnected = false;
+	QString m_strLocalDeviceName;
 };
 
 #endif // _WINREMOTECONTROL_SESSION_ACCESSSESSIONFLOW_H_

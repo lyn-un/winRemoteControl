@@ -82,7 +82,8 @@ int main(int nArgumentCount, char **pArguments)
 	}
 
 	const QString strStorePath = directory.filePath(QStringLiteral("trusted_devices.json"));
-	KSignedJsonTrustedDeviceStore store(strStorePath, &provider);
+	KSignedJsonTrustedDeviceStore store(strStorePath);
+	store.setIdentityProvider(&provider);
 	const QVector<KTrustedDevice> savedDevices = { MakeTrustedDevice(firstIdentity) };
 	if (!Require(store.saveDevices(savedDevices, &strError), strError))
 	{

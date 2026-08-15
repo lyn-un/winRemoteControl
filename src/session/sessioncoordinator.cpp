@@ -15,6 +15,8 @@
 #include "core/session/capabilitynegotiator.h"
 #include "core/protocol/webrtcsignalingmessage.h"
 #include "core/session/deviceinfoprovider.h"
+#include "core/security/deviceidentityprovider.h"
+#include "core/security/trusteddevicestore.h"
 #include "core/transport/signalingtransport.h"
 #include "input/inputinjector.h"
 
@@ -64,14 +66,19 @@ KSessionCoordinator::KSessionCoordinator(
 	std::unique_ptr<IKInputInjector> spInputInjector,
 	std::unique_ptr<KRemotePeerTransport> spRemotePeerTransport,
 	std::unique_ptr<KSignalingTransport> spSignalingTransport,
+	std::unique_ptr<KDeviceIdentityProvider> spIdentityProvider,
+	std::unique_ptr<KTrustedDeviceStore> spTrustedDeviceStore,
 	QObject *pParent)
 	: KSessionController(pParent)
 	, m_spDeviceInfoProvider(std::move(spDeviceInfoProvider))
 	, m_spRemotePeerTransport(std::move(spRemotePeerTransport))
 	, m_spSignalingTransport(std::move(spSignalingTransport))
+	, m_spIdentityProvider(std::move(spIdentityProvider))
+	, m_spTrustedDeviceStore(std::move(spTrustedDeviceStore))
 	, m_pSignaling(m_spSignalingTransport.get())
 	, m_pInputInjector(new KInputInjector(std::move(spInputInjector), this))
-	, m_pAccessSessionFlow(new KAccessSessionFlow(m_pSignaling, this))
+	, m_pAccessSessionFlow(new KAccessSessionFlow(m_pSignaling,
+		m_spIdentityProvider.get(), m_spTrustedDeviceStore.get(), this))
 	, m_pCapabilitySessionFlow(new KCapabilitySessionFlow(this))
 	, m_pMediaSessionController(new KMediaSessionController(this))
 	, m_pPeerLifecycleController(new KPeerLifecycleController(
@@ -82,6 +89,9 @@ KSessionCoordinator::KSessionCoordinator(
 {
 	Q_ASSERT(m_spRemotePeerTransport != nullptr);
 	Q_ASSERT(m_pSignaling != nullptr);
+	Q_ASSERT(m_spIdentityProvider != nullptr);
+	Q_ASSERT(m_spTrustedDeviceStore != nullptr);
+	m_spTrustedDeviceStore->setIdentityProvider(m_spIdentityProvider.get());
 	m_pAccessSessionFlow->setApplicationSettings(m_applicationSettings);
 	initializeProtocolRoutes();
 	initializeSessionHandlers();
@@ -132,6 +142,35 @@ KSessionCoordinator::KSessionCoordinator(
 		this, &KSessionCoordinator::incomingAccessRequest);
 	connect(m_pAccessSessionFlow, &KAccessSessionFlow::incomingAccessRequestCleared,
 		this, &KSessionCoordinator::incomingAccessRequestCleared);
+	connect(m_pAccessSessionFlow, &KAccessSessionFlow::pairingRequested,
+		this, [this](const QString &strRequestId,
+			const QString &strDeviceName,
+			const QString &strFingerprint,
+			const QString &strPairingCode,
+			KPermissionScopes permissions,
+			qint64 nExpiresAtMs)
+		{
+			if (m_sessionStateMachine.isAuthenticatingIdentity())
+			{
+				m_sessionStateMachine.beginPairing();
+				publishSessionState();
+			}
+			emit pairingRequested(strRequestId, strDeviceName, strFingerprint,
+				strPairingCode, permissions, nExpiresAtMs);
+		});
+	connect(m_pAccessSessionFlow, &KAccessSessionFlow::pairingCleared,
+		this, &KSessionCoordinator::pairingCleared);
+	connect(m_pAccessSessionFlow, &KAccessSessionFlow::identityAuthenticated,
+		this, [this](const KDeviceAuthenticationContext &context)
+		{
+			if (!m_sessionStateMachine.completeIdentityAuthentication())
+				return;
+			m_authenticationContext = context;
+			emit deviceAuthenticationStateChanged(QStringLiteral("authenticated"),
+				context.strRemoteDeviceId, context.strRemoteFingerprint,
+				context.bTrustedDevice);
+			publishSessionState();
+		});
 	connect(m_pAccessSessionFlow, &KAccessSessionFlow::incomingAccessAccepted,
 		this, [this]()
 		{
@@ -145,7 +184,9 @@ KSessionCoordinator::KSessionCoordinator(
 		this, [this](const QString &)
 		{
 			if (m_sessionStateMachine.role() != ControlledSessionRole
-				|| !m_sessionStateMachine.isAwaitingApproval())
+				|| (!m_sessionStateMachine.isAwaitingApproval()
+					&& !m_sessionStateMachine.isAuthenticatingIdentity()
+					&& !m_sessionStateMachine.isPairing()))
 				return;
 			m_sessionStateMachine.rejectConnection();
 			m_pAccessSessionFlow->disconnectPeer();
@@ -210,6 +251,12 @@ void KSessionCoordinator::setTerminalCapabilitiesAvailable(
 
 void KSessionCoordinator::initializeProtocolRoutes()
 {
+	const KProtocolRouter::Guard identityHandshake =
+		[](const KProtocolEnvelope &, const KProtocolRouteContext &context)
+		{
+			return context.nState == static_cast<int>(AuthenticatingIdentitySessionState)
+				|| context.nState == static_cast<int>(PairingSessionState);
+		};
 	const KProtocolRouter::Guard controllerAwaitingApproval =
 		[](const KProtocolEnvelope &, const KProtocolRouteContext &context)
 		{
@@ -257,6 +304,27 @@ void KSessionCoordinator::initializeProtocolRoutes()
 	const KProtocolRouter::Handler accessHandler =
 		[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
 		{ return handleAccessEnvelope(envelope); };
+	const KProtocolRouter::Handler identityHandler =
+		[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
+		{
+			KIdentityMessage message;
+			QString strError;
+			if (!KIdentityMessageCodec::decode(envelope, &message, &strError))
+				return KProtocolHandlerResult::failure(ProtocolHandlerDecodeFailed, strError);
+			return m_pAccessSessionFlow->handleIdentityMessage(message,
+				m_sessionStateMachine.generation())
+				? KProtocolHandlerResult::success()
+				: KProtocolHandlerResult::failure(ProtocolHandlerInvalidState,
+					QStringLiteral("Identity message does not match the active handshake"));
+		};
+	for (KIdentityMessageType type : { HelloIdentityMessageType,
+		ChallengeIdentityMessageType, ProofIdentityMessageType,
+		PairingDecisionIdentityMessageType, AuthenticatedIdentityMessageType,
+		RejectedIdentityMessageType })
+	{
+		m_protocolRouter.registerHandler(SignalingProtocolChannel,
+			KIdentityMessageCodec::typeName(type), identityHandshake, identityHandler);
+	}
 	m_protocolRouter.registerHandler(SignalingProtocolChannel,
 		KAccessMessageCodec::typeName(RequestAccessMessageType),
 		controlledAwaitingApproval, accessHandler);
@@ -517,7 +585,9 @@ void KSessionCoordinator::applyApplicationSettings(const KApplicationSettings &s
 		&& m_sessionStateMachine.role() == ControlledSessionRole
 		&& m_sessionStateMachine.state() != IdleSessionState)
 	{
-		const bool bPendingApproval = m_sessionStateMachine.isAwaitingApproval()
+		const bool bPendingApproval = (m_sessionStateMachine.isAwaitingApproval()
+			|| m_sessionStateMachine.isAuthenticatingIdentity()
+			|| m_sessionStateMachine.isPairing())
 			&& m_pAccessSessionFlow->hasApproval();
 		if (bPendingApproval)
 			m_pAccessSessionFlow->cancelApproval(
@@ -537,6 +607,15 @@ void KSessionCoordinator::respondIncomingAccessRequest(
 		return;
 	}
 	m_pAccessSessionFlow->respondIncoming(strRequestId, bAccepted);
+}
+
+void KSessionCoordinator::respondPairingRequest(const QString &strRequestId,
+	bool bAccepted,
+	KPermissionScopes permissions)
+{
+	if (!m_sessionStateMachine.isPairing())
+		return;
+	m_pAccessSessionFlow->respondPairing(strRequestId, bAccepted, permissions);
 }
 
 void KSessionCoordinator::enterRemoteDesktop(const KStreamConfig &config)
@@ -812,7 +891,9 @@ void KSessionCoordinator::finishSession(KSessionEndReason reason,
 	bool bReportError)
 {
 	const bool bRecovering = m_sessionStateMachine.isReconnecting();
-	if (m_sessionStateMachine.isAwaitingApproval())
+	if (m_sessionStateMachine.isAwaitingApproval()
+		|| m_sessionStateMachine.isAuthenticatingIdentity()
+		|| m_sessionStateMachine.isPairing())
 		m_pAccessSessionFlow->cancelApproval(QStringLiteral("cancelled"), bNotifyRemote);
 	if (!m_sessionStateMachine.beginStopping())
 		return;
@@ -1647,7 +1728,7 @@ void KSessionCoordinator::handleOutgoingConnectionEstablished()
 		return;
 	m_pAccessSessionFlow->setConnected(true);
 
-	if (!m_sessionStateMachine.beginAwaitingApproval())
+	if (!m_sessionStateMachine.beginAuthenticatingIdentity())
 		return;
 	m_pAccessSessionFlow->beginOutgoing(m_sessionStateMachine.generation(),
 		m_spDeviceInfoProvider != nullptr
@@ -1676,11 +1757,14 @@ void KSessionCoordinator::handleIncomingConnectionEstablished(
 		|| m_sessionStateMachine.isStopping())
 		return;
 
-	if (!m_sessionStateMachine.beginAwaitingApproval())
+	if (!m_sessionStateMachine.beginAuthenticatingIdentity())
 		return;
 	m_pAccessSessionFlow->setConnected(true);
 	m_pAccessSessionFlow->beginIncoming(strSourceAddress,
-		m_sessionStateMachine.generation());
+		m_sessionStateMachine.generation(),
+		m_spDeviceInfoProvider != nullptr
+			? m_spDeviceInfoProvider->deviceName()
+			: QStringLiteral("Windows device"));
 	updateListeningAvailability(false);
 	publishSessionState();
 	KSessionTraceLogger::write(QStringLiteral("controlled"),
@@ -1761,6 +1845,8 @@ void KSessionCoordinator::handleInvalidSignalingMessage(KProtocolRouteStatus sta
 	const QString &strError)
 {
 	const bool bWasAwaitingApproval = m_sessionStateMachine.isAwaitingApproval();
+	const bool bWasIdentityHandshake = m_sessionStateMachine.isAuthenticatingIdentity()
+		|| m_sessionStateMachine.isPairing();
 	++m_nInvalidSignalingMessages;
 	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 		QStringLiteral("protocol_reject"), QStringLiteral("signaling"), -1,
@@ -1794,7 +1880,7 @@ void KSessionCoordinator::handleInvalidSignalingMessage(KProtocolRouteStatus sta
 		code = MalformedMessageSessionErrorCode;
 	reportSessionError(ProtocolSessionErrorDomain,
 		code,
-		bWasAwaitingApproval
+		(bWasAwaitingApproval || bWasIdentityHandshake)
 			? ApprovalSessionErrorStage : NegotiationSessionErrorStage,
 		false, strError.isEmpty()
 			? QStringLiteral("Unsupported or invalid signaling message") : strError);
@@ -1803,7 +1889,9 @@ void KSessionCoordinator::handleInvalidSignalingMessage(KProtocolRouteStatus sta
 void KSessionCoordinator::handleOutgoingAccessRejected(const QString &strReason)
 {
 	if (m_sessionStateMachine.role() != ControllerSessionRole
-		|| !m_sessionStateMachine.isAwaitingApproval())
+		|| (!m_sessionStateMachine.isAwaitingApproval()
+			&& !m_sessionStateMachine.isAuthenticatingIdentity()
+			&& !m_sessionStateMachine.isPairing()))
 		return;
 	finishSession(ConnectFailedSessionEndReason, strReason, false, false, false);
 	KSessionErrorCode code = ApprovalRejectedSessionErrorCode;

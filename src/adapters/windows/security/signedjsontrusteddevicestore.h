@@ -8,9 +8,9 @@ class KDeviceIdentityProvider;
 class KSignedJsonTrustedDeviceStore final : public KTrustedDeviceStore
 {
 public:
-	KSignedJsonTrustedDeviceStore(const QString &strFilePath,
-		KDeviceIdentityProvider *pIdentityProvider);
+	explicit KSignedJsonTrustedDeviceStore(const QString &strFilePath);
 
+	void setIdentityProvider(KDeviceIdentityProvider *pIdentityProvider) override;
 	QVector<KTrustedDevice> loadDevices(QString *pErrorMessage) override;
 	bool saveDevices(const QVector<KTrustedDevice> &devices,
 		QString *pErrorMessage) override;

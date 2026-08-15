@@ -78,11 +78,15 @@ namespace
 }
 
 KSignedJsonTrustedDeviceStore::KSignedJsonTrustedDeviceStore(
-	const QString &strFilePath,
-	KDeviceIdentityProvider *pIdentityProvider)
+	const QString &strFilePath)
 	: m_strFilePath(strFilePath)
-	, m_pIdentityProvider(pIdentityProvider)
 {
+}
+
+void KSignedJsonTrustedDeviceStore::setIdentityProvider(
+	KDeviceIdentityProvider *pIdentityProvider)
+{
+	m_pIdentityProvider = pIdentityProvider;
 }
 
 QVector<KTrustedDevice> KSignedJsonTrustedDeviceStore::loadDevices(

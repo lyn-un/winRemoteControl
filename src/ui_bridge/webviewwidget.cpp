@@ -230,6 +230,52 @@ void KWebViewWidget::sendIncomingAccessRequestCleared(
 	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
 }
 
+void KWebViewWidget::sendPairingRequest(const QString &strRequestId,
+	const QString &strDeviceName,
+	const QString &strFingerprint,
+	const QString &strPairingCode,
+	KPermissionScopes requestedPermissions,
+	qint64 nExpiresAtMs)
+{
+	QJsonArray permissions;
+	for (const QString &strName : PermissionScopeNames(requestedPermissions))
+		permissions.append(strName);
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("pairingRequestChanged"));
+	object.insert(QStringLiteral("requestId"), strRequestId);
+	object.insert(QStringLiteral("deviceName"), strDeviceName);
+	object.insert(QStringLiteral("fingerprint"), strFingerprint);
+	object.insert(QStringLiteral("pairingCode"), strPairingCode);
+	object.insert(QStringLiteral("permissions"), permissions);
+	object.insert(QStringLiteral("expiresAtMs"), QString::number(nExpiresAtMs));
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendPairingCleared(const QString &strRequestId,
+	const QString &strReason)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("pairingRequestCleared"));
+	object.insert(QStringLiteral("requestId"), strRequestId);
+	object.insert(QStringLiteral("reason"), strReason);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendDeviceAuthenticationStateChanged(
+	const QString &strState,
+	const QString &strDeviceId,
+	const QString &strFingerprint,
+	bool bTrusted)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("deviceAuthenticationStateChanged"));
+	object.insert(QStringLiteral("state"), strState);
+	object.insert(QStringLiteral("deviceId"), strDeviceId);
+	object.insert(QStringLiteral("fingerprint"), strFingerprint);
+	object.insert(QStringLiteral("trusted"), bTrusted);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
 void KWebViewWidget::sendClipboardSyncStateChanged(bool bEnabled,
 	bool bAvailable,
 	bool bActive,
@@ -525,6 +571,23 @@ void KWebViewWidget::handleWebMessage(const QString &strMessage)
 		emit respondIncomingAccessRequestRequested(
 			object.value(QStringLiteral("requestId")).toString(),
 			object.value(QStringLiteral("accepted")).toBool(false));
+	}
+	else if (strCommand == QStringLiteral("respondPairingRequest"))
+	{
+		const QJsonObject object = document.object();
+		QStringList names;
+		for (const QJsonValue &value : object.value(QStringLiteral("permissions")).toArray())
+		{
+			if (value.isString())
+				names.append(value.toString());
+		}
+		KPermissionScopes permissions;
+		if (!PermissionScopesFromNames(names, &permissions))
+			permissions = KPermissionScopes();
+		emit respondPairingRequestRequested(
+			object.value(QStringLiteral("requestId")).toString(),
+			object.value(QStringLiteral("accepted")).toBool(false),
+			permissions);
 	}
 	else if (strCommand == QStringLiteral("disconnectSession"))
 		emit disconnectSessionRequested();

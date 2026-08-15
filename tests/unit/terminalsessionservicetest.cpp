@@ -161,6 +161,8 @@ namespace
 		void handleCaptureFailure() override {}
 		void applyApplicationSettings(const KApplicationSettings &) override {}
 		void respondIncomingAccessRequest(const QString &, bool) override {}
+		void respondPairingRequest(const QString &, bool,
+			KPermissionScopes) override {}
 		quint64 sessionGeneration() const override { return nGeneration; }
 		bool isIdle() const override { return false; }
 		bool matchesCurrentEndpoint(const QString &, quint16) const override { return true; }

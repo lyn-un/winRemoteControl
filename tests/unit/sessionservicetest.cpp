@@ -5,6 +5,7 @@
 #include "core/session/deviceinfoprovider.h"
 #include "core/transport/remotepeertransport.h"
 #include "session/sessioncoordinator.h"
+#include "fakesecurity.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDebug>
@@ -302,6 +303,26 @@ namespace
 		return condition();
 	}
 
+	void approvePairingRequests(KSessionCoordinator &service)
+	{
+		QObject::connect(&service, &KSessionCoordinator::pairingRequested,
+			[&service](const QString &strRequestId, const QString &, const QString &,
+				const QString &, KPermissionScopes permissions, qint64)
+			{
+				service.respondPairingRequest(strRequestId, true, permissions);
+			});
+	}
+
+	void approveAccessRequests(KSessionCoordinator &service)
+	{
+		QObject::connect(&service, &KSessionCoordinator::incomingAccessRequest,
+			[&service](const QString &strRequestId, const QString &,
+				const QString &, qint64)
+			{
+				service.respondIncomingAccessRequest(strRequestId, true);
+			});
+	}
+
 	void testControlledSessionWithFakeTransport()
 	{
 		auto spInputInjector = std::make_unique<KFakeInputInjector>();
@@ -311,10 +332,20 @@ namespace
 		KSessionCoordinator service(std::make_unique<KFakeDeviceInfoProvider>(),
 			std::move(spInputInjector),
 			std::move(spTransport),
-			std::make_unique<KTcpSignalingTransport>());
+			std::make_unique<KTcpSignalingTransport>(),
+			MakeFakeIdentityProvider(), MakeFakeTrustedDeviceStore());
 		KApplicationSettings settings;
 		settings.approvalMode = AutoAcceptRemoteApprovalMode;
 		service.applyApplicationSettings(settings);
+		approvePairingRequests(service);
+		approveAccessRequests(service);
+		auto spControllerPeer = std::make_unique<KFakeRemotePeerTransport>();
+		KSessionCoordinator controller(std::make_unique<KFakeDeviceInfoProvider>(),
+			std::make_unique<KFakeInputInjector>(),
+			std::move(spControllerPeer),
+			std::make_unique<KTcpSignalingTransport>(),
+			MakeFakeIdentityProvider(), MakeFakeTrustedDeviceStore());
+		approvePairingRequests(controller);
 
 		int nStartCaptureCount = 0;
 		int nStopCaptureCount = 0;
@@ -359,16 +390,7 @@ namespace
 		check(nStopCaptureCount == 0,
 			QStringLiteral("ignored controlled stop does not stop capture"));
 
-		QTcpSocket controllerSocket;
-		controllerSocket.connectToHost(QHostAddress::LocalHost, nPort);
-		check(controllerSocket.waitForConnected(1000),
-			QStringLiteral("loopback signaling connection succeeds"));
-		KAccessMessage accessRequest;
-		accessRequest.type = RequestAccessMessageType;
-		accessRequest.strRequestId = QStringLiteral("12345678-1234-1234-1234-1234567890ab");
-		accessRequest.strDeviceName = QStringLiteral("fake-controller-host");
-		controllerSocket.write(KAccessMessageCodec::encode(accessRequest).toUtf8() + '\n');
-		controllerSocket.flush();
+		controller.connectSignaling(QStringLiteral("127.0.0.1"), nPort);
 		QElapsedTimer waitTimer;
 		waitTimer.start();
 		while (!bNegotiating && waitTimer.elapsed() < 1000)
@@ -469,7 +491,7 @@ namespace
 			QStringLiteral("duplicate disconnect does not release inputs twice"));
 		check(nStopCaptureCount == nFinalStopCaptureCount,
 			QStringLiteral("duplicate disconnect does not stop capture twice"));
-		controllerSocket.disconnectFromHost();
+		controller.disconnectSession();
 	}
 
 	void testApprovalBeforeOffer()
@@ -479,13 +501,17 @@ namespace
 		KSessionCoordinator controlled(std::make_unique<KFakeDeviceInfoProvider>(),
 			std::make_unique<KFakeInputInjector>(),
 			std::move(spControlledPeer),
-			std::make_unique<KTcpSignalingTransport>());
+			std::make_unique<KTcpSignalingTransport>(),
+			MakeFakeIdentityProvider(), MakeFakeTrustedDeviceStore());
 		auto spControllerPeer = std::make_unique<KFakeRemotePeerTransport>();
 		KFakeRemotePeerTransport *pControllerPeer = spControllerPeer.get();
 		KSessionCoordinator controller(std::make_unique<KFakeDeviceInfoProvider>(),
 			std::make_unique<KFakeInputInjector>(),
 			std::move(spControllerPeer),
-			std::make_unique<KTcpSignalingTransport>());
+			std::make_unique<KTcpSignalingTransport>(),
+			MakeFakeIdentityProvider(), MakeFakeTrustedDeviceStore());
+		approvePairingRequests(controlled);
+		approvePairingRequests(controller);
 
 		QString strRequestId;
 		QString strSourceAddress;
@@ -561,7 +587,8 @@ namespace
 		KSessionCoordinator controlled(std::make_unique<KFakeDeviceInfoProvider>(),
 			std::make_unique<KFakeInputInjector>(),
 			std::move(spControlledPeer),
-			std::make_unique<KTcpSignalingTransport>());
+			std::make_unique<KTcpSignalingTransport>(),
+			MakeFakeIdentityProvider(), MakeFakeTrustedDeviceStore());
 		KApplicationSettings settings;
 		settings.approvalMode = AutoAcceptRemoteApprovalMode;
 		controlled.applyApplicationSettings(settings);
@@ -571,7 +598,11 @@ namespace
 		KSessionCoordinator controller(std::make_unique<KFakeDeviceInfoProvider>(),
 			std::make_unique<KFakeInputInjector>(),
 			std::move(spControllerPeer),
-			std::make_unique<KTcpSignalingTransport>());
+			std::make_unique<KTcpSignalingTransport>(),
+			MakeFakeIdentityProvider(), MakeFakeTrustedDeviceStore());
+		approvePairingRequests(controlled);
+		approvePairingRequests(controller);
+		approveAccessRequests(controlled);
 		KSessionState controllerState = IdleSessionState;
 		QString strSignalingState;
 		QObject::connect(&controller, &KSessionCoordinator::sessionStateChanged,
@@ -629,13 +660,17 @@ namespace
 		KSessionCoordinator controlled(std::make_unique<KFakeDeviceInfoProvider>(),
 			std::make_unique<KFakeInputInjector>(),
 			std::move(spControlledPeer),
-			std::make_unique<KTcpSignalingTransport>());
+			std::make_unique<KTcpSignalingTransport>(),
+			MakeFakeIdentityProvider(), MakeFakeTrustedDeviceStore());
 		auto spControllerPeer = std::make_unique<KFakeRemotePeerTransport>();
 		KFakeRemotePeerTransport *pControllerPeer = spControllerPeer.get();
 		KSessionCoordinator controller(std::make_unique<KFakeDeviceInfoProvider>(),
 			std::make_unique<KFakeInputInjector>(),
 			std::move(spControllerPeer),
-			std::make_unique<KTcpSignalingTransport>());
+			std::make_unique<KTcpSignalingTransport>(),
+			MakeFakeIdentityProvider(), MakeFakeTrustedDeviceStore());
+		approvePairingRequests(controlled);
+		approvePairingRequests(controller);
 		KApplicationSettings settings;
 		settings.approvalMode = DenyRemoteApprovalMode;
 		controlled.applyApplicationSettings(settings);
@@ -664,7 +699,8 @@ namespace
 		KSessionCoordinator controlled(std::make_unique<KFakeDeviceInfoProvider>(),
 			std::make_unique<KFakeInputInjector>(),
 			std::move(spPeer),
-			std::make_unique<KTcpSignalingTransport>());
+			std::make_unique<KTcpSignalingTransport>(),
+			MakeFakeIdentityProvider(), MakeFakeTrustedDeviceStore());
 		KApplicationSettings settings;
 		settings.bRemoteAccessEnabled = false;
 		controlled.applyApplicationSettings(settings);
@@ -686,7 +722,8 @@ namespace
 		KSessionCoordinator service(std::make_unique<KFakeDeviceInfoProvider>(),
 			std::make_unique<KFakeInputInjector>(),
 			std::move(spPeer),
-			std::make_unique<KTcpSignalingTransport>());
+			std::make_unique<KTcpSignalingTransport>(),
+			MakeFakeIdentityProvider(), MakeFakeTrustedDeviceStore());
 		KSessionError sessionError;
 		QObject::connect(&service, &KSessionCoordinator::sessionErrorOccurred,
 			[&sessionError](const KSessionError &error) { sessionError = error; });
@@ -709,7 +746,8 @@ namespace
 		KSessionCoordinator service(std::make_unique<KFakeDeviceInfoProvider>(),
 			std::make_unique<KFakeInputInjector>(),
 			std::move(spPeer),
-			std::make_unique<KTcpSignalingTransport>());
+			std::make_unique<KTcpSignalingTransport>(),
+			MakeFakeIdentityProvider(), MakeFakeTrustedDeviceStore());
 		QVector<quint16> availablePorts;
 		QObject::connect(&service, &KSessionCoordinator::listeningAvailabilityChanged,
 			[&availablePorts](bool bAvailable, quint16 nPort)
@@ -749,7 +787,8 @@ namespace
 		KSessionCoordinator service(std::make_unique<KFakeDeviceInfoProvider>(),
 			std::make_unique<KFakeInputInjector>(),
 			std::move(spPeer),
-			std::make_unique<KTcpSignalingTransport>());
+			std::make_unique<KTcpSignalingTransport>(),
+			MakeFakeIdentityProvider(), MakeFakeTrustedDeviceStore());
 		KSessionState lastState = IdleSessionState;
 		KSessionError lastError;
 		QObject::connect(&service, &KSessionCoordinator::sessionStateChanged,
@@ -785,7 +824,8 @@ namespace
 		KSessionCoordinator service(std::make_unique<KFakeDeviceInfoProvider>(),
 			std::make_unique<KFakeInputInjector>(),
 			std::move(spPeer),
-			std::make_unique<KTcpSignalingTransport>());
+			std::make_unique<KTcpSignalingTransport>(),
+			MakeFakeIdentityProvider(), MakeFakeTrustedDeviceStore());
 
 		const quint16 nPort = occupiedPort.serverPort();
 		service.startSignalingServer(nPort);
@@ -808,7 +848,8 @@ namespace
 		KSessionCoordinator service(std::make_unique<KFakeDeviceInfoProvider>(),
 			std::make_unique<KFakeInputInjector>(),
 			std::move(spPeer),
-			std::make_unique<KTcpSignalingTransport>());
+			std::make_unique<KTcpSignalingTransport>(),
+			MakeFakeIdentityProvider(), MakeFakeTrustedDeviceStore());
 		KSessionState lastState = IdleSessionState;
 		KSessionError lastError;
 		QObject::connect(&service, &KSessionCoordinator::sessionStateChanged,

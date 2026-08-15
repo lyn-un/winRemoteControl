@@ -1,6 +1,7 @@
 #include "session/accesssessionflow.h"
 #include "session/capabilitysessionflow.h"
 #include "session/mediasessioncontroller.h"
+#include "fakesecurity.h"
 
 #include "core/transport/signalingtransport.h"
 
@@ -81,7 +82,10 @@ void TestCapabilityFlow()
 void TestAccessFlowOwnsTransportBoundary()
 {
 	KFakeSignalingTransport transport;
-	KAccessSessionFlow flow(&transport);
+	KFakeDeviceIdentityProvider identity;
+	KFakeTrustedDeviceStore store;
+	store.setIdentityProvider(&identity);
+	KAccessSessionFlow flow(&transport, &identity, &store);
 	Check(transport.strBusyMessage.contains(QStringLiteral("serverBusy")),
 		"access flow configures typed server busy response");
 	QString strError;
@@ -93,54 +97,28 @@ void TestAccessFlowOwnsTransportBoundary()
 		&& flow.hasLastEndpoint(),
 		"access flow owns the last outgoing endpoint");
 	flow.beginOutgoing(7, QStringLiteral("controller"));
-	Check(transport.strLastMessage.contains(QStringLiteral("accessRequest")),
-		"access flow creates and encodes access requests before transport");
+	KIdentityMessage hello;
+	Check(KIdentityMessageCodec::decode(transport.strLastMessage, &hello, &strError)
+		&& hello.type == HelloIdentityMessageType,
+		"access flow starts identity authentication before access approval");
 }
 
-void TestAccessFlowOwnsApprovalLifecycle()
+void TestAccessFlowRejectsApprovalBeforeAuthentication()
 {
 	KFakeSignalingTransport transport;
-	KAccessSessionFlow flow(&transport);
+	KFakeDeviceIdentityProvider identity;
+	KFakeTrustedDeviceStore store;
+	store.setIdentityProvider(&identity);
+	KAccessSessionFlow flow(&transport, &identity, &store);
 	flow.beginOutgoing(11, QStringLiteral("controller"));
-	KAccessMessage request;
-	QString strError;
-	Check(KAccessMessageCodec::decode(transport.strLastMessage, &request, &strError)
-		&& request.type == RequestAccessMessageType,
-		"outgoing access flow emits a typed request");
 	int nOutgoingAccepted = 0;
 	QObject::connect(&flow, &KAccessSessionFlow::outgoingAccessAccepted,
 		[&nOutgoingAccepted]() { ++nOutgoingAccepted; });
 	KAccessMessage accepted;
 	accepted.type = AcceptedAccessMessageType;
-	accepted.strRequestId = request.strRequestId;
-	Check(flow.handleAccessMessage(accepted, 11) && nOutgoingAccepted == 1
-		&& !flow.hasApproval(),
-		"matching acceptance completes and clears outgoing approval");
-
-	KApplicationSettings settings;
-	settings.approvalMode = AskRemoteApprovalMode;
-	settings.nApprovalTimeoutSeconds = 10;
-	flow.setApplicationSettings(settings);
-	flow.beginIncoming(QStringLiteral("192.0.2.10"), 12);
-	int nIncomingRequests = 0;
-	int nIncomingAccepted = 0;
-	QObject::connect(&flow, &KAccessSessionFlow::incomingAccessRequest,
-		[&nIncomingRequests](const QString &, const QString &, const QString &, qint64)
-			{ ++nIncomingRequests; });
-	QObject::connect(&flow, &KAccessSessionFlow::incomingAccessAccepted,
-		[&nIncomingAccepted]() { ++nIncomingAccepted; });
-	KAccessMessage incoming;
-	incoming.type = RequestAccessMessageType;
-	incoming.strRequestId = QStringLiteral("17698aa1-9108-405c-a0eb-dc1b78777ad4");
-	incoming.strDeviceName = QStringLiteral("controller");
-	Check(flow.handleAccessMessage(incoming, 12) && nIncomingRequests == 1,
-		"incoming ask policy publishes one approval request");
-	flow.respondIncoming(incoming.strRequestId, true);
-	KAccessMessage response;
-	Check(KAccessMessageCodec::decode(transport.strLastMessage, &response, &strError)
-		&& response.type == AcceptedAccessMessageType
-		&& nIncomingAccepted == 1 && !flow.hasApproval(),
-		"incoming approval sends acceptance and clears flow state");
+	accepted.strRequestId = QStringLiteral("17698aa1-9108-405c-a0eb-dc1b78777ad4");
+	Check(flow.handleAccessMessage(accepted, 11) && nOutgoingAccepted == 0,
+		"access responses cannot bypass identity authentication");
 }
 
 void TestMediaFlow()
@@ -182,7 +160,7 @@ int main(int argc, char *argv[])
 	QCoreApplication application(argc, argv);
 	TestCapabilityFlow();
 	TestAccessFlowOwnsTransportBoundary();
-	TestAccessFlowOwnsApprovalLifecycle();
+	TestAccessFlowRejectsApprovalBeforeAuthentication();
 	TestMediaFlow();
 	return g_nFailureCount == 0 ? 0 : 1;
 }

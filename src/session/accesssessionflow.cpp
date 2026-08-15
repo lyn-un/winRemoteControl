@@ -2,6 +2,8 @@
 
 #include "common/sessiontracelogger.h"
 #include "core/transport/signalingtransport.h"
+#include "core/security/deviceidentityprovider.h"
+#include "core/security/trusteddevicestore.h"
 #include "session/accessapprovalcontroller.h"
 
 #include <QtCore/QDateTime>
@@ -13,10 +15,14 @@ namespace
 }
 
 KAccessSessionFlow::KAccessSessionFlow(KSignalingTransport *pTransport,
+	KDeviceIdentityProvider *pIdentityProvider,
+	KTrustedDeviceStore *pTrustedDeviceStore,
 	QObject *pParent)
 	: QObject(pParent)
 	, m_pTransport(pTransport)
 	, m_pApprovalController(new KAccessApprovalController(this))
+	, m_pAuthenticationFlow(new KDeviceAuthenticationFlow(
+		pIdentityProvider, pTrustedDeviceStore, this))
 {
 	Q_ASSERT(m_pTransport != nullptr);
 	KAccessMessage busy;
@@ -38,12 +44,24 @@ KAccessSessionFlow::KAccessSessionFlow(KSignalingTransport *pTransport,
 		this, &KAccessSessionFlow::connectionLost);
 	connect(m_pApprovalController, &KAccessApprovalController::timedOut,
 		this, &KAccessSessionFlow::handleApprovalTimeout);
+	connect(m_pAuthenticationFlow, &KDeviceAuthenticationFlow::messageReady,
+		this, [this](const KIdentityMessage &message)
+		{ m_pTransport->sendMessage(KIdentityMessageCodec::encode(message)); });
+	connect(m_pAuthenticationFlow, &KDeviceAuthenticationFlow::pairingRequested,
+		this, &KAccessSessionFlow::pairingRequested);
+	connect(m_pAuthenticationFlow, &KDeviceAuthenticationFlow::pairingCleared,
+		this, &KAccessSessionFlow::pairingCleared);
+	connect(m_pAuthenticationFlow, &KDeviceAuthenticationFlow::authenticationSucceeded,
+		this, &KAccessSessionFlow::handleAuthenticationSucceeded);
+	connect(m_pAuthenticationFlow, &KDeviceAuthenticationFlow::authenticationRejected,
+		this, &KAccessSessionFlow::handleAuthenticationRejected);
 }
 
 void KAccessSessionFlow::setApplicationSettings(
 	const KApplicationSettings &settings)
 {
 	m_settings = settings;
+	m_pAuthenticationFlow->setApprovalTimeoutSeconds(settings.nApprovalTimeoutSeconds);
 }
 
 bool KAccessSessionFlow::startListening(quint16 nPort, QString *pErrorMessage)
@@ -58,6 +76,7 @@ bool KAccessSessionFlow::startListening(quint16 nPort, QString *pErrorMessage)
 void KAccessSessionFlow::connectToHost(const QString &strHost, quint16 nPort)
 {
 	clearApproval(QStringLiteral("new_connection"));
+	m_pAuthenticationFlow->cancel(QStringLiteral("cancelled"), false, false);
 	m_strLastHost = strHost;
 	m_nLastPort = nPort;
 	m_bConnected = false;
@@ -74,6 +93,7 @@ void KAccessSessionFlow::disconnectPeer()
 void KAccessSessionFlow::stop()
 {
 	clearApproval(QStringLiteral("stopped"));
+	m_pAuthenticationFlow->cancel(QStringLiteral("cancelled"), false, false);
 	m_bConnected = false;
 	m_pTransport->stop();
 }
@@ -83,12 +103,17 @@ void KAccessSessionFlow::beginOutgoing(
 	const QString &strDeviceName)
 {
 	const KAccessApprovalRequest request = m_pApprovalController->beginOutgoing(
-		nGeneration, kInitialApprovalResponseTimeoutMs);
-	KAccessMessage message;
-	message.type = RequestAccessMessageType;
-	message.strRequestId = request.strRequestId;
-	message.strDeviceName = strDeviceName;
-	sendAccessMessage(message);
+		nGeneration, m_settings.nApprovalTimeoutSeconds * 1000 + kInitialApprovalResponseTimeoutMs);
+	m_strLocalDeviceName = strDeviceName;
+	QString strError;
+	if (!m_pAuthenticationFlow->beginOutgoing(request.strRequestId,
+		nGeneration, strDeviceName, KPermissionScopes::fromInt(kAllPermissionScopeBits),
+		&strError))
+	{
+		clearApproval(QStringLiteral("identity_unavailable"));
+		emit outgoingAccessRejected(QStringLiteral("identity_unavailable"));
+		return;
+	}
 	KSessionTraceLogger::write(QStringLiteral("controller"), QStringLiteral("access"),
 		QStringLiteral("request_sent"), -1,
 		QStringLiteral("requestId=%1 generation=%2")
@@ -97,10 +122,33 @@ void KAccessSessionFlow::beginOutgoing(
 
 void KAccessSessionFlow::beginIncoming(
 	const QString &strSourceAddress,
-	quint64 nGeneration)
+	quint64 nGeneration,
+	const QString &strDeviceName)
 {
 	m_pApprovalController->beginIncoming(strSourceAddress, nGeneration,
 		kInitialApprovalResponseTimeoutMs);
+	m_strLocalDeviceName = strDeviceName;
+	QString strError;
+	if (!m_pAuthenticationFlow->beginIncoming(strSourceAddress, nGeneration,
+		strDeviceName,
+		&strError))
+	{
+		emit incomingAccessRejected(QStringLiteral("identity_unavailable"));
+	}
+}
+
+bool KAccessSessionFlow::handleIdentityMessage(
+	const KIdentityMessage &message,
+	quint64 nGeneration)
+{
+	return m_pAuthenticationFlow->handleMessage(message, nGeneration);
+}
+
+void KAccessSessionFlow::respondPairing(const QString &strRequestId,
+	bool bAccepted,
+	KPermissionScopes permissions)
+{
+	m_pAuthenticationFlow->respondPairing(strRequestId, bAccepted, permissions);
 }
 
 bool KAccessSessionFlow::handleAccessMessage(
@@ -127,8 +175,23 @@ bool KAccessSessionFlow::handleAccessMessage(
 			return false;
 		}
 		const KAccessApprovalRequest &request = m_pApprovalController->request();
+		const KDeviceAuthenticationContext authentication =
+			m_pAuthenticationFlow->context();
+		if (!m_pAuthenticationFlow->isAuthenticated()
+			|| authentication.strRequestId != message.strRequestId)
+		{
+			return false;
+		}
 		emit incomingAccessObserved(request.strDeviceName, request.strSourceAddress);
-		switch (KAccessApprovalController::incomingDecision(m_settings))
+		KIncomingAccessDecision decision =
+			KAccessApprovalController::incomingDecision(m_settings);
+		if (decision == AcceptIncomingAccessDecision
+			&& (!authentication.bTrustedDevice
+				|| !authentication.bRequestWithinTrust))
+		{
+			decision = AskIncomingAccessDecision;
+		}
+		switch (decision)
 		{
 		case DisabledIncomingAccessDecision:
 			rejectIncoming(QStringLiteral("remote_access_disabled"), true);
@@ -180,6 +243,32 @@ bool KAccessSessionFlow::handleAccessMessage(
 	return true;
 }
 
+void KAccessSessionFlow::handleAuthenticationSucceeded(
+	const KDeviceAuthenticationContext &context)
+{
+	emit identityAuthenticated(context);
+	const KAccessApprovalRequest request = m_pApprovalController->request();
+	if (request.side != OutgoingAccessApprovalSide)
+		return;
+	m_pApprovalController->extendOutgoingTimeout(request.strRequestId,
+		kInitialApprovalResponseTimeoutMs);
+	KAccessMessage message;
+	message.type = RequestAccessMessageType;
+	message.strRequestId = context.strRequestId;
+	message.strDeviceName = m_strLocalDeviceName;
+	sendAccessMessage(message);
+}
+
+void KAccessSessionFlow::handleAuthenticationRejected(const QString &strReason)
+{
+	const KAccessApprovalRequest request = m_pApprovalController->request();
+	clearApproval(strReason);
+	if (request.side == IncomingAccessApprovalSide)
+		emit incomingAccessRejected(strReason);
+	else if (request.side == OutgoingAccessApprovalSide)
+		emit outgoingAccessRejected(strReason);
+}
+
 void KAccessSessionFlow::respondIncoming(
 	const QString &strRequestId,
 	bool bAccepted)
@@ -220,6 +309,8 @@ void KAccessSessionFlow::cancelApproval(
 	bool bNotifyRemote,
 	bool bEmitOutcome)
 {
+	if (m_pAuthenticationFlow->isActive())
+		m_pAuthenticationFlow->cancel(strReason, bNotifyRemote, false);
 	const KAccessApprovalRequest request = m_pApprovalController->request();
 	if (request.side == NoAccessApprovalSide)
 		return;
@@ -274,6 +365,11 @@ bool KAccessSessionFlow::hasLastEndpoint() const
 QString KAccessSessionFlow::lastHost() const { return m_strLastHost; }
 quint16 KAccessSessionFlow::lastPort() const { return m_nLastPort; }
 quint16 KAccessSessionFlow::listeningPort() const { return m_nListeningPort; }
+
+KDeviceAuthenticationContext KAccessSessionFlow::authenticationContext() const
+{
+	return m_pAuthenticationFlow->context();
+}
 
 void KAccessSessionFlow::clearLastEndpoint()
 {

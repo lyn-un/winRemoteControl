@@ -2,6 +2,8 @@
 
 #include "adapters/windows/device/windowsdeviceinfoprovider.h"
 #include "adapters/windows/input/windowsinputinjector.h"
+#include "adapters/windows/security/signedjsontrusteddevicestore.h"
+#include "adapters/windows/security/windowsdeviceidentityprovider.h"
 #include "adapters/clipboard/qtclipboardadapter.h"
 #include "adapters/signaling/tcpsignalingtransport.h"
 #include "adapters/discovery/udplandiscoverytransport.h"
@@ -63,6 +65,18 @@ namespace
 		return QDir(QCoreApplication::applicationDirPath())
 			.filePath(QStringLiteral("settings.ini"));
 	}
+
+	QString SecurityDirectoryPath()
+	{
+		return QDir(QCoreApplication::applicationDirPath())
+			.filePath(QStringLiteral("security"));
+	}
+
+	QString TrustedDevicesFilePath()
+	{
+		return QDir(SecurityDirectoryPath())
+			.filePath(QStringLiteral("trusted_devices.json"));
+	}
 }
 
 KApplicationComposition::KApplicationComposition(QObject *pParent)
@@ -73,6 +87,8 @@ KApplicationComposition::KApplicationComposition(QObject *pParent)
 		std::make_unique<KWindowsInputInjector>(),
 		std::make_unique<KWebRtcPeer>(),
 		std::make_unique<KTcpSignalingTransport>(),
+		std::make_unique<KWindowsDeviceIdentityProvider>(SecurityDirectoryPath()),
+		std::make_unique<KSignedJsonTrustedDeviceStore>(TrustedDevicesFilePath()),
 		this))
 	, m_pSessionViewModel(new KSessionViewModel(
 		m_pCaptureService,
@@ -180,6 +196,8 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		m_pApplicationSettingsService, &KApplicationSettingsService::updateSettings);
 	connect(pWebViewWidget, &KWebViewWidget::respondIncomingAccessRequestRequested,
 		m_pSessionService, &KSessionCoordinator::respondIncomingAccessRequest);
+	connect(pWebViewWidget, &KWebViewWidget::respondPairingRequestRequested,
+		m_pSessionService, &KSessionCoordinator::respondPairingRequest);
 	connect(pWebViewWidget, &KWebViewWidget::disconnectSessionRequested,
 		m_pSessionViewModel, &KSessionViewModel::disconnectSession);
 	connect(pWebViewWidget, &KWebViewWidget::startStreamingRequested,
@@ -223,6 +241,12 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		pWebViewWidget, &KWebViewWidget::sendIncomingAccessRequest);
 	connect(m_pSessionService, &KSessionCoordinator::incomingAccessRequestCleared,
 		pWebViewWidget, &KWebViewWidget::sendIncomingAccessRequestCleared);
+	connect(m_pSessionService, &KSessionCoordinator::pairingRequested,
+		pWebViewWidget, &KWebViewWidget::sendPairingRequest);
+	connect(m_pSessionService, &KSessionCoordinator::pairingCleared,
+		pWebViewWidget, &KWebViewWidget::sendPairingCleared);
+	connect(m_pSessionService, &KSessionCoordinator::deviceAuthenticationStateChanged,
+		pWebViewWidget, &KWebViewWidget::sendDeviceAuthenticationStateChanged);
 	connect(m_pTerminalSessionService, &KTerminalSessionService::stateChanged,
 		pWebViewWidget, &KWebViewWidget::sendTerminalStateChanged);
 	connect(m_pTerminalSessionService, &KTerminalSessionService::incomingRequest,

@@ -15,6 +15,8 @@ enum KSessionState
 	IdleSessionState,
 	ListeningSessionState,
 	ConnectingSessionState,
+	AuthenticatingIdentitySessionState,
+	PairingSessionState,
 	AwaitingApprovalSessionState,
 	NegotiatingSessionState,
 	ConnectedSessionState,
@@ -51,6 +53,9 @@ public:
 	bool setRole(KSessionRole role);
 	bool beginListening();
 	bool beginConnecting();
+	bool beginAuthenticatingIdentity();
+	bool beginPairing();
+	bool completeIdentityAuthentication();
 	bool beginAwaitingApproval();
 	bool approveConnection();
 	bool rejectConnection();
@@ -72,6 +77,8 @@ public:
 	bool canSendVideo() const;
 	bool canSyncClipboard() const;
 	bool isConnecting() const;
+	bool isAuthenticatingIdentity() const;
+	bool isPairing() const;
 	bool isAwaitingApproval() const;
 	bool isNegotiating() const;
 	bool isReconnecting() const;

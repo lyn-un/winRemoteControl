@@ -63,6 +63,39 @@ bool KSessionStateMachine::beginAwaitingApproval()
 	return true;
 }
 
+bool KSessionStateMachine::beginAuthenticatingIdentity()
+{
+	if (m_state == ListeningSessionState)
+	{
+		++m_nGeneration;
+		m_state = AuthenticatingIdentitySessionState;
+		return true;
+	}
+	if (m_state != ConnectingSessionState)
+		return false;
+	m_state = AuthenticatingIdentitySessionState;
+	return true;
+}
+
+bool KSessionStateMachine::beginPairing()
+{
+	if (m_state != AuthenticatingIdentitySessionState)
+		return false;
+	m_state = PairingSessionState;
+	return true;
+}
+
+bool KSessionStateMachine::completeIdentityAuthentication()
+{
+	if (m_state != AuthenticatingIdentitySessionState
+		&& m_state != PairingSessionState)
+	{
+		return false;
+	}
+	m_state = AwaitingApprovalSessionState;
+	return true;
+}
+
 bool KSessionStateMachine::approveConnection()
 {
 	if (m_state != AwaitingApprovalSessionState)
@@ -74,7 +107,9 @@ bool KSessionStateMachine::approveConnection()
 
 bool KSessionStateMachine::rejectConnection()
 {
-	if (m_state != AwaitingApprovalSessionState)
+	if (m_state != AuthenticatingIdentitySessionState
+		&& m_state != PairingSessionState
+		&& m_state != AwaitingApprovalSessionState)
 		return false;
 
 	m_state = m_role == ControlledSessionRole ? ListeningSessionState : IdleSessionState;
@@ -207,6 +242,16 @@ bool KSessionStateMachine::isConnecting() const
 	return m_role == ControllerSessionRole && m_state == ConnectingSessionState;
 }
 
+bool KSessionStateMachine::isAuthenticatingIdentity() const
+{
+	return m_state == AuthenticatingIdentitySessionState;
+}
+
+bool KSessionStateMachine::isPairing() const
+{
+	return m_state == PairingSessionState;
+}
+
 bool KSessionStateMachine::isAwaitingApproval() const
 {
 	return m_state == AwaitingApprovalSessionState;
@@ -215,6 +260,8 @@ bool KSessionStateMachine::isAwaitingApproval() const
 bool KSessionStateMachine::isNegotiating() const
 {
 	return m_state == ConnectingSessionState
+		|| m_state == AuthenticatingIdentitySessionState
+		|| m_state == PairingSessionState
 		|| m_state == AwaitingApprovalSessionState
 		|| m_state == NegotiatingSessionState;
 }
@@ -286,6 +333,10 @@ QString KSessionStateMachine::stateName(KSessionState state)
 		return QStringLiteral("Listening");
 	if (state == ConnectingSessionState)
 		return QStringLiteral("Connecting");
+	if (state == AuthenticatingIdentitySessionState)
+		return QStringLiteral("AuthenticatingIdentity");
+	if (state == PairingSessionState)
+		return QStringLiteral("Pairing");
 	if (state == AwaitingApprovalSessionState)
 		return QStringLiteral("AwaitingApproval");
 	if (state == NegotiatingSessionState)

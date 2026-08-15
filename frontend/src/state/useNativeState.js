@@ -43,6 +43,8 @@ export function useNativeState() {
   const [clipboardSyncError, setClipboardSyncError] = useState("");
 	const [sessionCapabilities, setSessionCapabilities] = useState(null);
   const [incomingAccessRequest, setIncomingAccessRequest] = useState(null);
+	const [pairingRequest, setPairingRequest] = useState(null);
+	const [deviceAuthentication, setDeviceAuthentication] = useState(null);
 	const [incomingTerminalRequest, setIncomingTerminalRequest] = useState(null);
 	const [terminalState, setTerminalState] = useState({ state: "Closed", available: false, status: "" });
 	const [terminalFrontendSupport, setTerminalFrontendSupport] = useState({ supported: false, reason: "" });
@@ -205,6 +207,21 @@ export function useNativeState() {
         return;
       }
 
+		if (message.type === "pairingRequestChanged") {
+			setPairingRequest({ requestId: message.requestId || "", deviceName: message.deviceName || "Windows 设备", fingerprint: message.fingerprint || "", pairingCode: message.pairingCode || "", permissions: Array.isArray(message.permissions) ? message.permissions : [], expiresAtMs: Number(message.expiresAtMs) || Date.now() });
+			return;
+		}
+
+		if (message.type === "pairingRequestCleared") {
+			setPairingRequest((request) => (!request || request.requestId === message.requestId ? null : request));
+			return;
+		}
+
+		if (message.type === "deviceAuthenticationStateChanged") {
+			setDeviceAuthentication({ state: message.state || "", deviceId: message.deviceId || "", fingerprint: message.fingerprint || "", trusted: Boolean(message.trusted) });
+			return;
+		}
+
 		if (message.type === "incomingTerminalAccessRequest") {
 			setIncomingTerminalRequest({ requestId: message.requestId || "", deviceName: message.deviceName || "", sourceAddress: message.sourceAddress || "", expiresAtMs: Number(message.expiresAtMs) || Date.now() });
 			return;
@@ -331,6 +348,8 @@ export function useNativeState() {
     applicationSettings,
     applicationSettingsError,
     incomingAccessRequest,
+		pairingRequest,
+		deviceAuthentication,
 		incomingTerminalRequest,
 		terminalState,
 		terminalFrontendSupport,

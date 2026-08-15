@@ -13,6 +13,7 @@
 #include "core/session/sessionstatemachine.h"
 #include "core/transport/remotepeertransport.h"
 #include "session/sessioncontroller.h"
+#include "session/deviceauthenticationflow.h"
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
@@ -31,6 +32,8 @@ class KPeerLifecycleController;
 struct KSessionCommandTransmitResult;
 class KSignalingTransport;
 class KShutdownCoordinator;
+class KDeviceIdentityProvider;
+class KTrustedDeviceStore;
 class QTimer;
 
 class KSessionCoordinator : public KSessionController
@@ -42,6 +45,8 @@ public:
 		std::unique_ptr<IKInputInjector> spInputInjector,
 		std::unique_ptr<KRemotePeerTransport> spRemotePeerTransport,
 		std::unique_ptr<KSignalingTransport> spSignalingTransport,
+		std::unique_ptr<KDeviceIdentityProvider> spIdentityProvider,
+		std::unique_ptr<KTrustedDeviceStore> spTrustedDeviceStore,
 		QObject *pParent = nullptr);
 	~KSessionCoordinator() override;
 	quint64 sessionGeneration() const override;
@@ -73,6 +78,9 @@ public slots:
 	void handleCaptureFailure() override;
 	void applyApplicationSettings(const KApplicationSettings &settings) override;
 	void respondIncomingAccessRequest(const QString &strRequestId, bool bAccepted) override;
+	void respondPairingRequest(const QString &strRequestId,
+		bool bAccepted,
+		KPermissionScopes permissions) override;
 
 private:
 	enum PendingRequestType
@@ -178,6 +186,8 @@ private:
 	std::unique_ptr<IKDeviceInfoProvider> m_spDeviceInfoProvider;
 	std::unique_ptr<KRemotePeerTransport> m_spRemotePeerTransport;
 	std::unique_ptr<KSignalingTransport> m_spSignalingTransport;
+	std::unique_ptr<KDeviceIdentityProvider> m_spIdentityProvider;
+	std::unique_ptr<KTrustedDeviceStore> m_spTrustedDeviceStore;
 	KSignalingTransport *m_pSignaling = nullptr;
 	KInputInjector *m_pInputInjector = nullptr;
 	KAccessSessionFlow *m_pAccessSessionFlow = nullptr;
@@ -197,6 +207,7 @@ private:
 	QString m_strPendingHost;
 	quint16 m_nPendingPort = 0;
 	KSessionRole m_pendingRole = ControllerSessionRole;
+	KDeviceAuthenticationContext m_authenticationContext;
 };
 
 #endif // _WINREMOTECONTROL_SESSIONCOORDINATOR_H_

@@ -377,6 +377,32 @@ function AccessRequestModal({ request }) {
   );
 }
 
+function PairingRequestModal({ request }) {
+  const [seconds, setSeconds] = useState(() => Math.max(0, Math.ceil((request.expiresAtMs - Date.now()) / 1000)));
+  const [permissions, setPermissions] = useState(() => new Set(request.permissions));
+  const permissionLabels = { viewScreen: "查看画面", inputControl: "键盘与鼠标", clipboard: "剪贴板", terminal: "远程终端" };
+  const respond = (accepted) => sendCommand("respondPairingRequest", { requestId: request.requestId, accepted, permissions: [...permissions] });
+  const toggle = (permission) => setPermissions((current) => {
+    const next = new Set(current);
+    if (permission !== "viewScreen") next.has(permission) ? next.delete(permission) : next.add(permission);
+    return next;
+  });
+  useEffect(() => {
+    const timer = window.setInterval(() => setSeconds(Math.max(0, Math.ceil((request.expiresAtMs - Date.now()) / 1000))), 250);
+    return () => window.clearInterval(timer);
+  }, [request.expiresAtMs]);
+  return <div className="approval-backdrop"><article className="approval-dialog pairing-dialog">
+    <div className="approval-rings"><span /><span /><Icon name="shield" /></div>
+    <span className="eyebrow">DEVICE PAIRING</span><h2>确认设备配对</h2>
+    <p>请确认两台电脑显示的六位数字完全相同。</p>
+    <div className="pairing-code">{request.pairingCode}</div>
+    <dl><div><dt>设备</dt><dd>{request.deviceName}</dd></div><div><dt>短指纹</dt><dd title={request.fingerprint}>{request.fingerprint.slice(0, 24)}</dd></div><div><dt>自动拒绝</dt><dd>{seconds} 秒</dd></div></dl>
+    <div className="pairing-permissions">{request.permissions.map((permission) => <label key={permission}><input type="checkbox" checked={permissions.has(permission)} disabled={permission === "viewScreen"} onChange={() => toggle(permission)} />{permissionLabels[permission] || permission}</label>)}</div>
+    <div className="approval-actions"><button className="outline-button danger" onClick={() => respond(false)}>不匹配，拒绝</button><button className="primary-button" onClick={() => respond(true)}>数字相同，允许配对</button></div>
+    <small>配对码不会通过网络发送。确认后，本机会记住对方的固定公钥。</small>
+  </article></div>;
+}
+
 function TerminalRequestModal({ request }) {
 	const [seconds, setSeconds] = useState(() => Math.max(0, Math.ceil((request.expiresAtMs - Date.now()) / 1000)));
 	const respond = (accepted) => sendCommand("respondTerminalAccessRequest", { requestId: request.requestId, accepted });
@@ -581,6 +607,7 @@ export function DashboardPage() {
         ) : null}
         {awaitingApproval && state.role === "controller" && <div className="approval-waiting"><span className="waiting-pulse" /><div><strong>等待对方确认</strong><small>被控端允许后才会建立远程会话</small></div><button onClick={() => sendCommand("disconnectSession")}>取消</button></div>}
         {state.incomingAccessRequest && <AccessRequestModal request={state.incomingAccessRequest} />}
+		{state.pairingRequest && <PairingRequestModal request={state.pairingRequest} />}
 		{state.incomingTerminalRequest && <TerminalRequestModal request={state.incomingTerminalRequest} />}
 		{state.terminalState.state === "Running" && state.role === "controlled" && <div className="terminal-running-banner"><Icon name="terminal" /><div><strong>远程终端正在运行</strong><small>PowerShell 使用当前登录用户权限</small></div><button onClick={() => sendCommand("closeTerminal")}>停止终端</button></div>}
         {deviceContextMenu && <div className="device-context-menu" style={{ left: deviceContextMenu.x, top: deviceContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { sendCommand("removeRecentDevice", { deviceId: deviceContextMenu.deviceId }); setDeviceContextMenu(null); }}><Icon name="trash" />移除最近记录</button></div>}
