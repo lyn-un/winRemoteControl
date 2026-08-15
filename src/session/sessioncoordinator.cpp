@@ -1,6 +1,7 @@
 #include "session/sessioncoordinator.h"
 
 #include "session/accesssessionflow.h"
+#include "session/authenticatedsignalingflow.h"
 #include "session/capabilitysessionflow.h"
 #include "session/mediasessioncontroller.h"
 #include "session/peerlifecyclecontroller.h"
@@ -75,6 +76,8 @@ KSessionCoordinator::KSessionCoordinator(
 	, m_spSignalingTransport(std::move(spSignalingTransport))
 	, m_spIdentityProvider(std::move(spIdentityProvider))
 	, m_spTrustedDeviceStore(std::move(spTrustedDeviceStore))
+	, m_spAuthenticatedSignalingFlow(std::make_unique<KAuthenticatedSignalingFlow>(
+		m_spIdentityProvider.get()))
 	, m_pSignaling(m_spSignalingTransport.get())
 	, m_pInputInjector(new KInputInjector(std::move(spInputInjector), this))
 	, m_pAccessSessionFlow(new KAccessSessionFlow(m_pSignaling,
@@ -165,6 +168,15 @@ KSessionCoordinator::KSessionCoordinator(
 		{
 			if (!m_sessionStateMachine.completeIdentityAuthentication())
 				return;
+			QString strError;
+			if (!m_spAuthenticatedSignalingFlow->begin(context,
+				m_sessionStateMachine.generation(), &strError))
+			{
+				finishSession(ConnectFailedSessionEndReason, strError,
+					m_sessionStateMachine.role() == ControlledSessionRole,
+					false, true);
+				return;
+			}
 			m_authenticationContext = context;
 			emit deviceAuthenticationStateChanged(QStringLiteral("authenticated"),
 				context.strRemoteDeviceId, context.strRemoteFingerprint,
@@ -281,26 +293,6 @@ void KSessionCoordinator::initializeProtocolRoutes()
 			|| context.nState == static_cast<int>(StreamingSessionState)
 			|| context.nState == static_cast<int>(ReconnectingSessionState);
 	};
-	const KProtocolRouter::Guard controlledAcceptsOffer =
-		[acceptsWebRtcSignalingState](const KProtocolEnvelope &,
-			const KProtocolRouteContext &context)
-		{
-			return context.nRole == static_cast<int>(ControlledSessionRole)
-				&& acceptsWebRtcSignalingState(context);
-		};
-	const KProtocolRouter::Guard controllerAcceptsAnswer =
-		[acceptsWebRtcSignalingState](const KProtocolEnvelope &,
-			const KProtocolRouteContext &context)
-		{
-			return context.nRole == static_cast<int>(ControllerSessionRole)
-				&& acceptsWebRtcSignalingState(context);
-		};
-	const KProtocolRouter::Guard acceptsIce =
-		[acceptsWebRtcSignalingState](const KProtocolEnvelope &,
-			const KProtocolRouteContext &context)
-		{
-			return acceptsWebRtcSignalingState(context);
-		};
 	const KProtocolRouter::Handler accessHandler =
 		[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
 		{ return handleAccessEnvelope(envelope); };
@@ -344,15 +336,15 @@ void KSessionCoordinator::initializeProtocolRoutes()
 	const KProtocolRouter::Handler signalingHandler =
 		[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
 		{ return handleWebRtcSignalingEnvelope(envelope); };
+	const KProtocolRouter::Guard authenticatedSignalingAllowed =
+		[acceptsWebRtcSignalingState](const KProtocolEnvelope &,
+			const KProtocolRouteContext &context)
+		{
+			return acceptsWebRtcSignalingState(context);
+		};
 	m_protocolRouter.registerHandler(SignalingProtocolChannel,
-		KWebRtcSignalingMessageCodec::typeName(OfferWebRtcSignalingMessageType),
-		controlledAcceptsOffer, signalingHandler);
-	m_protocolRouter.registerHandler(SignalingProtocolChannel,
-		KWebRtcSignalingMessageCodec::typeName(AnswerWebRtcSignalingMessageType),
-		controllerAcceptsAnswer, signalingHandler);
-	m_protocolRouter.registerHandler(SignalingProtocolChannel,
-		KWebRtcSignalingMessageCodec::typeName(IceCandidateWebRtcSignalingMessageType),
-		acceptsIce, signalingHandler);
+		KAuthenticatedSignalingFlow::envelopeType(),
+		authenticatedSignalingAllowed, signalingHandler);
 }
 
 void KSessionCoordinator::initializeSessionHandlers()
@@ -1043,6 +1035,8 @@ void KSessionCoordinator::finishStopping(quint64 nGeneration,
 	const bool bRecovering = m_bStopRecovering;
 	const KSessionRole role = m_stopRole;
 	const QString strReason = m_strStopReason;
+	m_spAuthenticatedSignalingFlow->reset();
+	m_authenticationContext = KDeviceAuthenticationContext();
 	m_bStopTeardownStarted = false;
 	if (bFinishedAfterTimeout)
 	{
@@ -1174,8 +1168,19 @@ void KSessionCoordinator::wirePeer()
 	connect(pTransport, &KRemotePeerTransport::signalingMessageReady,
 		this, [this](quint64 nGeneration, const QString &strMessage)
 		{
-			if (nGeneration == m_nActivePeerGeneration)
-				m_pAccessSessionFlow->sendSignalingMessage(strMessage);
+			if (nGeneration != m_nActivePeerGeneration)
+				return;
+			QString strError;
+			const QString strAuthenticated = m_spAuthenticatedSignalingFlow->encode(
+				strMessage, &strError);
+			if (!strAuthenticated.isEmpty())
+			{
+				m_pAccessSessionFlow->sendSignalingMessage(strAuthenticated);
+				return;
+			}
+			finishSession(ConnectFailedSessionEndReason, strError,
+				m_sessionStateMachine.role() == ControlledSessionRole,
+				false, true);
 		});
 	connect(m_pAccessSessionFlow, &KAccessSessionFlow::messageReceived,
 		this, &KSessionCoordinator::handleSignalingMessage);
@@ -1818,10 +1823,26 @@ KProtocolHandlerResult KSessionCoordinator::handleAccessEnvelope(
 KProtocolHandlerResult KSessionCoordinator::handleWebRtcSignalingEnvelope(
 	const KProtocolEnvelope &envelope)
 {
-	KWebRtcSignalingMessage message;
+	QString strRawSignaling;
 	QString strError;
-	if (!KWebRtcSignalingMessageCodec::decode(envelope, &message, &strError))
+	if (!m_spAuthenticatedSignalingFlow->decode(envelope,
+		&strRawSignaling, &strError))
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerDecodeFailed,
+			strError.isEmpty() ? QStringLiteral("signature_invalid") : strError);
+	}
+	KWebRtcSignalingMessage message;
+	if (!KWebRtcSignalingMessageCodec::decode(strRawSignaling, &message, &strError))
 		return KProtocolHandlerResult::failure(ProtocolHandlerDecodeFailed, strError);
+	const KSessionRole role = m_sessionStateMachine.role();
+	if ((message.type == OfferWebRtcSignalingMessageType
+			&& role != ControlledSessionRole)
+		|| (message.type == AnswerWebRtcSignalingMessageType
+			&& role != ControllerSessionRole))
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerInvalidState,
+			QStringLiteral("Authenticated signaling direction is invalid"));
+	}
 	m_spRemotePeerTransport->handleSignalingMessage(message);
 	return KProtocolHandlerResult::success();
 }
@@ -1847,6 +1868,8 @@ void KSessionCoordinator::handleInvalidSignalingMessage(KProtocolRouteStatus sta
 	const bool bWasAwaitingApproval = m_sessionStateMachine.isAwaitingApproval();
 	const bool bWasIdentityHandshake = m_sessionStateMachine.isAuthenticatingIdentity()
 		|| m_sessionStateMachine.isPairing();
+	const bool bAuthenticatedSignalingFailure =
+		strError.contains(QStringLiteral("Authenticated signaling"));
 	++m_nInvalidSignalingMessages;
 	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 		QStringLiteral("protocol_reject"), QStringLiteral("signaling"), -1,
@@ -1863,7 +1886,8 @@ void KSessionCoordinator::handleInvalidSignalingMessage(KProtocolRouteStatus sta
 	{
 		finishSession(ConnectFailedSessionEndReason, QString(), false, false, false);
 	}
-	else if (status == UnsupportedVersionProtocolRouteStatus
+	else if (bAuthenticatedSignalingFailure
+		|| status == UnsupportedVersionProtocolRouteStatus
 		|| m_nInvalidSignalingMessages >= KProtocolConstraints::kMaximumInvalidMessages)
 	{
 		finishSession(ConnectFailedSessionEndReason, QStringLiteral("protocol_violation"),

@@ -24,6 +24,7 @@ class IKDeviceInfoProvider;
 class IKInputInjector;
 class KInputInjector;
 class KAccessSessionFlow;
+class KAuthenticatedSignalingFlow;
 class KCapabilitySessionFlow;
 class KMediaSessionController;
 class KRecoveryController;
@@ -188,6 +189,7 @@ private:
 	std::unique_ptr<KSignalingTransport> m_spSignalingTransport;
 	std::unique_ptr<KDeviceIdentityProvider> m_spIdentityProvider;
 	std::unique_ptr<KTrustedDeviceStore> m_spTrustedDeviceStore;
+	std::unique_ptr<KAuthenticatedSignalingFlow> m_spAuthenticatedSignalingFlow;
 	KSignalingTransport *m_pSignaling = nullptr;
 	KInputInjector *m_pInputInjector = nullptr;
 	KAccessSessionFlow *m_pAccessSessionFlow = nullptr;

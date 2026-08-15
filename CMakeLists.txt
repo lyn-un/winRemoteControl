@@ -251,6 +251,8 @@ target_link_libraries(wrc_windows_adapters PUBLIC
 add_library(wrc_session_application STATIC
 	src/input/inputinjector.cpp
 	src/input/inputinjector.h
+	src/session/authenticatedsignalingflow.cpp
+	src/session/authenticatedsignalingflow.h
 	src/session/deviceauthenticationflow.cpp
 	src/session/deviceauthenticationflow.h
 	src/session/accessapprovalcontroller.cpp
@@ -957,6 +959,16 @@ if(WRC_BUILD_TESTS)
 	)
 	add_test(NAME wrc_device_authentication_tests
 		COMMAND wrc_device_authentication_tests)
+
+	add_executable(wrc_authenticated_signaling_tests
+		tests/unit/authenticatedsignalingtest.cpp
+	)
+	target_link_libraries(wrc_authenticated_signaling_tests PRIVATE
+		wrc_session_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_authenticated_signaling_tests
+		COMMAND wrc_authenticated_signaling_tests)
 
 	add_executable(wrc_session_command_dispatcher_tests
 		tests/unit/sessioncommanddispatchertest.cpp
