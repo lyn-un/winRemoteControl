@@ -98,6 +98,15 @@ target_link_libraries(wrc_protocol PUBLIC
 )
 
 add_library(wrc_core STATIC
+	src/core/security/deviceidentity.cpp
+	src/core/security/deviceidentity.h
+	src/core/security/deviceidentityprovider.h
+	src/core/security/permissionscope.cpp
+	src/core/security/permissionscope.h
+	src/core/security/securitycanonicalwriter.cpp
+	src/core/security/securitycanonicalwriter.h
+	src/core/security/trusteddevice.h
+	src/core/security/trusteddevicestore.h
 	src/core/session/capabilitynegotiator.cpp
 	src/core/session/capabilitynegotiator.h
 	src/core/clipboard/clipboardadapter.h
@@ -146,6 +155,35 @@ target_link_libraries(wrc_core PUBLIC
 	wrc_protocol
 	Qt6::Core
 )
+
+if(WIN32)
+add_library(wrc_windows_security_adapter STATIC
+	src/adapters/windows/security/atomicjsonfile.cpp
+	src/adapters/windows/security/atomicjsonfile.h
+	src/adapters/windows/security/signedjsontrusteddevicestore.cpp
+	src/adapters/windows/security/signedjsontrusteddevicestore.h
+	src/adapters/windows/security/windowsdeviceidentityprovider.cpp
+	src/adapters/windows/security/windowsdeviceidentityprovider.h
+)
+
+target_compile_definitions(wrc_windows_security_adapter PRIVATE
+	UNICODE
+	_UNICODE
+	WIN32_LEAN_AND_MEAN
+	NOMINMAX
+)
+
+target_include_directories(wrc_windows_security_adapter PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_windows_security_adapter PUBLIC
+	wrc_core
+	Qt6::Core
+	bcrypt
+	ncrypt
+)
+endif()
 
 add_library(wrc_diagnostics STATIC
 	src/common/latencytracelogger.cpp
@@ -687,6 +725,7 @@ target_link_libraries(winRemoteControl PRIVATE
 	wrc_udp_discovery_adapter
 	wrc_webrtc_adapter
 	wrc_windows_adapters
+	wrc_windows_security_adapter
 	wrc_windows_terminal_adapter
 	wrc_windows_terminal_frontend_adapter
 	wrc_capture_application
@@ -702,6 +741,20 @@ target_link_libraries(winRemoteControl PRIVATE
 endif() # WRC_BUILD_APP
 
 if(WRC_BUILD_TESTS)
+	if(WIN32)
+	add_executable(wrc_device_identity_tests
+		tests/unit/deviceidentitytest.cpp
+	)
+	target_link_libraries(wrc_device_identity_tests PRIVATE
+		wrc_windows_security_adapter
+		Qt6::Core
+	)
+	add_test(NAME wrc_device_identity_tests COMMAND wrc_device_identity_tests)
+	set_tests_properties(wrc_device_identity_tests PROPERTIES
+		ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+	)
+	endif()
+
 	add_executable(wrc_protocol_tests
 		tests/unit/protocolcodectest.cpp
 	)
