@@ -10,6 +10,7 @@
 #include "core/protocol/sessionmessage.h"
 #include "core/terminal/terminalstate.h"
 #include "core/security/permissionscope.h"
+#include "core/security/trusteddevice.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QPoint>
@@ -74,6 +75,9 @@ public slots:
 		const QString &strDeviceId,
 		const QString &strFingerprint,
 		bool bTrusted);
+	void sendTrustedDevicesChanged(const QVector<KTrustedDevice> &devices);
+	void sendTrustedDeviceError(const QString &strError);
+	void sendSessionPermissionsChanged(KPermissionScopes permissions);
 	void sendClipboardSyncStateChanged(bool bEnabled,
 		bool bAvailable,
 		bool bActive,
@@ -122,6 +126,12 @@ signals:
 	void respondPairingRequestRequested(const QString &strRequestId,
 		bool bAccepted,
 		KPermissionScopes permissions);
+	void requestTrustedDevicesRequested();
+	void updateTrustedDeviceRequested(const QString &strDeviceId,
+		const QString &strAlias,
+		KPermissionScopes permissions);
+	void revokeTrustedDeviceRequested(const QString &strDeviceId);
+	void requestRePairDeviceRequested(const QString &strDeviceId);
 	void disconnectSessionRequested();
 	void startStreamingRequested();
 	void stopStreamingRequested();

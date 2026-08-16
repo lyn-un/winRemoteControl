@@ -16,7 +16,8 @@ enum KSessionErrorDomain
 	InputSessionErrorDomain = 7,
 	ClipboardSessionErrorDomain = 8,
 	ShutdownSessionErrorDomain = 9,
-	TerminalSessionErrorDomain = 10
+	TerminalSessionErrorDomain = 10,
+	SecuritySessionErrorDomain = 11
 };
 
 enum KSessionErrorCode
@@ -50,7 +51,16 @@ enum KSessionErrorCode
 	TerminalOutputOverflowSessionErrorCode = 26,
 	TerminalHostStartFailedSessionErrorCode = 27,
 	TerminalRelayHandshakeFailedSessionErrorCode = 28,
-	TerminalCommandTimeoutSessionErrorCode = 29
+	TerminalCommandTimeoutSessionErrorCode = 29,
+	IdentityUnavailableSessionErrorCode = 30,
+	AuthenticationTimeoutSessionErrorCode = 31,
+	SignatureInvalidSessionErrorCode = 32,
+	PairingRejectedSessionErrorCode = 33,
+	PairingRateLimitedSessionErrorCode = 34,
+	DeviceKeyChangedSessionErrorCode = 35,
+	DeviceRevokedSessionErrorCode = 36,
+	PermissionDeniedSessionErrorCode = 37,
+	TrustStoreTamperedSessionErrorCode = 38
 };
 
 enum KSessionErrorStage

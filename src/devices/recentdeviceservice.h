@@ -32,6 +32,7 @@ public slots:
 	void prepareIncomingConnection(const QString &strDeviceName, const QString &strSourceAddress);
 	void setSessionChannelOpen(bool bOpen);
 	void setRemoteDeviceName(const QString &strDeviceName);
+	void setAuthenticatedDeviceId(const QString &strDeviceId);
 
 signals:
 	void devicesChanged(const QVector<KRecentDevice> &devices);
@@ -54,6 +55,7 @@ private:
 	QVector<KRecentDevice> m_devices;
 	QString m_strPendingHost;
 	QString m_strPendingDeviceName;
+	QString m_strPendingAuthenticatedDeviceId;
 	quint16 m_nPendingPort = 0;
 	bool m_bPendingIncoming = false;
 	bool m_bSessionChannelOpen = false;

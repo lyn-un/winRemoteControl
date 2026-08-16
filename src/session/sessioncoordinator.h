@@ -11,6 +11,7 @@
 #include "core/protocol/sessionmessage.h"
 #include "core/protocol/protocolrouter.h"
 #include "core/session/sessionstatemachine.h"
+#include "core/security/trusteddevice.h"
 #include "core/transport/remotepeertransport.h"
 #include "session/sessioncontroller.h"
 #include "session/deviceauthenticationflow.h"
@@ -53,6 +54,7 @@ public:
 	quint64 sessionGeneration() const override;
 	bool isIdle() const override;
 	bool matchesCurrentEndpoint(const QString &strHost, quint16 nPort) const override;
+	QString authenticatedDeviceId() const;
 	void setTerminalCapabilitiesAvailable(bool bControllerAvailable,
 		bool bControlledAvailable);
 
@@ -82,6 +84,16 @@ public slots:
 	void respondPairingRequest(const QString &strRequestId,
 		bool bAccepted,
 		KPermissionScopes permissions) override;
+	void requestTrustedDevices();
+	void updateTrustedDevice(const QString &strDeviceId,
+		const QString &strAlias,
+		KPermissionScopes permissions);
+	void revokeTrustedDevice(const QString &strDeviceId);
+	void requestRePairDevice(const QString &strDeviceId);
+
+signals:
+	void trustedDevicesChanged(const QVector<KTrustedDevice> &devices);
+	void trustedDeviceError(const QString &strError);
 
 private:
 	enum PendingRequestType
@@ -164,6 +176,8 @@ private:
 		KSessionErrorStage stage,
 		bool bRetryable,
 		const QString &strTechnicalMessage);
+	bool hasPermission(KPermissionScope permission) const;
+	void publishPermissionDenied(const QString &strOperation) const;
 
 	KSessionStateMachine m_sessionStateMachine;
 	KProtocolRouter m_protocolRouter;

@@ -152,3 +152,14 @@ button:disabled { cursor: default; opacity: .58; }
   .desktop-stat { display:none; }
   .clipboard-sync-button>span { display:none; }
 }
+
+.trusted-device-list { gap: 14px; }
+.trusted-device-item { display: grid; gap: 16px; }
+.trusted-device-item.is-revoked { opacity: .68; }
+.trusted-alias { display: grid; gap: 7px; color: var(--muted); font-size: 12px; }
+.trusted-alias input { width: 100%; box-sizing: border-box; }
+.trusted-permissions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.trusted-permissions label { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; background: rgba(240, 247, 249, .72); }
+.trusted-device-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.danger-button { border: 1px solid rgba(190, 99, 91, .42); border-radius: 9px; padding: 9px 15px; color: #a24e47; background: rgba(255, 250, 249, .8); cursor: pointer; }
+.danger-button:hover { color: #fff; background: #b85d54; }

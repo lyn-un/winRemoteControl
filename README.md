@@ -53,6 +53,7 @@ build\Release\winRemoteControl.exe --trace --log-dir "D:\wrc_logs"
 - [架构概览](docs/architecture/overview.md)
 - [会话生命周期](docs/architecture/session-lifecycle.md)
 - [协议概览](docs/protocols/overview.md)
+- [设备身份、配对与权限](docs/security/device-identity.md)
 - [远程终端](docs/features/remote-terminal.md)
 - [视频链路](docs/media/video-pipeline.md)
 - [构建与测试](docs/development/build-and-test.md)

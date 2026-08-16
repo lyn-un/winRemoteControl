@@ -28,6 +28,8 @@ QVector<KRecentDevice> KQSettingsRecentDeviceStore::loadDevices(QString *pError)
 		settings.setArrayIndex(nIndex);
 		KRecentDevice device;
 		device.strDeviceId = settings.value(QStringLiteral("id")).toString();
+		device.strAuthenticatedDeviceId = settings.value(
+			QStringLiteral("authenticatedDeviceId")).toString();
 		device.strDeviceName = settings.value(QStringLiteral("name")).toString().left(128);
 		device.strHost = settings.value(QStringLiteral("host")).toString().trimmed();
 		device.nSignalingPort = static_cast<quint16>(settings.value(QStringLiteral("port")).toUInt());
@@ -66,6 +68,8 @@ bool KQSettingsRecentDeviceStore::saveDevices(
 		const KRecentDevice &device = devices.at(nIndex);
 		settings.setArrayIndex(nIndex);
 		settings.setValue(QStringLiteral("id"), device.strDeviceId);
+		settings.setValue(QStringLiteral("authenticatedDeviceId"),
+			device.strAuthenticatedDeviceId);
 		settings.setValue(QStringLiteral("name"), device.strDeviceName);
 		settings.setValue(QStringLiteral("host"), device.strHost);
 		settings.setValue(QStringLiteral("port"), device.nSignalingPort);

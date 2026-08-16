@@ -164,6 +164,8 @@ void KWebViewWidget::sendRecentDevicesChanged(const QVector<KRecentDevice> &devi
 	{
 		QJsonObject deviceObject;
 		deviceObject.insert(QStringLiteral("deviceId"), device.strDeviceId);
+		deviceObject.insert(QStringLiteral("authenticatedDeviceId"),
+			device.strAuthenticatedDeviceId);
 		deviceObject.insert(QStringLiteral("name"), device.strDeviceName);
 		deviceObject.insert(QStringLiteral("host"), device.strHost);
 		deviceObject.insert(QStringLiteral("port"), device.nSignalingPort);
@@ -273,6 +275,48 @@ void KWebViewWidget::sendDeviceAuthenticationStateChanged(
 	object.insert(QStringLiteral("deviceId"), strDeviceId);
 	object.insert(QStringLiteral("fingerprint"), strFingerprint);
 	object.insert(QStringLiteral("trusted"), bTrusted);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendTrustedDevicesChanged(
+	const QVector<KTrustedDevice> &devices)
+{
+	QJsonArray items;
+	for (const KTrustedDevice &device : devices)
+	{
+		QJsonObject item;
+		item.insert(QStringLiteral("deviceId"), device.strDeviceId);
+		item.insert(QStringLiteral("name"), device.strAlias.isEmpty()
+			? device.strAdvertisedName : device.strAlias);
+		item.insert(QStringLiteral("fingerprint"), device.strFingerprint.left(12));
+		item.insert(QStringLiteral("permissions"), QJsonArray::fromStringList(
+			PermissionScopeNames(device.permissionLimit)));
+		item.insert(QStringLiteral("pairedAtMs"), QString::number(device.nPairedAtMs));
+		item.insert(QStringLiteral("lastAuthenticatedAtMs"),
+			QString::number(device.nLastAuthenticatedAtMs));
+		item.insert(QStringLiteral("revoked"), device.bRevoked);
+		items.append(item);
+	}
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("trustedDevicesChanged"));
+	object.insert(QStringLiteral("devices"), items);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendTrustedDeviceError(const QString &strError)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("trustedDeviceError"));
+	object.insert(QStringLiteral("message"), strError);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendSessionPermissionsChanged(KPermissionScopes permissions)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("sessionPermissionsChanged"));
+	object.insert(QStringLiteral("permissions"), QJsonArray::fromStringList(
+		PermissionScopeNames(permissions)));
 	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
 }
 
@@ -589,6 +633,30 @@ void KWebViewWidget::handleWebMessage(const QString &strMessage)
 			object.value(QStringLiteral("accepted")).toBool(false),
 			permissions);
 	}
+	else if (strCommand == QStringLiteral("requestTrustedDevices"))
+		emit requestTrustedDevicesRequested();
+	else if (strCommand == QStringLiteral("updateTrustedDevice"))
+	{
+		const QJsonObject object = document.object();
+		QStringList names;
+		for (const QJsonValue &value : object.value(QStringLiteral("permissions")).toArray())
+		{
+			if (value.isString())
+				names.append(value.toString());
+		}
+		KPermissionScopes permissions;
+		if (!PermissionScopesFromNames(names, &permissions))
+			permissions = KPermissionScopes();
+		emit updateTrustedDeviceRequested(
+			object.value(QStringLiteral("deviceId")).toString(),
+			object.value(QStringLiteral("alias")).toString(), permissions);
+	}
+	else if (strCommand == QStringLiteral("revokeTrustedDevice"))
+		emit revokeTrustedDeviceRequested(
+			document.object().value(QStringLiteral("deviceId")).toString());
+	else if (strCommand == QStringLiteral("requestRePairDevice"))
+		emit requestRePairDeviceRequested(
+			document.object().value(QStringLiteral("deviceId")).toString());
 	else if (strCommand == QStringLiteral("disconnectSession"))
 		emit disconnectSessionRequested();
 	else if (strCommand == QStringLiteral("startStreaming"))

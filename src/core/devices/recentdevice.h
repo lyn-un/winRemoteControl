@@ -8,6 +8,7 @@
 struct KRecentDevice
 {
 	QString strDeviceId;
+	QString strAuthenticatedDeviceId;
 	QString strDeviceName;
 	QString strHost;
 	quint16 nSignalingPort = 0;

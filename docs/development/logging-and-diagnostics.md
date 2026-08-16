@@ -49,6 +49,7 @@ winRemoteControl.exe
 | 范围 | 重点事件 |
 | --- | --- |
 | TCP/审批 | `signaling_connect_start/success/failed`、access request/accepted/rejected/timeout |
+| 身份安全 | `device_pairing`、`device_authentication`、`security_drop permission_denied`；只记录内部 ID、短指纹、权限和原因 |
 | 协商 | SDP/ICE、capabilities sent/negotiated/rejected、DataChannel state |
 | 初始化 | WebRTC initialization stage、rollback start/finished/timeout |
 | 会话 | `session_recovery_start/success/failed`、`session_end`、shutdown pending components |
@@ -65,4 +66,5 @@ winRemoteControl.exe
 - 剪贴板日志不记录正文、哈希、文件名或路径。
 - 终端日志不记录命令、输出、工作目录或环境变量。
 - 发现与最近设备日志不记录设备名称。
+- 身份日志不记录私钥、完整公钥、签名、nonce、配对码或信令正文。
 - 高频事件应采样或聚合，避免诊断本身明显增加延迟。

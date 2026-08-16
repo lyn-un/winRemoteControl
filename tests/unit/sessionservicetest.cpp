@@ -303,13 +303,17 @@ namespace
 		return condition();
 	}
 
-	void approvePairingRequests(KSessionCoordinator &service)
+	void approvePairingRequests(KSessionCoordinator &service,
+		KPermissionScopes grantedPermissions = KPermissionScopes::fromInt(
+			kAllPermissionScopeBits))
 	{
 		QObject::connect(&service, &KSessionCoordinator::pairingRequested,
-			[&service](const QString &strRequestId, const QString &, const QString &,
+			[&service, grantedPermissions](const QString &strRequestId,
+				const QString &, const QString &,
 				const QString &, KPermissionScopes permissions, qint64)
 			{
-				service.respondPairingRequest(strRequestId, true, permissions);
+				service.respondPairingRequest(strRequestId, true,
+					permissions & grantedPermissions);
 			});
 	}
 
@@ -936,6 +940,58 @@ namespace
 			QStringLiteral("oversized signaling failure is explicit"));
 		transport.stop();
 	}
+
+	void testViewOnlyPermissionBlocksInputAndClipboard()
+	{
+		auto spControlledInput = std::make_unique<KFakeInputInjector>();
+		KFakeInputInjector *pControlledInput = spControlledInput.get();
+		auto spControlledPeer = std::make_unique<KFakeRemotePeerTransport>();
+		KFakeRemotePeerTransport *pControlledPeer = spControlledPeer.get();
+		KSessionCoordinator controlled(std::make_unique<KFakeDeviceInfoProvider>(),
+			std::move(spControlledInput), std::move(spControlledPeer),
+			std::make_unique<KTcpSignalingTransport>(),
+			MakeFakeIdentityProvider(), MakeFakeTrustedDeviceStore());
+		auto spControllerPeer = std::make_unique<KFakeRemotePeerTransport>();
+		KFakeRemotePeerTransport *pControllerPeer = spControllerPeer.get();
+		KSessionCoordinator controller(std::make_unique<KFakeDeviceInfoProvider>(),
+			std::make_unique<KFakeInputInjector>(), std::move(spControllerPeer),
+			std::make_unique<KTcpSignalingTransport>(),
+			MakeFakeIdentityProvider(), MakeFakeTrustedDeviceStore());
+		approvePairingRequests(controlled, ViewScreenPermissionScope);
+		approvePairingRequests(controller);
+		approveAccessRequests(controlled);
+
+		const quint16 nPort = reserveLocalPort();
+		controlled.startSignalingServer(nPort);
+		controller.connectSignaling(QStringLiteral("127.0.0.1"), nPort);
+		check(waitUntil([pControllerPeer]()
+			{ return pControllerPeer->nCreateOfferCount == 1; }),
+			QStringLiteral("view-only session completes access approval"));
+
+		pControlledPeer->openSessionChannel();
+		pControlledPeer->deliverDefaultCapabilities();
+		pControlledPeer->openInputChannel();
+		pControlledPeer->openClipboardChannel();
+		KInputMessage key;
+		key.type = KeyInputMessageType;
+		key.nSequence = 1;
+		key.bPressed = true;
+		pControlledPeer->deliverInputMessage(key);
+		KClipboardMessage clipboard;
+		clipboard.type = TextClipboardMessageType;
+		clipboard.strMessageId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+		clipboard.strText = QStringLiteral("blocked");
+		int nClipboardReceived = 0;
+		QObject::connect(&controlled, &KSessionCoordinator::clipboardMessageReceived,
+			[&nClipboardReceived](const KClipboardMessage &) { ++nClipboardReceived; });
+		pControlledPeer->deliverClipboardMessage(clipboard);
+		check(pControlledInput->nInjectCount == 0,
+			QStringLiteral("view-only permission blocks input injection"));
+		check(nClipboardReceived == 0,
+			QStringLiteral("view-only permission blocks clipboard delivery"));
+		controller.disconnectSession();
+		controlled.disconnectSession();
+	}
 }
 
 int main(int argc, char *argv[])
@@ -952,6 +1008,7 @@ int main(int argc, char *argv[])
 	testListenerFailureRollsBackReadyPeer();
 	testShutdownTimeoutIsolationAndLateCompletion();
 	testSignalingReceiveBoundaries();
+	testViewOnlyPermissionBlocksInputAndClipboard();
 	if (g_nFailureCount == 0)
 		qInfo() << "All session service tests passed";
 	return g_nFailureCount == 0 ? 0 : 1;

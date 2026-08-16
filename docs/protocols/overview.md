@@ -18,13 +18,16 @@ Codec 校验版本、字段类型、UUID、数值范围和消息大小。当前 
 
 默认 TCP 端口是 `39000`。接入阶段支持：
 
+- `identityHello`、`identityChallenge`、`identityProof`
+- `pairingDecision`、`identityAuthenticated`、认证拒绝
+
 - `accessRequest`
 - `accessPending`
 - `accessAccepted`
 - `accessRejected`
 - `serverBusy`（接入槽在读取请求前已被占用时使用的统一 Envelope）
 
-审批通过前到达的 SDP/ICE 被拒绝。审批完成后，TCP 继续传递 WebRTC Offer、Answer 和 ICE Candidate；连接 generation 与 request ID 用于隔离旧消息。
+身份认证与审批通过前到达的 SDP/ICE 被拒绝。之后 Offer、Answer 和 ICE Candidate 位于 `authenticatedSignaling` 信封中，由设备 ECDSA 私钥签名，并绑定 request ID、双方身份、transcript、generation、权限、payload hash 和单向递增 sequence。
 
 局域网发现是独立 UDP 协议，固定端口 `39001`。发现结果只提供连接候选，不等同于身份认证或接入授权。
 
@@ -56,8 +59,8 @@ Session DataChannel 打开后交换 `KSessionCapabilities`，包括：
 
 ## 安全与兼容边界
 
-- 设备名称只用于展示，不构成可信身份。
+- 设备名称只用于展示；可信身份是 CNG 私钥对应的固定公钥。
 - 真实来源地址取 TCP/UDP socket。
 - 新客户端要求能力协商；旧客户端三秒内得到明确不兼容错误。
 - 协议拒绝不会降级为未校验 JSON，也不会绕过被控端审批。
-- 当前安全传输由 WebRTC 的 DTLS/SRTP 与 SCTP over DTLS 提供，但项目尚无账号身份或公网信任体系。
+- TCP 元数据目前只认证完整性、不加密；WebRTC 媒体和 DataChannel 由 DTLS/SRTP 与 SCTP over DTLS 加密。

@@ -247,6 +247,7 @@ function SettingsPage({ state }) {
 
   const sections = [
     { id: "security", icon: "shield", title: "连接与安全", detail: "远程接入和审批策略" },
+    { id: "trusted", icon: "monitor", title: "可信设备", detail: "配对身份与权限上限" },
     { id: "network", icon: "signal", title: "网络与传输", detail: "监听端口与连接方式" },
   ];
   const active = sections.find((section) => section.id === activeSection) || sections[0];
@@ -313,6 +314,37 @@ function SettingsPage({ state }) {
         </article>
       );
     }
+    if (activeSection === "trusted") {
+      const permissionLabels = { viewScreen: "查看画面", inputControl: "键鼠控制", clipboard: "剪贴板", terminal: "终端" };
+      const updateTrusted = (device, patch) => sendCommand("updateTrustedDevice", {
+        deviceId: device.deviceId,
+        alias: patch.alias ?? device.name,
+        permissions: patch.permissions ?? device.permissions,
+      });
+      return (
+        <div className="settings-content-stack trusted-device-list">
+          {state.trustedDevices.length === 0 ? (
+            <article className="settings-card settings-content-card"><div className="empty-state"><strong>暂无可信设备</strong><small>首次连接完成六位配对码确认后，设备会显示在这里。</small></div></article>
+          ) : state.trustedDevices.map((device) => (
+            <article key={device.deviceId} className={`settings-card settings-content-card trusted-device-item ${device.revoked ? "is-revoked" : ""}`}>
+              <div className="settings-section-title"><span>●</span><div><h2>{device.name || "Windows 设备"}</h2><p>指纹 {device.fingerprint} · {device.revoked ? "已撤销" : "已验证"}</p></div></div>
+              <label className="trusted-alias"><span>设备别名</span><input defaultValue={device.name || ""} maxLength={128} disabled={device.revoked} onBlur={(event) => updateTrusted(device, { alias: event.target.value })} /></label>
+              <div className="trusted-permissions">
+                {Object.entries(permissionLabels).map(([permission, label]) => {
+                  const checked = device.permissions.includes(permission);
+                  return <label key={permission}><input type="checkbox" checked={permission === "viewScreen" || checked} disabled={device.revoked || permission === "viewScreen"} onChange={() => updateTrusted(device, { permissions: checked ? device.permissions.filter((item) => item !== permission) : [...device.permissions, permission] })} /><span>{label}</span></label>;
+                })}
+              </div>
+              <footer className="trusted-device-actions">
+                <button className="outline-button" onClick={() => sendCommand("requestRePairDevice", { deviceId: device.deviceId })}>重新配对</button>
+                {!device.revoked && <button className="danger-button" onClick={() => sendCommand("revokeTrustedDevice", { deviceId: device.deviceId })}>撤销信任</button>}
+              </footer>
+            </article>
+          ))}
+          {state.trustedDeviceError && <p className="form-error">{state.trustedDeviceError}</p>}
+        </div>
+      );
+    }
     return null;
   };
 
@@ -323,7 +355,7 @@ function SettingsPage({ state }) {
         <nav className="settings-index" aria-label="设置分类">
           <div className="settings-index-heading"><span>设置目录</span><small>SETTINGS INDEX</small></div>
           {sections.map((section, index) => (
-            <button key={section.id} className={activeSection === section.id ? "active" : ""} onClick={() => setActiveSection(section.id)}>
+            <button key={section.id} className={activeSection === section.id ? "active" : ""} onClick={() => { setActiveSection(section.id); if (section.id === "trusted") sendCommand("requestTrustedDevices"); }}>
               <span className="settings-index-number">{String(index + 1).padStart(2, "0")}</span>
               <span className="settings-index-icon"><Icon name={section.icon} /></span>
               <span><strong>{section.title}</strong><small>{section.detail}</small></span>

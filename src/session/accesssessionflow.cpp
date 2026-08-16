@@ -110,8 +110,12 @@ void KAccessSessionFlow::beginOutgoing(
 		nGeneration, strDeviceName, KPermissionScopes::fromInt(kAllPermissionScopeBits),
 		&strError))
 	{
-		clearApproval(QStringLiteral("identity_unavailable"));
-		emit outgoingAccessRejected(QStringLiteral("identity_unavailable"));
+		const QString strReason = strError.startsWith(
+			QStringLiteral("trust_store_tampered"))
+			? QStringLiteral("trust_store_tampered")
+			: QStringLiteral("identity_unavailable");
+		clearApproval(strReason);
+		emit outgoingAccessRejected(strReason);
 		return;
 	}
 	KSessionTraceLogger::write(QStringLiteral("controller"), QStringLiteral("access"),
@@ -133,7 +137,10 @@ void KAccessSessionFlow::beginIncoming(
 		strDeviceName,
 		&strError))
 	{
-		emit incomingAccessRejected(QStringLiteral("identity_unavailable"));
+		emit incomingAccessRejected(strError.startsWith(
+			QStringLiteral("trust_store_tampered"))
+			? QStringLiteral("trust_store_tampered")
+			: QStringLiteral("identity_unavailable"));
 	}
 }
 

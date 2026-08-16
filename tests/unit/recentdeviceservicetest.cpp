@@ -215,6 +215,7 @@ namespace
 		KRecentDevice source;
 		source.strDeviceId = QStringLiteral("device-id");
 		source.strDeviceName = QStringLiteral("TEST-PC");
+		source.strAuthenticatedDeviceId = QStringLiteral("authenticated-device-id");
 		source.strHost = QStringLiteral("172.16.0.8");
 		source.nSignalingPort = 40100;
 		source.nLastConnectedAtMs = 123456789;
@@ -231,6 +232,8 @@ namespace
 		check(loaded.size() == 2
 			&& loaded.first().strDeviceId == source.strDeviceId
 			&& loaded.first().strDeviceName == source.strDeviceName
+			&& loaded.first().strAuthenticatedDeviceId
+				== source.strAuthenticatedDeviceId
 			&& loaded.first().strHost == source.strHost
 			&& loaded.first().nSignalingPort == source.nSignalingPort
 			&& loaded.first().nLastConnectedAtMs == source.nLastConnectedAtMs

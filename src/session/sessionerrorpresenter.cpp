@@ -44,6 +44,24 @@ QString KSessionErrorPresenter::userMessage(const KSessionError &error)
 		return QStringLiteral("无法连接本地 Windows Terminal");
 	if (error.code == TerminalCommandTimeoutSessionErrorCode)
 		return QStringLiteral("终端控制命令超时，已安全关闭终端");
+	if (error.code == IdentityUnavailableSessionErrorCode)
+		return QStringLiteral("本机设备身份不可用，请检查 security 目录");
+	if (error.code == AuthenticationTimeoutSessionErrorCode)
+		return QStringLiteral("设备身份认证超时");
+	if (error.code == SignatureInvalidSessionErrorCode)
+		return QStringLiteral("设备签名验证失败，已终止连接");
+	if (error.code == PairingRejectedSessionErrorCode)
+		return QStringLiteral("设备配对已被拒绝");
+	if (error.code == PairingRateLimitedSessionErrorCode)
+		return QStringLiteral("配对失败次数过多，请稍后重试");
+	if (error.code == DeviceKeyChangedSessionErrorCode)
+		return QStringLiteral("已配对设备的密钥已变更，请先撤销旧记录");
+	if (error.code == DeviceRevokedSessionErrorCode)
+		return QStringLiteral("该设备的信任已被撤销");
+	if (error.code == PermissionDeniedSessionErrorCode)
+		return QStringLiteral("当前会话没有执行此操作的权限");
+	if (error.code == TrustStoreTamperedSessionErrorCode)
+		return QStringLiteral("可信设备记录校验失败，身份认证已停用");
 	if (error.code == InvalidArgumentSessionErrorCode)
 		return QStringLiteral("连接参数无效");
 	if (error.domain == ProtocolSessionErrorDomain)

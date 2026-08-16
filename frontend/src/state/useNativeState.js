@@ -45,6 +45,9 @@ export function useNativeState() {
   const [incomingAccessRequest, setIncomingAccessRequest] = useState(null);
 	const [pairingRequest, setPairingRequest] = useState(null);
 	const [deviceAuthentication, setDeviceAuthentication] = useState(null);
+	const [trustedDevices, setTrustedDevices] = useState([]);
+	const [trustedDeviceError, setTrustedDeviceError] = useState("");
+	const [sessionPermissions, setSessionPermissions] = useState([]);
 	const [incomingTerminalRequest, setIncomingTerminalRequest] = useState(null);
 	const [terminalState, setTerminalState] = useState({ state: "Closed", available: false, status: "" });
 	const [terminalFrontendSupport, setTerminalFrontendSupport] = useState({ supported: false, reason: "" });
@@ -222,6 +225,22 @@ export function useNativeState() {
 			return;
 		}
 
+		if (message.type === "trustedDevicesChanged") {
+			setTrustedDevices(Array.isArray(message.devices) ? message.devices : []);
+			setTrustedDeviceError("");
+			return;
+		}
+
+		if (message.type === "trustedDeviceError") {
+			setTrustedDeviceError(message.message || "可信设备操作失败");
+			return;
+		}
+
+		if (message.type === "sessionPermissionsChanged") {
+			setSessionPermissions(Array.isArray(message.permissions) ? message.permissions : []);
+			return;
+		}
+
 		if (message.type === "incomingTerminalAccessRequest") {
 			setIncomingTerminalRequest({ requestId: message.requestId || "", deviceName: message.deviceName || "", sourceAddress: message.sourceAddress || "", expiresAtMs: Number(message.expiresAtMs) || Date.now() });
 			return;
@@ -311,6 +330,7 @@ export function useNativeState() {
     if (getViewMode() === "dashboard") {
       sendCommand("requestRecentDevices");
       sendCommand("requestApplicationSettings");
+	  sendCommand("requestTrustedDevices");
 	  sendCommand("requestTerminalFrontendSupport");
     }
   }, []);
@@ -350,6 +370,9 @@ export function useNativeState() {
     incomingAccessRequest,
 		pairingRequest,
 		deviceAuthentication,
+		trustedDevices,
+		trustedDeviceError,
+		sessionPermissions,
 		incomingTerminalRequest,
 		terminalState,
 		terminalFrontendSupport,

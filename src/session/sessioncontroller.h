@@ -106,6 +106,7 @@ signals:
 		const QString &strDeviceId,
 		const QString &strFingerprint,
 		bool bTrusted);
+	void sessionPermissionsChanged(KPermissionScopes permissions);
 	void captureShutdownFinished(quint64 nGeneration);
 };
 

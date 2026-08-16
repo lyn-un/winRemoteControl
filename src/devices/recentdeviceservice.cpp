@@ -47,6 +47,7 @@ void KRecentDeviceService::connectEndpoint(const QString &strHost, quint16 nPort
 	m_strPendingHost = strNormalizedHost;
 	m_nPendingPort = nPort;
 	m_strPendingDeviceName.clear();
+	m_strPendingAuthenticatedDeviceId.clear();
 	m_bPendingIncoming = false;
 	m_bSessionChannelOpen = false;
 	m_bPendingSaved = false;
@@ -121,6 +122,7 @@ void KRecentDeviceService::prepareIncomingConnection(
 
 	m_strPendingHost = strNormalizedAddress;
 	m_strPendingDeviceName = strNormalizedName;
+	m_strPendingAuthenticatedDeviceId.clear();
 	m_nPendingPort = 0;
 	m_bPendingIncoming = true;
 	m_bSessionChannelOpen = false;
@@ -144,6 +146,13 @@ void KRecentDeviceService::setSessionChannelOpen(bool bOpen)
 void KRecentDeviceService::setRemoteDeviceName(const QString &strDeviceName)
 {
 	m_strPendingDeviceName = strDeviceName.trimmed().left(128);
+	if (m_bSessionChannelOpen)
+		savePendingDevice();
+}
+
+void KRecentDeviceService::setAuthenticatedDeviceId(const QString &strDeviceId)
+{
+	m_strPendingAuthenticatedDeviceId = strDeviceId.trimmed();
 	if (m_bSessionChannelOpen)
 		savePendingDevice();
 }
@@ -173,6 +182,7 @@ void KRecentDeviceService::savePendingDevice()
 
 	KRecentDevice &device = m_devices[nIndex];
 	device.strDeviceName = m_strPendingDeviceName;
+	device.strAuthenticatedDeviceId = m_strPendingAuthenticatedDeviceId;
 	device.nLastConnectedAtMs = nConnectedAtMs;
 	const QString strDeviceId = device.strDeviceId;
 	const QString strHost = device.strHost;
@@ -202,6 +212,7 @@ void KRecentDeviceService::clearPendingConnection()
 {
 	m_strPendingHost.clear();
 	m_strPendingDeviceName.clear();
+	m_strPendingAuthenticatedDeviceId.clear();
 	m_nPendingPort = 0;
 	m_bPendingIncoming = false;
 	m_bPendingSaved = false;

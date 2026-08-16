@@ -4,6 +4,7 @@
 #include "core/security/permissionscope.h"
 
 #include <QtCore/QByteArray>
+#include <QtCore/QMetaType>
 #include <QtCore/QString>
 #include <QtCore/QVector>
 
@@ -19,5 +20,8 @@ struct KTrustedDevice
 	qint64 nLastAuthenticatedAtMs = 0;
 	bool bRevoked = false;
 };
+
+Q_DECLARE_METATYPE(KTrustedDevice)
+Q_DECLARE_METATYPE(QVector<KTrustedDevice>)
 
 #endif // _WINREMOTECONTROL_CORE_SECURITY_TRUSTEDDEVICE_H_

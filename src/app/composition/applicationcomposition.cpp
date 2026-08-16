@@ -198,6 +198,14 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		m_pSessionService, &KSessionCoordinator::respondIncomingAccessRequest);
 	connect(pWebViewWidget, &KWebViewWidget::respondPairingRequestRequested,
 		m_pSessionService, &KSessionCoordinator::respondPairingRequest);
+	connect(pWebViewWidget, &KWebViewWidget::requestTrustedDevicesRequested,
+		m_pSessionService, &KSessionCoordinator::requestTrustedDevices);
+	connect(pWebViewWidget, &KWebViewWidget::updateTrustedDeviceRequested,
+		m_pSessionService, &KSessionCoordinator::updateTrustedDevice);
+	connect(pWebViewWidget, &KWebViewWidget::revokeTrustedDeviceRequested,
+		m_pSessionService, &KSessionCoordinator::revokeTrustedDevice);
+	connect(pWebViewWidget, &KWebViewWidget::requestRePairDeviceRequested,
+		m_pSessionService, &KSessionCoordinator::requestRePairDevice);
 	connect(pWebViewWidget, &KWebViewWidget::disconnectSessionRequested,
 		m_pSessionViewModel, &KSessionViewModel::disconnectSession);
 	connect(pWebViewWidget, &KWebViewWidget::startStreamingRequested,
@@ -247,6 +255,20 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		pWebViewWidget, &KWebViewWidget::sendPairingCleared);
 	connect(m_pSessionService, &KSessionCoordinator::deviceAuthenticationStateChanged,
 		pWebViewWidget, &KWebViewWidget::sendDeviceAuthenticationStateChanged);
+	connect(m_pSessionService, &KSessionCoordinator::deviceAuthenticationStateChanged,
+		m_pRecentDeviceService,
+		[this](const QString &strState, const QString &strDeviceId,
+			const QString &, bool)
+		{
+			if (strState == QStringLiteral("authenticated"))
+				m_pRecentDeviceService->setAuthenticatedDeviceId(strDeviceId);
+		});
+	connect(m_pSessionService, &KSessionCoordinator::trustedDevicesChanged,
+		pWebViewWidget, &KWebViewWidget::sendTrustedDevicesChanged);
+	connect(m_pSessionService, &KSessionCoordinator::trustedDeviceError,
+		pWebViewWidget, &KWebViewWidget::sendTrustedDeviceError);
+	connect(m_pSessionService, &KSessionCoordinator::sessionPermissionsChanged,
+		pWebViewWidget, &KWebViewWidget::sendSessionPermissionsChanged);
 	connect(m_pTerminalSessionService, &KTerminalSessionService::stateChanged,
 		pWebViewWidget, &KWebViewWidget::sendTerminalStateChanged);
 	connect(m_pTerminalSessionService, &KTerminalSessionService::incomingRequest,
@@ -454,7 +476,14 @@ void KApplicationComposition::wireServices()
 	connect(m_pSessionViewModel, &KSessionViewModel::sessionChannelChanged,
 		m_pRecentDeviceService, &KRecentDeviceService::setSessionChannelOpen);
 	connect(m_pSessionService, &KSessionCoordinator::incomingAccessObserved,
-		m_pRecentDeviceService, &KRecentDeviceService::prepareIncomingConnection);
+		m_pRecentDeviceService,
+		[this](const QString &strDeviceName, const QString &strSourceAddress)
+		{
+			m_pRecentDeviceService->prepareIncomingConnection(
+				strDeviceName, strSourceAddress);
+			m_pRecentDeviceService->setAuthenticatedDeviceId(
+				m_pSessionService->authenticatedDeviceId());
+		});
 	connect(m_pSessionViewModel, &KSessionViewModel::remoteDeviceInfoChanged,
 		m_pRecentDeviceService,
 		[m_pRecentDeviceService = m_pRecentDeviceService](const QString &strComputerName,

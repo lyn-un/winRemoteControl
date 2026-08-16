@@ -9,8 +9,11 @@ stateDiagram-v2
     [*] --> Idle
     Idle --> Listening: 被控端开始监听
     Idle --> Connecting: 控制端连接目标
-    Listening --> AwaitingApproval: 收到 accessRequest
-    Connecting --> AwaitingApproval: TCP 已连接并等待审批
+    Listening --> AuthenticatingIdentity: 收到 TCP 连接
+    Connecting --> AuthenticatingIdentity: TCP 已连接
+    AuthenticatingIdentity --> Pairing: 首次设备显示配对码
+    Pairing --> AwaitingApproval: 双方确认并保存信任
+    AuthenticatingIdentity --> AwaitingApproval: 已配对设备认证成功
     AwaitingApproval --> Negotiating: 被控端允许
     AwaitingApproval --> Idle: 控制端被拒绝或取消
     AwaitingApproval --> Listening: 被控端拒绝、超时或断线
@@ -34,9 +37,9 @@ stateDiagram-v2
 
 ## 接入审批与能力协商
 
-1. 控制端建立 TCP 后发送 `accessRequest`，不会立即创建 Offer。
-2. 被控端按 `ask`、`autoAccept` 或 `deny` 策略回应；来源地址取 socket，不信任消息声明。
-3. 允许后控制端创建 SDP Offer，双方交换 SDP/ICE。
+1. 控制端建立 TCP 后先完成设备身份握手；未知设备由两端确认相同六位配对码。
+2. 身份认证成功后才发送 `accessRequest`。`autoAccept` 只适用于未撤销且请求未超过权限上限的可信设备。
+3. 被控端允许后控制端创建 SDP Offer；SDP/ICE 必须通过认证信封验签。
 4. Session DataChannel 打开后双方交换 `KSessionCapabilities`。
 5. H.264、`video`、`session`、`input` 和协议版本必须存在交集；三秒内不能完成时明确报版本不兼容。
 6. 协商成功才进入 `Connected`，剪贴板、实时输入和画质上限使用交集结果。

@@ -158,6 +158,11 @@ KSessionCoordinator::KSessionCoordinator(
 				m_sessionStateMachine.beginPairing();
 				publishSessionState();
 			}
+			KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
+				QStringLiteral("device_pairing"), QStringLiteral("requested"), -1,
+				QStringLiteral("fingerprint=%1 permissions=%2")
+					.arg(strFingerprint.left(12))
+					.arg(permissions.toInt()));
 			emit pairingRequested(strRequestId, strDeviceName, strFingerprint,
 				strPairingCode, permissions, nExpiresAtMs);
 		});
@@ -178,6 +183,14 @@ KSessionCoordinator::KSessionCoordinator(
 				return;
 			}
 			m_authenticationContext = context;
+			KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
+				QStringLiteral("device_authentication"),
+				QStringLiteral("authenticated"), -1,
+				QStringLiteral("deviceId=%1 fingerprint=%2 permissions=%3 trusted=%4")
+					.arg(context.strRemoteDeviceId,
+						context.strRemoteFingerprint.left(12))
+					.arg(context.effectivePermissions.toInt())
+					.arg(context.bTrustedDevice ? 1 : 0));
 			emit deviceAuthenticationStateChanged(QStringLiteral("authenticated"),
 				context.strRemoteDeviceId, context.strRemoteFingerprint,
 				context.bTrustedDevice);
@@ -251,6 +264,11 @@ bool KSessionCoordinator::matchesCurrentEndpoint(
 	return m_sessionStateMachine.role() == ControllerSessionRole
 		&& m_sessionStateMachine.state() != IdleSessionState
 		&& m_pAccessSessionFlow->matchesEndpoint(strHost, nPort);
+}
+
+QString KSessionCoordinator::authenticatedDeviceId() const
+{
+	return m_authenticationContext.strRemoteDeviceId;
 }
 
 void KSessionCoordinator::setTerminalCapabilitiesAvailable(
@@ -610,9 +628,121 @@ void KSessionCoordinator::respondPairingRequest(const QString &strRequestId,
 	m_pAccessSessionFlow->respondPairing(strRequestId, bAccepted, permissions);
 }
 
+void KSessionCoordinator::requestTrustedDevices()
+{
+	QString strError;
+	const QVector<KTrustedDevice> devices = m_spTrustedDeviceStore->loadDevices(
+		&strError);
+	if (!strError.isEmpty())
+	{
+		emit trustedDeviceError(strError);
+		return;
+	}
+	emit trustedDevicesChanged(devices);
+}
+
+void KSessionCoordinator::updateTrustedDevice(const QString &strDeviceId,
+	const QString &strAlias,
+	KPermissionScopes permissions)
+{
+	QString strError;
+	QVector<KTrustedDevice> devices = m_spTrustedDeviceStore->loadDevices(&strError);
+	if (!strError.isEmpty())
+	{
+		emit trustedDeviceError(strError);
+		return;
+	}
+	bool bFound = false;
+	for (KTrustedDevice &device : devices)
+	{
+		if (device.strDeviceId != strDeviceId)
+			continue;
+		device.strAlias = strAlias.trimmed().left(128);
+		device.permissionLimit = permissions | ViewScreenPermissionScope;
+		bFound = true;
+		break;
+	}
+	if (!bFound)
+	{
+		emit trustedDeviceError(QStringLiteral("Trusted device does not exist"));
+		return;
+	}
+	if (!m_spTrustedDeviceStore->saveDevices(devices, &strError))
+	{
+		emit trustedDeviceError(strError);
+		return;
+	}
+	requestTrustedDevices();
+}
+
+void KSessionCoordinator::revokeTrustedDevice(const QString &strDeviceId)
+{
+	QString strError;
+	QVector<KTrustedDevice> devices = m_spTrustedDeviceStore->loadDevices(&strError);
+	bool bFound = false;
+	for (KTrustedDevice &device : devices)
+	{
+		if (device.strDeviceId == strDeviceId)
+		{
+			device.bRevoked = true;
+			bFound = true;
+		}
+	}
+	if (!strError.isEmpty())
+	{
+		emit trustedDeviceError(strError);
+		return;
+	}
+	if (!bFound)
+	{
+		emit trustedDeviceError(QStringLiteral("Trusted device does not exist"));
+		return;
+	}
+	if (!m_spTrustedDeviceStore->saveDevices(devices, &strError))
+	{
+		emit trustedDeviceError(strError.isEmpty()
+			? QStringLiteral("Failed to revoke trusted device") : strError);
+		return;
+	}
+	requestTrustedDevices();
+}
+
+void KSessionCoordinator::requestRePairDevice(const QString &strDeviceId)
+{
+	QString strError;
+	QVector<KTrustedDevice> devices = m_spTrustedDeviceStore->loadDevices(&strError);
+	bool bFound = false;
+	for (qsizetype nIndex = devices.size(); nIndex-- > 0;)
+	{
+		if (devices.at(nIndex).strDeviceId == strDeviceId)
+		{
+			devices.removeAt(nIndex);
+			bFound = true;
+		}
+	}
+	if (!strError.isEmpty())
+	{
+		emit trustedDeviceError(strError);
+		return;
+	}
+	if (!bFound)
+	{
+		emit trustedDeviceError(QStringLiteral("Trusted device does not exist"));
+		return;
+	}
+	if (!m_spTrustedDeviceStore->saveDevices(devices, &strError))
+	{
+		emit trustedDeviceError(strError.isEmpty()
+			? QStringLiteral("Failed to remove trusted device") : strError);
+		return;
+	}
+	requestTrustedDevices();
+}
+
 void KSessionCoordinator::enterRemoteDesktop(const KStreamConfig &config)
 {
-	if (!m_sessionStateMachine.canEnterRemoteDesktop() || !m_bSessionChannelOpen)
+	if (!hasPermission(ViewScreenPermissionScope)
+		|| !m_sessionStateMachine.canEnterRemoteDesktop() || !m_bSessionChannelOpen)
 	{
 		return;
 	}
@@ -656,8 +786,14 @@ void KSessionCoordinator::startStreaming()
 			false, QStringLiteral("Only the controlled role can start streaming"));
 		return;
 	}
-	if (!m_bSessionChannelOpen || !m_sessionStateMachine.canStartControlledStreaming())
+	if (!hasPermission(ViewScreenPermissionScope)
+		|| !m_bSessionChannelOpen
+		|| !m_sessionStateMachine.canStartControlledStreaming())
+	{
+		if (!hasPermission(ViewScreenPermissionScope))
+			publishPermissionDenied(QStringLiteral("video_start"));
 		return;
+	}
 
 	m_pMediaSessionController->startCapture(m_sessionStateMachine.generation());
 	m_sessionStateMachine.beginStreaming();
@@ -679,14 +815,18 @@ void KSessionCoordinator::stopStreaming()
 
 void KSessionCoordinator::pushVideoFrame(const KVideoFrame &frame)
 {
-	if (m_sessionStateMachine.canSendVideo())
+	if (hasPermission(ViewScreenPermissionScope)
+		&& m_sessionStateMachine.canSendVideo())
 		m_spRemotePeerTransport->pushVideoFrame(frame);
 }
 
 void KSessionCoordinator::sendInputMessage(const KInputMessage &message)
 {
-	if (!m_sessionStateMachine.canSendInput() || !m_bInputChannelOpen)
+	if (!hasPermission(InputControlPermissionScope)
+		|| !m_sessionStateMachine.canSendInput() || !m_bInputChannelOpen)
 	{
+		if (!hasPermission(InputControlPermissionScope))
+			publishPermissionDenied(QStringLiteral("input_send"));
 		return;
 	}
 	const QString strMessage = KInputMessageCodec::encode(message);
@@ -703,17 +843,25 @@ void KSessionCoordinator::sendInputMessage(const KInputMessage &message)
 
 void KSessionCoordinator::sendClipboardMessage(const KClipboardMessage &message)
 {
-	if (!m_sessionStateMachine.canSyncClipboard() || !m_bClipboardChannelOpen)
+	if (!hasPermission(ClipboardPermissionScope)
+		|| !m_sessionStateMachine.canSyncClipboard() || !m_bClipboardChannelOpen)
+	{
+		if (!hasPermission(ClipboardPermissionScope))
+			publishPermissionDenied(QStringLiteral("clipboard_send"));
 		return;
+	}
 	m_spRemotePeerTransport->sendClipboardMessage(message);
 }
 
 bool KSessionCoordinator::sendTerminalControlMessage(const KTerminalMessage &message)
 {
-	if (!m_pCapabilitySessionFlow->isComplete()
+	if (!hasPermission(TerminalPermissionScope)
+		|| !m_pCapabilitySessionFlow->isComplete()
 		|| !m_pCapabilitySessionFlow->negotiatedCapabilities().channels.contains(
 			QStringLiteral("terminal")))
 	{
+		if (!hasPermission(TerminalPermissionScope))
+			publishPermissionDenied(QStringLiteral("terminal_control_send"));
 		return false;
 	}
 	return m_spRemotePeerTransport->sendTerminalControlMessage(message)
@@ -722,10 +870,13 @@ bool KSessionCoordinator::sendTerminalControlMessage(const KTerminalMessage &mes
 
 bool KSessionCoordinator::sendTerminalData(const QByteArray &data)
 {
-	if (!m_bTerminalChannelOpen
+	if (!hasPermission(TerminalPermissionScope)
+		|| !m_bTerminalChannelOpen
 		|| !m_pCapabilitySessionFlow->negotiatedCapabilities().channels.contains(
 			QStringLiteral("terminal")))
 	{
+		if (!hasPermission(TerminalPermissionScope))
+			publishPermissionDenied(QStringLiteral("terminal_data_send"));
 		return false;
 	}
 	return m_spRemotePeerTransport->sendTerminalData(data);
@@ -1244,14 +1395,20 @@ void KSessionCoordinator::wirePeer()
 	connect(pTransport, &KRemotePeerTransport::terminalControlMessageReceived,
 		this, [this](quint64 nGeneration, const KTerminalMessage &message)
 		{
-			if (nGeneration == m_nActivePeerGeneration)
+			if (nGeneration == m_nActivePeerGeneration
+				&& hasPermission(TerminalPermissionScope))
 				emit terminalControlMessageReceived(message);
+			else if (nGeneration == m_nActivePeerGeneration)
+				publishPermissionDenied(QStringLiteral("terminal_control_receive"));
 		});
 	connect(pTransport, &KRemotePeerTransport::terminalDataReceived,
 		this, [this](quint64 nGeneration, const QByteArray &data)
 		{
-			if (nGeneration == m_nActivePeerGeneration)
+			if (nGeneration == m_nActivePeerGeneration
+				&& hasPermission(TerminalPermissionScope))
 				emit terminalDataReceived(data);
+			else if (nGeneration == m_nActivePeerGeneration)
+				publishPermissionDenied(QStringLiteral("terminal_data_receive"));
 		});
 	connect(pTransport, &KRemotePeerTransport::terminalChannelChanged,
 		this, [this](quint64 nGeneration, bool bOpen)
@@ -1262,6 +1419,7 @@ void KSessionCoordinator::wirePeer()
 			if (!m_pCapabilitySessionFlow->isComplete())
 				return;
 			const bool bAvailable = bOpen
+				&& hasPermission(TerminalPermissionScope)
 				&& m_pCapabilitySessionFlow->negotiatedCapabilities().channels.contains(
 					QStringLiteral("terminal"));
 			if (bAvailable || m_bTerminalChannelStatePublished)
@@ -1348,7 +1506,8 @@ void KSessionCoordinator::handleRemoteFrame(const KDecodedVideoFrame &frame)
 	// The peer already coalesces remote frames (drop-old) and the render widget
 	// coalesces again before present, so this middle layer only forwards the
 	// frame instead of adding another mutex+QueuedConnection hop.
-	if (frame.nWidth <= 0 || frame.nHeight <= 0 || frame.vecBgraBuffer.empty())
+	if (!hasPermission(ViewScreenPermissionScope)
+		|| frame.nWidth <= 0 || frame.nHeight <= 0 || frame.vecBgraBuffer.empty())
 		return;
 
 	emit remoteFrameReady(frame);
@@ -1367,6 +1526,11 @@ void KSessionCoordinator::handleInputMessage(const KInputMessage &message)
 				.arg(strMessage.toUtf8().size()));
 	}
 
+	if (!hasPermission(InputControlPermissionScope))
+	{
+		publishPermissionDenied(QStringLiteral("input_receive"));
+		return;
+	}
 	if (!m_sessionStateMachine.canReceiveInput())
 		return;
 
@@ -1399,6 +1563,11 @@ void KSessionCoordinator::handleClipboardMessage(const KClipboardMessage &messag
 			? QStringLiteral("ready")
 			: QStringLiteral("sync_state");
 	const int nPayloadBytes = bTextMessage ? message.strText.toUtf8().size() : -1;
+	if (!hasPermission(ClipboardPermissionScope))
+	{
+		publishPermissionDenied(QStringLiteral("clipboard_receive"));
+		return;
+	}
 	if (!m_sessionStateMachine.canSyncClipboard() || !m_bClipboardChannelOpen)
 	{
 		KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
@@ -1426,6 +1595,7 @@ void KSessionCoordinator::handleClipboardChannelChanged(bool bOpen)
 		-1,
 		QStringLiteral("open=%1").arg(bOpen ? 1 : 0));
 	emit clipboardChannelChanged(bOpen
+		&& hasPermission(ClipboardPermissionScope)
 		&& m_pCapabilitySessionFlow->negotiatedCapabilities().bClipboardText);
 }
 
@@ -1470,6 +1640,18 @@ void KSessionCoordinator::completeCapabilityNegotiation(
 {
 	if (!m_pCapabilitySessionFlow->isComplete() || !m_bSessionChannelOpen)
 		return;
+	KPermissionScopes effectivePermissions =
+		m_authenticationContext.effectivePermissions;
+	if (!capabilities.bClipboardText)
+		effectivePermissions.setFlag(ClipboardPermissionScope, false);
+	if (!capabilities.channels.contains(QStringLiteral("terminal")))
+		effectivePermissions.setFlag(TerminalPermissionScope, false);
+	if (!capabilities.bKeyboard && !capabilities.bUnicodeText
+		&& !capabilities.bMouseButtons && !capabilities.bMouseWheel)
+	{
+		effectivePermissions.setFlag(InputControlPermissionScope, false);
+	}
+	m_authenticationContext.effectivePermissions = effectivePermissions;
 	m_pMediaSessionController->setCapabilities(capabilities);
 	m_bTerminalChannelStatePublished = m_bTerminalChannelOpen
 		&& capabilities.channels.contains(QStringLiteral("terminal"));
@@ -1478,7 +1660,10 @@ void KSessionCoordinator::completeCapabilityNegotiation(
 		return;
 	publishSessionState();
 	emit sessionCapabilitiesChanged(capabilities);
-	emit clipboardChannelChanged(m_bClipboardChannelOpen && capabilities.bClipboardText);
+	emit sessionPermissionsChanged(effectivePermissions);
+	emit clipboardChannelChanged(m_bClipboardChannelOpen
+		&& hasPermission(ClipboardPermissionScope)
+		&& capabilities.bClipboardText);
 	emit terminalChannelChanged(m_bTerminalChannelStatePublished);
 	if (m_sessionStateMachine.role() == ControllerSessionRole)
 	{
@@ -1505,6 +1690,7 @@ void KSessionCoordinator::completeCapabilityNegotiation(
 KSessionCapabilities KSessionCoordinator::localCapabilities() const
 {
 	KSessionCapabilities capabilities;
+	capabilities.bInputRealtime = true;
 	capabilities.supportedCodecs = { QStringLiteral("h264") };
 	capabilities.supportedChannels = {
 		QStringLiteral("video"), QStringLiteral("session"), QStringLiteral("input"),
@@ -1515,7 +1701,21 @@ KSessionCapabilities KSessionCoordinator::localCapabilities() const
 		: m_bControlledTerminalCapabilityAvailable;
 	if (bTerminalAvailable)
 		capabilities.supportedChannels.append(QStringLiteral("terminal"));
-	capabilities.bInputRealtime = true;
+	if (!hasPermission(ClipboardPermissionScope))
+	{
+		capabilities.bClipboardText = false;
+		capabilities.supportedChannels.removeAll(QStringLiteral("clipboard"));
+	}
+	if (!hasPermission(TerminalPermissionScope))
+		capabilities.supportedChannels.removeAll(QStringLiteral("terminal"));
+	if (!hasPermission(InputControlPermissionScope))
+	{
+		capabilities.bInputRealtime = false;
+		capabilities.bKeyboard = false;
+		capabilities.bUnicodeText = false;
+		capabilities.bMouseButtons = false;
+		capabilities.bMouseWheel = false;
+	}
 	capabilities.nMaximumWidth = KProtocolConstraints::kMaximumStreamWidth;
 	capabilities.nMaximumHeight = KProtocolConstraints::kMaximumStreamHeight;
 	capabilities.nMaximumFps = KProtocolConstraints::kMaximumStreamFps;
@@ -1902,8 +2102,9 @@ void KSessionCoordinator::handleInvalidSignalingMessage(KProtocolRouteStatus sta
 		code = IncompatibleProtocolSessionErrorCode;
 	else if (status == MalformedProtocolRouteStatus)
 		code = MalformedMessageSessionErrorCode;
-	reportSessionError(ProtocolSessionErrorDomain,
-		code,
+	reportSessionError(bAuthenticatedSignalingFailure
+			? SecuritySessionErrorDomain : ProtocolSessionErrorDomain,
+		bAuthenticatedSignalingFailure ? SignatureInvalidSessionErrorCode : code,
 		(bWasAwaitingApproval || bWasIdentityHandshake)
 			? ApprovalSessionErrorStage : NegotiationSessionErrorStage,
 		false, strError.isEmpty()
@@ -1919,6 +2120,7 @@ void KSessionCoordinator::handleOutgoingAccessRejected(const QString &strReason)
 		return;
 	finishSession(ConnectFailedSessionEndReason, strReason, false, false, false);
 	KSessionErrorCode code = ApprovalRejectedSessionErrorCode;
+	KSessionErrorDomain domain = AccessSessionErrorDomain;
 	bool bRetryable = false;
 	if (strReason == QStringLiteral("busy"))
 	{
@@ -1934,7 +2136,48 @@ void KSessionCoordinator::handleOutgoingAccessRejected(const QString &strReason)
 	{
 		code = RemoteAccessDisabledSessionErrorCode;
 	}
-	reportSessionError(AccessSessionErrorDomain, code,
+	else if (strReason == QStringLiteral("identity_unavailable"))
+	{
+		domain = SecuritySessionErrorDomain;
+		code = IdentityUnavailableSessionErrorCode;
+	}
+	else if (strReason == QStringLiteral("authentication_timeout"))
+	{
+		domain = SecuritySessionErrorDomain;
+		code = AuthenticationTimeoutSessionErrorCode;
+		bRetryable = true;
+	}
+	else if (strReason == QStringLiteral("signature_invalid"))
+	{
+		domain = SecuritySessionErrorDomain;
+		code = SignatureInvalidSessionErrorCode;
+	}
+	else if (strReason == QStringLiteral("pairing_rejected"))
+	{
+		domain = SecuritySessionErrorDomain;
+		code = PairingRejectedSessionErrorCode;
+	}
+	else if (strReason == QStringLiteral("pairing_rate_limited"))
+	{
+		domain = SecuritySessionErrorDomain;
+		code = PairingRateLimitedSessionErrorCode;
+	}
+	else if (strReason == QStringLiteral("device_key_changed"))
+	{
+		domain = SecuritySessionErrorDomain;
+		code = DeviceKeyChangedSessionErrorCode;
+	}
+	else if (strReason == QStringLiteral("device_revoked"))
+	{
+		domain = SecuritySessionErrorDomain;
+		code = DeviceRevokedSessionErrorCode;
+	}
+	else if (strReason == QStringLiteral("trust_store_tampered"))
+	{
+		domain = SecuritySessionErrorDomain;
+		code = TrustStoreTamperedSessionErrorCode;
+	}
+	reportSessionError(domain, code,
 		ApprovalSessionErrorStage, bRetryable,
 		QStringLiteral("Access rejected: %1").arg(strReason));
 }
@@ -2062,4 +2305,19 @@ KSessionCommandTransmitResult KSessionCoordinator::sendDeviceInfoMessage()
 			.arg(message.deviceInfo.strWallpaperData.size())
 			.arg(strMessage.toUtf8().size()));
 	return transmitSessionMessage(message);
+}
+
+bool KSessionCoordinator::hasPermission(KPermissionScope permission) const
+{
+	return m_authenticationContext.effectivePermissions.testFlag(permission);
+}
+
+void KSessionCoordinator::publishPermissionDenied(
+	const QString &strOperation) const
+{
+	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
+		QStringLiteral("security_drop"), QStringLiteral("permission_denied"),
+		-1, QStringLiteral("operation=%1 generation=%2")
+			.arg(strOperation)
+			.arg(m_sessionStateMachine.generation()));
 }
