@@ -1,15 +1,17 @@
 #ifndef _WINREMOTECONTROL_SESSION_DEVICEAUTHENTICATIONFLOW_H_
 #define _WINREMOTECONTROL_SESSION_DEVICEAUTHENTICATIONFLOW_H_
 
-#include "core/protocol/identitymessage.h"
-#include "core/security/deviceidentity.h"
+#include "core/protocol/tlspairingmessage.h"
+#include "core/security/devicecertificate.h"
 #include "core/security/trusteddevice.h"
+#include "core/transport/tlspeeridentity.h"
 
 #include <QtCore/QHash>
 #include <QtCore/QObject>
 #include <QtCore/QVector>
 
 class KDeviceIdentityProvider;
+class KKeyingMaterialExporter;
 class KTrustedDeviceStore;
 class QTimer;
 
@@ -19,8 +21,6 @@ struct KDeviceAuthenticationContext
 	QString strRemoteDeviceId;
 	QString strRemoteDeviceName;
 	QString strRemoteFingerprint;
-	QByteArray remotePublicKey;
-	QByteArray transcriptHash;
 	KPermissionScopes requestedPermissions;
 	KPermissionScopes effectivePermissions;
 	bool bTrustedDevice = false;
@@ -36,9 +36,11 @@ class KDeviceAuthenticationFlow final : public QObject
 public:
 	KDeviceAuthenticationFlow(KDeviceIdentityProvider *pIdentityProvider,
 		KTrustedDeviceStore *pTrustedDeviceStore,
+		KKeyingMaterialExporter *pKeyingMaterialExporter,
 		QObject *pParent = nullptr);
 
 	void setApprovalTimeoutSeconds(int nTimeoutSeconds);
+	void setSecurePeerIdentity(const KTlsPeerIdentity &peer);
 	bool beginOutgoing(const QString &strRequestId,
 		quint64 nGeneration,
 		const QString &strDeviceName,
@@ -48,7 +50,7 @@ public:
 		quint64 nGeneration,
 		const QString &strDeviceName,
 		QString *pErrorMessage);
-	bool handleMessage(const KIdentityMessage &message, quint64 nGeneration);
+	bool handleMessage(const KTlsPairingMessage &message, quint64 nGeneration);
 	void respondPairing(const QString &strRequestId,
 		bool bAccepted,
 		KPermissionScopes grantedPermissions);
@@ -59,11 +61,15 @@ public:
 	KDeviceAuthenticationContext context() const;
 
 signals:
-	void messageReady(const KIdentityMessage &message);
+	void messageReady(const KTlsPairingMessage &message);
 	void pairingRequested(const QString &strRequestId,
 		const QString &strDeviceName,
-		const QString &strFingerprint,
-		const QString &strPairingCode,
+		const QString &strLocalRole,
+		const QString &strVerificationCode,
+		const QString &strControllerFingerprint,
+		const QString &strControlledFingerprint,
+		const QString &strTlsProtocol,
+		const QString &strCipherSuite,
 		KPermissionScopes requestedPermissions,
 		qint64 nExpiresAtMs);
 	void pairingCleared(const QString &strRequestId, const QString &strReason);
@@ -71,44 +77,41 @@ signals:
 	void authenticationRejected(const QString &strReason);
 
 private:
-	bool handleHello(const KIdentityMessage &message);
-	bool handleChallenge(const KIdentityMessage &message);
-	bool handleProof(const KIdentityMessage &message);
-	bool handlePairingDecision(const KIdentityMessage &message);
-	bool handleAuthenticated(const KIdentityMessage &message);
+	bool handleHello(const KTlsPairingMessage &message);
+	bool handlePairingDecision(const KTlsPairingMessage &message);
+	bool handleAuthenticated(const KTlsPairingMessage &message);
 	bool loadTrust(QString *pErrorMessage);
+	bool initializePeerContext(QString *pErrorMessage);
 	bool inspectPeerTrust(QString *pReason);
+	void sendHello();
 	void beginPairingOrAutomaticDecision();
+	bool createPairingVerification(QString *pErrorMessage);
 	void sendPairingDecision(bool bAccepted, KPermissionScopes permissions);
 	void trySendAuthenticated();
 	void tryComplete();
 	bool persistPeerTrust(QString *pErrorMessage);
-	QByteArray transcriptData() const;
-	QByteArray proofData(const QString &strSenderRole) const;
-	QByteArray decisionData(const QString &strSenderDeviceId,
-		bool bAccepted,
-		KPermissionScopes permissions) const;
-	QByteArray authenticatedData(const QString &strSenderDeviceId,
-		KPermissionScopes permissions) const;
-	QString pairingCode() const;
+	QString localFingerprint() const;
+	QString controllerFingerprint() const;
+	QString controlledFingerprint() const;
 	KTrustedDevice *findPeerTrust();
 	const KTrustedDevice *findPeerTrust() const;
 	bool isSourceRateLimited();
 	void recordSourceFailure();
 	void fail(const QString &strReason, bool bNotifyRemote);
-	void clear(const QString &strReason);
+	void clear(const QString &strReason, bool bKeepPeerIdentity = true);
 
 	KDeviceIdentityProvider *m_pIdentityProvider = nullptr;
 	KTrustedDeviceStore *m_pTrustedDeviceStore = nullptr;
+	KKeyingMaterialExporter *m_pKeyingMaterialExporter = nullptr;
 	QTimer *m_pTimer = nullptr;
-	KDeviceIdentity m_localIdentity;
+	KDeviceCertificate m_localCertificate;
+	KTlsPeerIdentity m_securePeer;
 	KDeviceAuthenticationContext m_context;
 	QVector<KTrustedDevice> m_trustedDevices;
 	QHash<QString, QVector<qint64>> m_sourceFailures;
 	QString m_strLocalDeviceName;
 	QString m_strSourceAddress;
-	QByteArray m_localNonce;
-	QByteArray m_remoteNonce;
+	QString m_strVerificationCode;
 	KPermissionScopes m_localDecisionPermissions;
 	KPermissionScopes m_remoteDecisionPermissions;
 	quint64 m_nGeneration = 0;
@@ -116,7 +119,8 @@ private:
 	bool m_bOutgoing = false;
 	bool m_bActive = false;
 	bool m_bAuthenticated = false;
-	bool m_bRemoteProofVerified = false;
+	bool m_bHelloSent = false;
+	bool m_bHelloReceived = false;
 	bool m_bPairingPromptVisible = false;
 	bool m_bLocalDecisionSent = false;
 	bool m_bRemoteDecisionReceived = false;

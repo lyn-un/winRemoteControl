@@ -6,6 +6,7 @@
 #include "core/protocol/sessionmessage.h"
 #include "core/protocol/terminalmessage.h"
 #include "core/protocol/terminaldataframe.h"
+#include "core/protocol/tlspairingmessage.h"
 #include "core/protocol/webrtcsignalingmessage.h"
 
 #include <QtCore/QCoreApplication>
@@ -726,6 +727,45 @@ namespace
 		check(KTerminalDataFrameCodec::encode(source).isEmpty(),
 			QStringLiteral("terminal data rejects oversized payload"));
 	}
+
+	void testTlsPairingMessages()
+	{
+		KTlsPairingMessage source;
+		source.type = HelloTlsPairingMessageType;
+		source.strRequestId = QStringLiteral("550e8400-e29b-41d4-a716-446655440000");
+		source.strDeviceId = QStringLiteral("123e4567-e89b-12d3-a456-426614174000");
+		source.strDeviceName = QStringLiteral("被控端");
+		source.strVerificationMethod = QStringLiteral("tls-exporter-numeric-v1");
+		source.permissions = KPermissionScopes::fromInt(kAllPermissionScopeBits);
+		KTlsPairingMessage decoded;
+		QString strError;
+		check(KTlsPairingMessageCodec::decode(
+			KTlsPairingMessageCodec::encode(source), &decoded, &strError)
+			&& decoded.type == source.type
+			&& decoded.strDeviceId == source.strDeviceId
+			&& decoded.strVerificationMethod == source.strVerificationMethod
+			&& decoded.permissions == source.permissions,
+			QStringLiteral("TLS pairing hello round-trips"));
+
+		source.type = DecisionTlsPairingMessageType;
+		source.bAccepted = true;
+		check(KTlsPairingMessageCodec::decode(
+			KTlsPairingMessageCodec::encode(source), &decoded, nullptr)
+			&& decoded.bAccepted,
+			QStringLiteral("TLS pairing decision round-trips"));
+
+		check(!KTlsPairingMessageCodec::decode(
+			QStringLiteral("{\"version\":1,\"channel\":\"signaling\","
+				"\"type\":\"identityProof\",\"requestId\":"
+				"\"550e8400-e29b-41d4-a716-446655440000\",\"payload\":{}}"),
+			&decoded, nullptr),
+			QStringLiteral("removed custom identity messages are rejected"));
+		check(!KTlsPairingMessageCodec::decode(
+			QStringLiteral("{\"version\":1,\"channel\":\"signaling\","
+				"\"type\":\"tlsPairingHello\",\"requestId\":\"not-a-uuid\","
+				"\"payload\":{}}"), &decoded, nullptr),
+			QStringLiteral("TLS pairing rejects invalid request ids"));
+	}
 }
 
 int main(int nArgc, char *pArgv[])
@@ -754,6 +794,7 @@ int main(int nArgc, char *pArgv[])
 	testSessionCapabilities();
 	testTerminalMessages();
 	testTerminalDataFrames();
+	testTlsPairingMessages();
 
 	if (g_nFailureCount == 0)
 		qInfo() << "All protocol codec tests passed";

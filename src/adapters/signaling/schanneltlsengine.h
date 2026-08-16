@@ -4,6 +4,9 @@
 #ifndef SECURITY_WIN32
 #define SECURITY_WIN32
 #endif
+#ifndef SCHANNEL_USE_BLACKLISTS
+#define SCHANNEL_USE_BLACKLISTS
+#endif
 
 #include "core/transport/tlspeeridentity.h"
 
@@ -12,6 +15,7 @@
 #include <QtCore/QString>
 
 #include <windows.h>
+#include <winternl.h>
 #include <security.h>
 #include <schannel.h>
 
@@ -40,6 +44,11 @@ public:
 	bool peerIdentity(const QString &strSourceAddress,
 		KTlsPeerIdentity *pIdentity,
 		QString *pErrorMessage) const;
+	bool exportKeyingMaterial(const QByteArray &label,
+		const QByteArray &context,
+		int nLength,
+		QByteArray *pKeyingMaterial,
+		QString *pErrorMessage);
 	bool isReady() const;
 	void clear();
 

@@ -23,7 +23,7 @@ KAccessSessionFlow::KAccessSessionFlow(KSignalingTransport *pTransport,
 	, m_pIdentityProvider(pIdentityProvider)
 	, m_pApprovalController(new KAccessApprovalController(this))
 	, m_pAuthenticationFlow(new KDeviceAuthenticationFlow(
-		pIdentityProvider, pTrustedDeviceStore, this))
+		pIdentityProvider, pTrustedDeviceStore, pTransport, this))
 {
 	Q_ASSERT(m_pTransport != nullptr);
 	KAccessMessage busy;
@@ -43,11 +43,14 @@ KAccessSessionFlow::KAccessSessionFlow(KSignalingTransport *pTransport,
 		this, &KAccessSessionFlow::incomingConnectionEstablished);
 	connect(m_pTransport, &KSignalingTransport::connectionLost,
 		this, &KAccessSessionFlow::connectionLost);
+	connect(m_pTransport, &KSignalingTransport::secureChannelEstablished,
+		this, [this](const KTlsPeerIdentity &peer)
+		{ m_pAuthenticationFlow->setSecurePeerIdentity(peer); });
 	connect(m_pApprovalController, &KAccessApprovalController::timedOut,
 		this, &KAccessSessionFlow::handleApprovalTimeout);
 	connect(m_pAuthenticationFlow, &KDeviceAuthenticationFlow::messageReady,
-		this, [this](const KIdentityMessage &message)
-		{ m_pTransport->sendMessage(KIdentityMessageCodec::encode(message)); });
+		this, [this](const KTlsPairingMessage &message)
+		{ m_pTransport->sendMessage(KTlsPairingMessageCodec::encode(message)); });
 	connect(m_pAuthenticationFlow, &KDeviceAuthenticationFlow::pairingRequested,
 		this, &KAccessSessionFlow::pairingRequested);
 	connect(m_pAuthenticationFlow, &KDeviceAuthenticationFlow::pairingCleared,
@@ -83,6 +86,7 @@ void KAccessSessionFlow::connectToHost(const QString &strHost, quint16 nPort)
 	m_strLastHost = strHost;
 	m_nLastPort = nPort;
 	m_bConnected = false;
+	m_pAuthenticationFlow->setSecurePeerIdentity(KTlsPeerIdentity());
 	m_pTransport->stop();
 	QString strError;
 	if (!ensureSecureIdentity(&strError))
@@ -112,6 +116,7 @@ bool KAccessSessionFlow::ensureSecureIdentity(QString *pErrorMessage)
 void KAccessSessionFlow::disconnectPeer()
 {
 	m_bConnected = false;
+	m_pAuthenticationFlow->setSecurePeerIdentity(KTlsPeerIdentity());
 	m_pTransport->disconnectPeer();
 }
 
@@ -120,6 +125,7 @@ void KAccessSessionFlow::stop()
 	clearApproval(QStringLiteral("stopped"));
 	m_pAuthenticationFlow->cancel(QStringLiteral("cancelled"), false, false);
 	m_bConnected = false;
+	m_pAuthenticationFlow->setSecurePeerIdentity(KTlsPeerIdentity());
 	m_pTransport->stop();
 }
 
@@ -169,8 +175,8 @@ void KAccessSessionFlow::beginIncoming(
 	}
 }
 
-bool KAccessSessionFlow::handleIdentityMessage(
-	const KIdentityMessage &message,
+bool KAccessSessionFlow::handleTlsPairingMessage(
+	const KTlsPairingMessage &message,
 	quint64 nGeneration)
 {
 	return m_pAuthenticationFlow->handleMessage(message, nGeneration);

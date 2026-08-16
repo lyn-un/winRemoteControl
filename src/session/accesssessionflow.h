@@ -31,7 +31,7 @@ public:
 		quint64 nGeneration,
 		const QString &strDeviceName);
 	bool handleAccessMessage(const KAccessMessage &message, quint64 nGeneration);
-	bool handleIdentityMessage(const KIdentityMessage &message, quint64 nGeneration);
+	bool handleTlsPairingMessage(const KTlsPairingMessage &message, quint64 nGeneration);
 	void respondPairing(const QString &strRequestId,
 		bool bAccepted,
 		KPermissionScopes permissions);
@@ -75,8 +75,12 @@ signals:
 	void outgoingAccessRejected(const QString &strReason);
 	void pairingRequested(const QString &strRequestId,
 		const QString &strDeviceName,
-		const QString &strFingerprint,
-		const QString &strPairingCode,
+		const QString &strLocalRole,
+		const QString &strVerificationCode,
+		const QString &strControllerFingerprint,
+		const QString &strControlledFingerprint,
+		const QString &strTlsProtocol,
+		const QString &strCipherSuite,
 		KPermissionScopes requestedPermissions,
 		qint64 nExpiresAtMs);
 	void pairingCleared(const QString &strRequestId, const QString &strReason);

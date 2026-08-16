@@ -267,6 +267,8 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		pWebViewWidget, &KWebViewWidget::sendTrustedDevicesChanged);
 	connect(m_pSessionService, &KSessionCoordinator::trustedDeviceError,
 		pWebViewWidget, &KWebViewWidget::sendTrustedDeviceError);
+	connect(m_pSessionService, &KSessionCoordinator::securityMigrationNotice,
+		pWebViewWidget, &KWebViewWidget::sendSecurityMigrationNotice);
 	connect(m_pSessionService, &KSessionCoordinator::sessionPermissionsChanged,
 		pWebViewWidget, &KWebViewWidget::sendSessionPermissionsChanged);
 	connect(m_pTerminalSessionService, &KTerminalSessionService::stateChanged,

@@ -66,8 +66,12 @@ public slots:
 	void sendIncomingAccessRequestCleared(const QString &strRequestId, const QString &strReason);
 	void sendPairingRequest(const QString &strRequestId,
 		const QString &strDeviceName,
-		const QString &strFingerprint,
-		const QString &strPairingCode,
+		const QString &strLocalRole,
+		const QString &strVerificationCode,
+		const QString &strControllerFingerprint,
+		const QString &strControlledFingerprint,
+		const QString &strTlsProtocol,
+		const QString &strCipherSuite,
 		KPermissionScopes requestedPermissions,
 		qint64 nExpiresAtMs);
 	void sendPairingCleared(const QString &strRequestId, const QString &strReason);
@@ -77,6 +81,7 @@ public slots:
 		bool bTrusted);
 	void sendTrustedDevicesChanged(const QVector<KTrustedDevice> &devices);
 	void sendTrustedDeviceError(const QString &strError);
+	void sendSecurityMigrationNotice(const QString &strMessage);
 	void sendSessionPermissionsChanged(KPermissionScopes permissions);
 	void sendClipboardSyncStateChanged(bool bEnabled,
 		bool bAvailable,

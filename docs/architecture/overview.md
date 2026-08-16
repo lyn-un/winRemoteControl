@@ -18,7 +18,7 @@ flowchart TB
 
 ## CMake 目标
 
-最终交付仍是一个 `winRemoteControl.exe`。构建目录中的多个 `.lib` 是分层产生的静态库，不是需要单独分发的程序。
+最终交付仍是一个 `winRemoteControl.exe`，远程终端功能额外使用 `wrcTerminalRelay.exe`。分层产生的 `.lib` 位于 `build/lib/<config>`，测试程序位于 `build/tests/<config>`，它们都不需要单独分发。
 
 | 分组 | 主要目标 | 职责 |
 | --- | --- | --- |

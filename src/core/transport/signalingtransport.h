@@ -4,11 +4,13 @@
 #include <QtCore/QObject>
 #include <QtCore/QString>
 
+#include "core/session/sessionerror.h"
+#include "core/transport/keyingmaterialexporter.h"
 #include "core/transport/tlspeeridentity.h"
 
 class KDeviceIdentityProvider;
 
-class KSignalingTransport : public QObject
+class KSignalingTransport : public QObject, public KKeyingMaterialExporter
 {
 	Q_OBJECT
 
@@ -49,7 +51,7 @@ signals:
 	void incomingConnectionEstablished(const QString &strSourceAddress, quint16 nSourcePort);
 	void connectionLost();
 	void secureChannelEstablished(const KTlsPeerIdentity &peer);
-	void tlsHandshakeFailed(const QString &strReason);
+	void tlsHandshakeFailed(const KSessionError &error);
 };
 
 #endif // _WINREMOTECONTROL_SIGNALINGTRANSPORT_H_

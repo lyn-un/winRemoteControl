@@ -14,6 +14,7 @@ public:
 	virtual QVector<KTrustedDevice> loadDevices(QString *pErrorMessage) = 0;
 	virtual bool saveDevices(const QVector<KTrustedDevice> &devices,
 		QString *pErrorMessage) = 0;
+	virtual QString takeMigrationNotice() { return QString(); }
 };
 
 #endif // _WINREMOTECONTROL_CORE_SECURITY_TRUSTEDDEVICESTORE_H_

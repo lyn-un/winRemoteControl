@@ -6,6 +6,18 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
+foreach(WRC_CONFIGURATION Debug Release RelWithDebInfo MinSizeRel)
+	string(TOUPPER "${WRC_CONFIGURATION}" WRC_CONFIGURATION_UPPER)
+	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${WRC_CONFIGURATION_UPPER}
+		"${CMAKE_BINARY_DIR}/lib/${WRC_CONFIGURATION}")
+	set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_${WRC_CONFIGURATION_UPPER}
+		"${CMAKE_BINARY_DIR}/lib/${WRC_CONFIGURATION}")
+	set(CMAKE_PDB_OUTPUT_DIRECTORY_${WRC_CONFIGURATION_UPPER}
+		"${CMAKE_BINARY_DIR}/symbols/${WRC_CONFIGURATION}")
+	set(CMAKE_COMPILE_PDB_OUTPUT_DIRECTORY_${WRC_CONFIGURATION_UPPER}
+		"${CMAKE_BINARY_DIR}/symbols/${WRC_CONFIGURATION}")
+endforeach()
+
 option(WRC_BUILD_APP "Build the Windows desktop application" ON)
 option(WRC_BUILD_TESTS "Build automated tests" ON)
 option(WRC_ENABLE_WEBRTC "Enable the WebRTC transport adapter" ON)
@@ -78,8 +90,8 @@ add_library(wrc_protocol STATIC
 	src/core/protocol/protocolrouter.h
 	src/core/protocol/inputmessage.cpp
 	src/core/protocol/inputmessage.h
-	src/core/protocol/identitymessage.cpp
-	src/core/protocol/identitymessage.h
+	src/core/protocol/tlspairingmessage.cpp
+	src/core/protocol/tlspairingmessage.h
 	src/core/protocol/sessionmessage.cpp
 	src/core/protocol/sessionmessage.h
 	src/core/protocol/terminalmessage.cpp
@@ -88,6 +100,8 @@ add_library(wrc_protocol STATIC
 	src/core/protocol/terminaldataframe.h
 	src/core/protocol/webrtcsignalingmessage.cpp
 	src/core/protocol/webrtcsignalingmessage.h
+	src/core/security/permissionscope.cpp
+	src/core/security/permissionscope.h
 )
 
 target_include_directories(wrc_protocol PUBLIC
@@ -105,10 +119,10 @@ add_library(wrc_core STATIC
 	src/core/security/deviceidentity.cpp
 	src/core/security/deviceidentity.h
 	src/core/security/deviceidentityprovider.h
-	src/core/security/permissionscope.cpp
-	src/core/security/permissionscope.h
 	src/core/security/securitycanonicalwriter.cpp
 	src/core/security/securitycanonicalwriter.h
+	src/core/security/tlspairingverification.cpp
+	src/core/security/tlspairingverification.h
 	src/core/security/trusteddevice.h
 	src/core/security/trusteddevicestore.h
 	src/core/session/capabilitynegotiator.cpp
@@ -131,6 +145,7 @@ add_library(wrc_core STATIC
 	src/core/settings/applicationsettings.cpp
 	src/core/settings/applicationsettingsstore.h
 	src/core/transport/remotepeertransport.h
+	src/core/transport/keyingmaterialexporter.h
 	src/core/transport/signalingtransport.h
 	src/core/transport/tlspeeridentity.cpp
 	src/core/transport/tlspeeridentity.h
@@ -256,8 +271,6 @@ target_link_libraries(wrc_windows_adapters PUBLIC
 add_library(wrc_session_application STATIC
 	src/input/inputinjector.cpp
 	src/input/inputinjector.h
-	src/session/authenticatedsignalingflow.cpp
-	src/session/authenticatedsignalingflow.h
 	src/session/deviceauthenticationflow.cpp
 	src/session/deviceauthenticationflow.h
 	src/session/accessapprovalcontroller.cpp
@@ -894,6 +907,13 @@ if(WRC_BUILD_TESTS)
 	add_executable(wrc_video_pipeline_benchmark
 		tests/performance/videopipelinebenchmark.cpp
 	)
+	foreach(WRC_CONFIGURATION Debug Release RelWithDebInfo MinSizeRel)
+		string(TOUPPER "${WRC_CONFIGURATION}" WRC_CONFIGURATION_UPPER)
+		set_target_properties(wrc_video_pipeline_benchmark PROPERTIES
+			RUNTIME_OUTPUT_DIRECTORY_${WRC_CONFIGURATION_UPPER}
+				"${CMAKE_BINARY_DIR}/benchmarks/${WRC_CONFIGURATION}"
+		)
+	endforeach()
 	target_include_directories(wrc_video_pipeline_benchmark PRIVATE
 		"${FFMPEG_ROOT}/include"
 	)
@@ -924,6 +944,7 @@ if(WRC_BUILD_TESTS)
 	target_link_libraries(wrc_session_service_tests PRIVATE
 		wrc_session_application
 		wrc_signaling_adapter
+		wrc_windows_security_adapter
 		Qt6::Core
 		Qt6::Network
 	)
@@ -970,16 +991,6 @@ if(WRC_BUILD_TESTS)
 	)
 	add_test(NAME wrc_device_authentication_tests
 		COMMAND wrc_device_authentication_tests)
-
-	add_executable(wrc_authenticated_signaling_tests
-		tests/unit/authenticatedsignalingtest.cpp
-	)
-	target_link_libraries(wrc_authenticated_signaling_tests PRIVATE
-		wrc_session_application
-		Qt6::Core
-	)
-	add_test(NAME wrc_authenticated_signaling_tests
-		COMMAND wrc_authenticated_signaling_tests)
 
 	add_executable(wrc_session_command_dispatcher_tests
 		tests/unit/sessioncommanddispatchertest.cpp
@@ -1158,8 +1169,21 @@ if(WRC_BUILD_TESTS)
 	set(WRC_TEST_TEMP_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-temp")
 	file(MAKE_DIRECTORY "${WRC_TEST_TEMP_DIRECTORY}")
 	get_property(WRC_REGISTERED_TESTS DIRECTORY PROPERTY TESTS)
+	foreach(WRC_TEST_TARGET IN LISTS WRC_REGISTERED_TESTS)
+		if(TARGET ${WRC_TEST_TARGET})
+			foreach(WRC_CONFIGURATION Debug Release RelWithDebInfo MinSizeRel)
+				string(TOUPPER "${WRC_CONFIGURATION}" WRC_CONFIGURATION_UPPER)
+				set_target_properties(${WRC_TEST_TARGET} PROPERTIES
+					RUNTIME_OUTPUT_DIRECTORY_${WRC_CONFIGURATION_UPPER}
+						"${CMAKE_BINARY_DIR}/tests/${WRC_CONFIGURATION}"
+				)
+			endforeach()
+		endif()
+	endforeach()
 	set_tests_properties(${WRC_REGISTERED_TESTS} PROPERTIES
 		ENVIRONMENT "TEMP=${WRC_TEST_TEMP_DIRECTORY};TMP=${WRC_TEST_TEMP_DIRECTORY}"
+		ENVIRONMENT_MODIFICATION
+			"PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>;PATH=path_list_prepend:${FFMPEG_ROOT}/bin"
 	)
 endif()
 
@@ -1177,6 +1201,8 @@ add_custom_command(TARGET winRemoteControl POST_BUILD
 	COMMAND ${CMAKE_COMMAND} -E copy_if_different
 		"${WEBVIEW2_LOADER}"
 		"$<TARGET_FILE_DIR:winRemoteControl>/WebView2Loader.dll"
+	COMMAND ${CMAKE_COMMAND} -E rm -rf
+		"$<TARGET_FILE_DIR:winRemoteControl>/frontend"
 	COMMAND ${CMAKE_COMMAND} -E make_directory
 		"$<TARGET_FILE_DIR:winRemoteControl>/frontend"
 	COMMAND ${CMAKE_COMMAND} -E copy_directory

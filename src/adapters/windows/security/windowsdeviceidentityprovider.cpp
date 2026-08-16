@@ -43,6 +43,29 @@ namespace
 			.arg(QUuid::fromString(strDeviceId).toString(QUuid::WithoutBraces));
 	}
 
+	void DeleteCertificatesForDevice(const QString &strDeviceId)
+	{
+		if (QUuid(strDeviceId).isNull())
+			return;
+		HCERTSTORE hStore = CertOpenStore(CERT_STORE_PROV_SYSTEM_W, 0, 0,
+			CERT_SYSTEM_STORE_CURRENT_USER, L"MY");
+		if (hStore == nullptr)
+			return;
+		const QString strSubject = QStringLiteral("winRemoteControl Device %1")
+			.arg(strDeviceId);
+		for (;;)
+		{
+			PCCERT_CONTEXT pCertificate = CertFindCertificateInStore(hStore,
+				X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, 0, CERT_FIND_SUBJECT_STR_W,
+				reinterpret_cast<LPCWSTR>(strSubject.utf16()), nullptr);
+			if (pCertificate == nullptr)
+				break;
+			if (!CertDeleteCertificateFromStore(pCertificate))
+				break;
+		}
+		CertCloseStore(hStore, 0);
+	}
+
 	QByteArray DecodeBase64Url(const QString &strValue)
 	{
 		return QByteArray::fromBase64(strValue.toLatin1(),
@@ -162,6 +185,38 @@ namespace
 		}
 		*pResult = result;
 		return true;
+	}
+
+	bool CertificateMatchesPublicKey(PCCERT_CONTEXT pCertificate,
+		const QByteArray &publicKey)
+	{
+		if (pCertificate == nullptr || publicKey.size() != kP256PublicKeyBytes
+			|| publicKey.at(0) != '\x04')
+		{
+			return false;
+		}
+		BCRYPT_KEY_HANDLE hPublicKey = nullptr;
+		if (!CryptImportPublicKeyInfoEx2(X509_ASN_ENCODING,
+			&pCertificate->pCertInfo->SubjectPublicKeyInfo, 0, nullptr, &hPublicKey))
+		{
+			return false;
+		}
+		DWORD nBlobBytes = 0;
+		NTSTATUS status = BCryptExportKey(hPublicKey, nullptr, BCRYPT_ECCPUBLIC_BLOB,
+			nullptr, 0, &nBlobBytes, 0);
+		QByteArray blob(static_cast<int>(nBlobBytes), Qt::Uninitialized);
+		if (status >= 0)
+		{
+			status = BCryptExportKey(hPublicKey, nullptr, BCRYPT_ECCPUBLIC_BLOB,
+				reinterpret_cast<PUCHAR>(blob.data()), nBlobBytes, &nBlobBytes, 0);
+		}
+		BCryptDestroyKey(hPublicKey);
+		if (status < 0 || blob.size() != static_cast<int>(sizeof(BCRYPT_ECCKEY_BLOB)) + 64)
+			return false;
+		const auto *pHeader = reinterpret_cast<const BCRYPT_ECCKEY_BLOB *>(blob.constData());
+		return pHeader->cbKey == 32
+			&& memcmp(blob.constData() + sizeof(BCRYPT_ECCKEY_BLOB),
+				publicKey.constData() + 1, 64) == 0;
 	}
 }
 
@@ -345,9 +400,14 @@ void *KWindowsDeviceIdentityProvider::duplicateNativeCertificate(
 
 bool KWindowsDeviceIdentityProvider::deletePersistedKey(QString *pErrorMessage)
 {
+	const QString strDeviceId = m_identity.strDeviceId;
 	closeCertificate();
+	DeleteCertificatesForDevice(strDeviceId);
 	if (m_hKey == 0)
+	{
+		m_identity = KDeviceIdentity();
 		return true;
+	}
 	const SECURITY_STATUS status = NCryptDeleteKey(m_hKey, 0);
 	m_hKey = 0;
 	m_identity = KDeviceIdentity();
@@ -414,21 +474,37 @@ bool KWindowsDeviceIdentityProvider::createIdentity(QString *pErrorMessage)
 	created.strDeviceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
 	created.strAlgorithm = QStringLiteral("ecdsa-p256-sha256");
 	const QString strKeyName = KeyName(created.strDeviceId);
+	QString strFailedOperation = QStringLiteral("NCryptCreatePersistedKey");
 	SECURITY_STATUS status = NCryptCreatePersistedKey(m_hProvider, &m_hKey,
 		NCRYPT_ECDSA_P256_ALGORITHM, reinterpret_cast<LPCWSTR>(strKeyName.utf16()), 0, 0);
 	if (status == ERROR_SUCCESS)
 	{
 		DWORD nExportPolicy = 0;
+		strFailedOperation = QStringLiteral("NCryptSetProperty(export policy)");
 		status = NCryptSetProperty(m_hKey, NCRYPT_EXPORT_POLICY_PROPERTY,
 			reinterpret_cast<PBYTE>(&nExportPolicy), sizeof(nExportPolicy), 0);
 	}
 	if (status == ERROR_SUCCESS)
+	{
+		strFailedOperation = QStringLiteral("NCryptFinalizeKey");
 		status = NCryptFinalizeKey(m_hKey, 0);
+	}
+	DWORD nExportPolicy = 0;
+	DWORD nPropertyBytes = 0;
+	if (status == ERROR_SUCCESS)
+	{
+		strFailedOperation = QStringLiteral("NCryptGetProperty(export policy)");
+		status = NCryptGetProperty(m_hKey, NCRYPT_EXPORT_POLICY_PROPERTY,
+			reinterpret_cast<PBYTE>(&nExportPolicy), sizeof(nExportPolicy),
+			&nPropertyBytes, 0);
+		if (status == ERROR_SUCCESS && nExportPolicy != 0)
+			status = NTE_PERM;
+	}
 	if (status != ERROR_SUCCESS)
 	{
 		closeKey();
 		if (pErrorMessage != nullptr)
-			*pErrorMessage = StatusMessage(QStringLiteral("NCryptCreatePersistedKey"), status);
+			*pErrorMessage = StatusMessage(strFailedOperation, status);
 		return false;
 	}
 	if (!exportPublicKey(&created.publicKey, pErrorMessage))
@@ -539,9 +615,24 @@ bool KWindowsDeviceIdentityProvider::loadCertificate(QString *pErrorMessage)
 	}
 	const QString strSubject = QStringLiteral("winRemoteControl Device %1")
 		.arg(m_identity.strDeviceId);
-	PCCERT_CONTEXT pFound = CertFindCertificateInStore(hStore,
+	PCCERT_CONTEXT pFound = nullptr;
+	PCCERT_CONTEXT pCandidate = nullptr;
+	QDateTime latestExpiry;
+	while ((pCandidate = CertFindCertificateInStore(hStore,
 		X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, 0, CERT_FIND_SUBJECT_STR_W,
-		reinterpret_cast<LPCWSTR>(strSubject.utf16()), nullptr);
+		reinterpret_cast<LPCWSTR>(strSubject.utf16()), pCandidate)) != nullptr)
+	{
+		KDeviceCertificate candidate;
+		if (CertificateMatchesPublicKey(pCandidate, m_identity.publicKey)
+			&& CertificateData(pCandidate, m_identity.strDeviceId, &candidate, nullptr)
+			&& (!pFound || candidate.validToUtc > latestExpiry))
+		{
+			if (pFound != nullptr)
+				CertFreeCertificateContext(pFound);
+			pFound = CertDuplicateCertificateContext(pCandidate);
+			latestExpiry = candidate.validToUtc;
+		}
+	}
 	CertCloseStore(hStore, 0);
 	if (pFound == nullptr)
 	{
@@ -633,8 +724,16 @@ bool KWindowsDeviceIdentityProvider::createCertificate(QString *pErrorMessage)
 	validTo.wYear = static_cast<WORD>(validTo.wYear + kCertificateLifetimeYears);
 	CRYPT_ALGORITHM_IDENTIFIER signatureAlgorithm = {};
 	signatureAlgorithm.pszObjId = const_cast<LPSTR>(szOID_ECDSA_SHA256);
+	const QString strKeyName = KeyName(m_identity.strDeviceId);
+	CRYPT_KEY_PROV_INFO keyProvider = {};
+	keyProvider.pwszContainerName = const_cast<LPWSTR>(
+		reinterpret_cast<LPCWSTR>(strKeyName.utf16()));
+	keyProvider.pwszProvName = const_cast<LPWSTR>(MS_KEY_STORAGE_PROVIDER);
+	keyProvider.dwProvType = 0;
+	keyProvider.dwFlags = NCRYPT_SILENT_FLAG;
+	keyProvider.dwKeySpec = 0;
 	PCCERT_CONTEXT pCreated = CertCreateSelfSignCertificate(m_hKey, &subject, 0,
-		nullptr, &signatureAlgorithm, &validFrom, &validTo, &certificateExtensions);
+		&keyProvider, &signatureAlgorithm, &validFrom, &validTo, &certificateExtensions);
 	if (pCreated == nullptr)
 	{
 		if (pErrorMessage != nullptr)
@@ -643,22 +742,6 @@ bool KWindowsDeviceIdentityProvider::createCertificate(QString *pErrorMessage)
 		return false;
 	}
 
-	const QString strKeyName = KeyName(m_identity.strDeviceId);
-	CRYPT_KEY_PROV_INFO keyProvider = {};
-	keyProvider.pwszContainerName = const_cast<LPWSTR>(
-		reinterpret_cast<LPCWSTR>(strKeyName.utf16()));
-	keyProvider.pwszProvName = const_cast<LPWSTR>(MS_KEY_STORAGE_PROVIDER);
-	keyProvider.dwProvType = 0;
-	keyProvider.dwKeySpec = CERT_NCRYPT_KEY_SPEC;
-	if (!CertSetCertificateContextProperty(pCreated, CERT_KEY_PROV_INFO_PROP_ID,
-		0, &keyProvider))
-	{
-		if (pErrorMessage != nullptr)
-			*pErrorMessage = QStringLiteral("CertSetCertificateContextProperty failed (%1)")
-				.arg(GetLastError());
-		CertFreeCertificateContext(pCreated);
-		return false;
-	}
 	HCERTSTORE hStore = CertOpenStore(CERT_STORE_PROV_SYSTEM_W, 0, 0,
 		CERT_SYSTEM_STORE_CURRENT_USER, L"MY");
 	PCCERT_CONTEXT pStored = nullptr;

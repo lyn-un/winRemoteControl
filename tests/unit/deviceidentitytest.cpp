@@ -4,6 +4,9 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
+#include <QtCore/QJsonArray>
+#include <QtCore/QJsonDocument>
+#include <QtCore/QJsonObject>
 #include <QtCore/QTextStream>
 #include <QtCore/QUuid>
 
@@ -17,12 +20,14 @@ namespace
 		return false;
 	}
 
-	KTrustedDevice MakeTrustedDevice(const KDeviceIdentity &identity)
+	KTrustedDevice MakeTrustedDevice(const KDeviceIdentity &identity,
+		const KDeviceCertificate &certificate)
 	{
 		KTrustedDevice device;
 		device.strDeviceId = identity.strDeviceId;
-		device.publicKey = identity.publicKey;
-		device.strFingerprint = identity.strFingerprint;
+		device.spkiSha256 = certificate.spkiSha256;
+		device.certificateSha256 = certificate.certificateSha256;
+		device.strFingerprint = certificate.spkiFingerprint();
 		device.strAlias = QStringLiteral("Test device");
 		device.strAdvertisedName = QStringLiteral("Test host");
 		device.permissionLimit = KPermissionScopes(
@@ -84,7 +89,9 @@ int main(int nArgumentCount, char **pArguments)
 	const QString strStorePath = directory.filePath(QStringLiteral("trusted_devices.json"));
 	KSignedJsonTrustedDeviceStore store(strStorePath);
 	store.setIdentityProvider(&provider);
-	const QVector<KTrustedDevice> savedDevices = { MakeTrustedDevice(firstIdentity) };
+	const QVector<KTrustedDevice> savedDevices = {
+		MakeTrustedDevice(firstIdentity, provider.certificate())
+	};
 	if (!Require(store.saveDevices(savedDevices, &strError), strError))
 	{
 		provider.deletePersistedKey(nullptr);
@@ -110,6 +117,32 @@ int main(int nArgumentCount, char **pArguments)
 	store.loadDevices(&strError);
 	if (!Require(strError.startsWith(QStringLiteral("trust_store_tampered")),
 		QStringLiteral("Tampered store was not rejected")))
+	{
+		provider.deletePersistedKey(nullptr);
+		return 1;
+	}
+
+	QJsonObject legacyStore;
+	legacyStore.insert(QStringLiteral("version"), 1);
+	legacyStore.insert(QStringLiteral("devices"), QJsonArray());
+	legacyStore.insert(QStringLiteral("signature"), QStringLiteral("legacy"));
+	if (!Require(storeFile.open(QIODevice::WriteOnly | QIODevice::Truncate),
+		QStringLiteral("Unable to create legacy trust store")))
+	{
+		provider.deletePersistedKey(nullptr);
+		return 1;
+	}
+	storeFile.write(QJsonDocument(legacyStore).toJson(QJsonDocument::Compact));
+	storeFile.close();
+	strError.clear();
+	if (!Require(store.loadDevices(&strError).isEmpty() && strError.isEmpty(),
+		QStringLiteral("Legacy trust store was not invalidated safely"))
+		|| !Require(QFile::exists(strStorePath + QStringLiteral(".v1.bak")),
+			QStringLiteral("Legacy trust store backup was not created"))
+		|| !Require(!store.takeMigrationNotice().isEmpty(),
+			QStringLiteral("Legacy trust migration notice was not published"))
+		|| !Require(store.takeMigrationNotice().isEmpty(),
+			QStringLiteral("Legacy trust migration notice was not one-shot")))
 	{
 		provider.deletePersistedKey(nullptr);
 		return 1;

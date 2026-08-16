@@ -148,6 +148,22 @@ bool KTcpSignalingTransport::isConnected() const
 		&& m_pSocket->state() == QAbstractSocket::ConnectedState;
 }
 
+bool KTcpSignalingTransport::exportKeyingMaterial(const QByteArray &label,
+	const QByteArray &context,
+	int nLength,
+	QByteArray *pKeyingMaterial,
+	QString *pErrorMessage)
+{
+	if (m_stage != SecureStage)
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("The secure signaling channel is not ready");
+		return false;
+	}
+	return m_tlsEngine.exportKeyingMaterial(label, context, nLength,
+		pKeyingMaterial, pErrorMessage);
+}
+
 void KTcpSignalingTransport::sendMessage(const QString &strMessage)
 {
 	if (!isConnected() || m_stage != SecureStage)
@@ -461,13 +477,29 @@ void KTcpSignalingTransport::completeSecureConnection()
 void KTcpSignalingTransport::rejectPeerData(const QString &strMessage,
 	bool bTlsFailure)
 {
+	if (bTlsFailure)
+	{
+		KSessionTraceLogger::write(m_bOutgoing ? QStringLiteral("controller")
+				: QStringLiteral("controlled"),
+			QStringLiteral("tls"), QStringLiteral("handshake_failed"), -1,
+			QStringLiteral("error=%1").arg(strMessage));
+	}
 	m_pReadTimeoutTimer->stop();
 	const bool bOutgoingPending = m_bOutgoingConnectionPending;
 	m_bOutgoingConnectionPending = false;
 	m_bPeerBusy = false;
 	closeSocket();
 	if (bTlsFailure)
-		emit tlsHandshakeFailed(strMessage);
+	{
+		KSessionError error;
+		error.domain = SecuritySessionErrorDomain;
+		error.code = ConnectionFailedSessionErrorCode;
+		error.stage = m_bOutgoing ? ConnectingSessionErrorStage
+			: ListeningSessionErrorStage;
+		error.bRetryable = true;
+		error.strTechnicalMessage = strMessage;
+		emit tlsHandshakeFailed(error);
+	}
 	if (bOutgoingPending)
 		emit outgoingConnectionFailed(strMessage);
 	else

@@ -323,8 +323,9 @@ function SettingsPage({ state }) {
       });
       return (
         <div className="settings-content-stack trusted-device-list">
+		  {state.securityMigrationNotice && <div className="security-migration-notice"><Icon name="shield" /><span>{state.securityMigrationNotice}</span></div>}
           {state.trustedDevices.length === 0 ? (
-            <article className="settings-card settings-content-card"><div className="empty-state"><strong>暂无可信设备</strong><small>首次连接完成六位配对码确认后，设备会显示在这里。</small></div></article>
+			<article className="settings-card settings-content-card"><div className="empty-state"><strong>暂无可信设备</strong><small>首次连接在两台电脑上确认六位配对数字后，设备会显示在这里。</small></div></article>
           ) : state.trustedDevices.map((device) => (
             <article key={device.deviceId} className={`settings-card settings-content-card trusted-device-item ${device.revoked ? "is-revoked" : ""}`}>
               <div className="settings-section-title"><span>●</span><div><h2>{device.name || "Windows 设备"}</h2><p>指纹 {device.fingerprint} · {device.revoked ? "已撤销" : "已验证"}</p></div></div>
@@ -412,6 +413,7 @@ function AccessRequestModal({ request }) {
 function PairingRequestModal({ request }) {
   const [seconds, setSeconds] = useState(() => Math.max(0, Math.ceil((request.expiresAtMs - Date.now()) / 1000)));
   const [permissions, setPermissions] = useState(() => new Set(request.permissions));
+	const [step, setStep] = useState("verify");
   const permissionLabels = { viewScreen: "查看画面", inputControl: "键盘与鼠标", clipboard: "剪贴板", terminal: "远程终端" };
   const respond = (accepted) => sendCommand("respondPairingRequest", { requestId: request.requestId, accepted, permissions: [...permissions] });
   const toggle = (permission) => setPermissions((current) => {
@@ -423,15 +425,40 @@ function PairingRequestModal({ request }) {
     const timer = window.setInterval(() => setSeconds(Math.max(0, Math.ceil((request.expiresAtMs - Date.now()) / 1000))), 250);
     return () => window.clearInterval(timer);
   }, [request.expiresAtMs]);
+	useEffect(() => {
+		setStep("verify");
+		setPermissions(new Set(request.permissions));
+	}, [request.requestId]);
+	const confirmCode = () => {
+		if (request.localRole === "controlled") {
+			setStep("permissions");
+			return;
+		}
+		respond(true);
+		setStep("waiting");
+	};
   return <div className="approval-backdrop"><article className="approval-dialog pairing-dialog">
     <div className="approval-rings"><span /><span /><Icon name="shield" /></div>
-    <span className="eyebrow">DEVICE PAIRING</span><h2>确认设备配对</h2>
-    <p>请确认两台电脑显示的六位数字完全相同。</p>
-    <div className="pairing-code">{request.pairingCode}</div>
-    <dl><div><dt>设备</dt><dd>{request.deviceName}</dd></div><div><dt>短指纹</dt><dd title={request.fingerprint}>{request.fingerprint.slice(0, 24)}</dd></div><div><dt>自动拒绝</dt><dd>{seconds} 秒</dd></div></dl>
-    <div className="pairing-permissions">{request.permissions.map((permission) => <label key={permission}><input type="checkbox" checked={permissions.has(permission)} disabled={permission === "viewScreen"} onChange={() => toggle(permission)} />{permissionLabels[permission] || permission}</label>)}</div>
-    <div className="approval-actions"><button className="outline-button danger" onClick={() => respond(false)}>不匹配，拒绝</button><button className="primary-button" onClick={() => respond(true)}>数字相同，允许配对</button></div>
-    <small>配对码不会通过网络发送。确认后，本机会记住对方的固定公钥。</small>
+		<span className="eyebrow">DEVICE PAIRING</span>
+		<h2>{step === "permissions" ? "设置设备权限" : "确认配对数字"}</h2>
+		{step === "permissions"
+			? <p>数字已确认一致。请选择这台设备以后最多可以使用的权限。</p>
+			: <p>请确认两台电脑显示的六位数字完全一致。</p>}
+		{step !== "permissions" && <div className="pairing-code" aria-label={`配对码 ${request.verificationCode}`}>{request.verificationCode}</div>}
+    <dl><div><dt>设备</dt><dd>{request.deviceName}</dd></div><div><dt>自动拒绝</dt><dd>{seconds} 秒</dd></div></dl>
+		{step === "permissions" && <div className="pairing-permissions">{request.permissions.map((permission) => <label key={permission}><input type="checkbox" checked={permissions.has(permission)} disabled={permission === "viewScreen"} onChange={() => toggle(permission)} />{permissionLabels[permission] || permission}</label>)}</div>}
+		{step === "verify" && <div className="approval-actions"><button className="outline-button danger" onClick={() => respond(false)}>数字不一致</button><button className="primary-button" onClick={confirmCode}>数字一致</button></div>}
+		{step === "permissions" && <div className="approval-actions"><button className="outline-button danger" onClick={() => respond(false)}>取消配对</button><button className="primary-button" onClick={() => respond(true)}>保存权限并配对</button></div>}
+		{step === "waiting" && <div className="pairing-waiting">已确认，正在等待被控端确认…</div>}
+		<details className="pairing-security-details">
+			<summary>查看安全详情</summary>
+			<div className="pairing-fingerprints">
+				<div><strong>控制端证书</strong><code>{request.controllerFingerprint}</code></div>
+				<div><strong>被控端证书</strong><code>{request.controlledFingerprint}</code></div>
+			</div>
+			<dl><div><dt>TLS</dt><dd>{request.tlsProtocol || "—"}</dd></div><div><dt>密码套件</dt><dd>{request.cipherSuite || "—"}</dd></div></dl>
+		</details>
+		<small>配对数字由本次 Schannel TLS 安全通道生成，不会通过网络发送。确认后，本机会固定对方的设备公钥。</small>
   </article></div>;
 }
 

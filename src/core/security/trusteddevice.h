@@ -11,7 +11,8 @@
 struct KTrustedDevice
 {
 	QString strDeviceId;
-	QByteArray publicKey;
+	QByteArray spkiSha256;
+	QByteArray certificateSha256;
 	QString strFingerprint;
 	QString strAlias;
 	QString strAdvertisedName;

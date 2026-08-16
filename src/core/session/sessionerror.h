@@ -54,13 +54,14 @@ enum KSessionErrorCode
 	TerminalCommandTimeoutSessionErrorCode = 29,
 	IdentityUnavailableSessionErrorCode = 30,
 	AuthenticationTimeoutSessionErrorCode = 31,
-	SignatureInvalidSessionErrorCode = 32,
+	CertificateInvalidSessionErrorCode = 32,
 	PairingRejectedSessionErrorCode = 33,
 	PairingRateLimitedSessionErrorCode = 34,
 	DeviceKeyChangedSessionErrorCode = 35,
 	DeviceRevokedSessionErrorCode = 36,
 	PermissionDeniedSessionErrorCode = 37,
-	TrustStoreTamperedSessionErrorCode = 38
+	TrustStoreTamperedSessionErrorCode = 38,
+	ChannelBindingUnavailableSessionErrorCode = 39
 };
 
 enum KSessionErrorStage

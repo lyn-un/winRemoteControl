@@ -32,6 +32,11 @@ public:
 	void setServerBusyMessage(const QString &strMessage) override;
 	bool setIdentityProvider(KDeviceIdentityProvider *pIdentityProvider,
 		QString *pErrorMessage) override;
+	bool exportKeyingMaterial(const QByteArray &label,
+		const QByteArray &context,
+		int nLength,
+		QByteArray *pKeyingMaterial,
+		QString *pErrorMessage) override;
 	bool isConnected() const;
 
 public slots:

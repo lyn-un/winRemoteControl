@@ -33,7 +33,8 @@ QString KSessionError::codeName(KSessionErrorCode code)
 		"terminal_relay_handshake_failed", "terminal_command_timeout",
 		"identity_unavailable", "authentication_timeout", "signature_invalid",
 		"pairing_rejected", "pairing_rate_limited", "device_key_changed",
-		"device_revoked", "permission_denied", "trust_store_tampered"
+		"device_revoked", "permission_denied", "trust_store_tampered",
+		"channel_binding_unavailable"
 	};
 	const int nIndex = static_cast<int>(code);
 	return nIndex >= 0 && nIndex < static_cast<int>(std::size(names))

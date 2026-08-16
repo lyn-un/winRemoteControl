@@ -41,7 +41,7 @@ cmake --build --preset release
 ctest --preset release
 ```
 
-主程序位于 `build\Release\winRemoteControl.exe`。CMake 构建树位于 `build\cmake-release`，WebView2 loader、FFmpeg DLL 和前端资源会复制到可执行文件附近。
+主程序位于 `build\Release\winRemoteControl.exe`，该目录只保留可部署程序、DLL、Qt 插件和前端资源。静态库输出到 `build\lib\Release`，单元测试输出到 `build\tests\Release`，性能测试输出到 `build\benchmarks\Release`。
 
 ## 轻量核心测试
 

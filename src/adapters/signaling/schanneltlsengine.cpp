@@ -9,6 +9,8 @@
 
 namespace
 {
+	constexpr DWORD kTls12ProtocolVersion = 0x0303;
+	constexpr DWORD kTls13ProtocolVersion = 0x0304;
 	constexpr ULONG kClientContextRequirements = ISC_REQ_SEQUENCE_DETECT
 		| ISC_REQ_REPLAY_DETECT | ISC_REQ_CONFIDENTIALITY | ISC_REQ_EXTENDED_ERROR
 		| ISC_REQ_ALLOCATE_MEMORY | ISC_REQ_STREAM | ISC_REQ_MANUAL_CRED_VALIDATION;
@@ -102,7 +104,8 @@ namespace
 		{
 			return false;
 		}
-		return strcmp(decoded.constData(), szOID_ECC_CURVE_P256) == 0;
+		const auto pszCurve = *reinterpret_cast<LPCSTR *>(decoded.data());
+		return pszCurve != nullptr && strcmp(pszCurve, szOID_ECC_CURVE_P256) == 0;
 	}
 
 	QString DeviceIdFromCertificate(PCCERT_CONTEXT pCertificate)
@@ -111,12 +114,13 @@ namespace
 			0, nullptr, nullptr, 0);
 		if (nCharacters <= 1)
 			return QString();
-		QString strUri(static_cast<int>(nCharacters - 1), Qt::Uninitialized);
+		QString strUri(static_cast<int>(nCharacters), Qt::Uninitialized);
 		if (CertGetNameStringW(pCertificate, CERT_NAME_URL_TYPE, 0, nullptr,
 			reinterpret_cast<LPWSTR>(strUri.data()), nCharacters) != nCharacters)
 		{
 			return QString();
 		}
+		strUri.chop(1);
 		const QString strPrefix = QStringLiteral("urn:wrc:device:");
 		if (!strUri.startsWith(strPrefix))
 			return QString();
@@ -175,9 +179,9 @@ namespace
 
 	QString ProtocolName(DWORD nProtocol)
 	{
-		if ((nProtocol & SP_PROT_TLS1_3) != 0)
+		if (nProtocol == kTls13ProtocolVersion)
 			return QStringLiteral("TLS1.3");
-		if ((nProtocol & SP_PROT_TLS1_2) != 0)
+		if (nProtocol == kTls12ProtocolVersion)
 			return QStringLiteral("TLS1.2");
 		return QString();
 	}
@@ -189,9 +193,9 @@ namespace
 			|| strSuite.contains(QStringLiteral("CHACHA20_POLY1305"));
 		if (!bAead)
 			return false;
-		if ((cipherInfo.dwProtocol & SP_PROT_TLS1_3) != 0)
+		if (cipherInfo.dwProtocol == kTls13ProtocolVersion)
 			return true;
-		return (cipherInfo.dwProtocol & SP_PROT_TLS1_2) != 0
+		return cipherInfo.dwProtocol == kTls12ProtocolVersion
 			&& QString::fromWCharArray(cipherInfo.szExchange).toUpper()
 				.contains(QStringLiteral("ECDH"));
 	}
@@ -217,17 +221,37 @@ bool KSchannelTlsEngine::initialize(bool bServer,
 	}
 	m_bServer = bServer;
 	m_pLocalCertificate = static_cast<PCCERT_CONTEXT>(pCertificateContext);
+	HCRYPTPROV_OR_NCRYPT_KEY_HANDLE hPrivateKey = 0;
+	DWORD nKeySpec = 0;
+	BOOL bCallerMustFree = FALSE;
+	if (!CryptAcquireCertificatePrivateKey(m_pLocalCertificate,
+		CRYPT_ACQUIRE_ONLY_NCRYPT_KEY_FLAG | CRYPT_ACQUIRE_SILENT_FLAG,
+		nullptr, &hPrivateKey, &nKeySpec, &bCallerMustFree))
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("Unable to acquire the device certificate private key (%1)")
+				.arg(GetLastError());
+		clear();
+		return false;
+	}
+	if (bCallerMustFree)
+		NCryptFreeObject(hPrivateKey);
+	TLS_PARAMETERS tlsParameters = {};
+	tlsParameters.grbitDisabledProtocols = SP_PROT_SSL2 | SP_PROT_SSL3
+		| SP_PROT_TLS1 | SP_PROT_TLS1_1;
 	PCCERT_CONTEXT pCertificate = m_pLocalCertificate;
-	SCHANNEL_CRED credentials = {};
-	credentials.dwVersion = SCHANNEL_CRED_VERSION;
+	SCH_CREDENTIALS credentials = {};
+	credentials.dwVersion = SCH_CREDENTIALS_VERSION;
+	credentials.dwCredFormat = SCH_CRED_FORMAT_CERT_CONTEXT;
 	credentials.cCreds = 1;
 	credentials.paCred = &pCertificate;
-	credentials.grbitEnabledProtocols = SP_PROT_TLS1_2 | SP_PROT_TLS1_3;
-	credentials.dwFlags = SCH_USE_STRONG_CRYPTO | SCH_CRED_DISABLE_RECONNECTS;
+	credentials.dwFlags = SCH_USE_STRONG_CRYPTO;
 	if (bServer)
-		credentials.dwFlags |= SCH_CRED_NO_SYSTEM_MAPPER;
+		credentials.dwFlags |= SCH_CRED_NO_SYSTEM_MAPPER | SCH_CRED_DISABLE_RECONNECTS;
 	else
 		credentials.dwFlags |= SCH_CRED_MANUAL_CRED_VALIDATION;
+	credentials.cTlsParameters = 1;
+	credentials.pTlsParameters = &tlsParameters;
 	TimeStamp expiry = {};
 	const SECURITY_STATUS status = AcquireCredentialsHandleW(nullptr,
 		const_cast<LPWSTR>(UNISP_NAME_W),
@@ -348,8 +372,9 @@ bool KSchannelTlsEngine::finishHandshake(QString *pErrorMessage)
 	}
 	SecPkgContext_CipherInfo cipherInfo = {};
 	cipherInfo.dwVersion = SECPKGCONTEXT_CIPHERINFO_V1;
-	if (QueryContextAttributesW(&m_context, SECPKG_ATTR_CIPHER_INFO,
-		&cipherInfo) != SEC_E_OK || !IsAllowedCipher(cipherInfo))
+	const SECURITY_STATUS cipherStatus = QueryContextAttributesW(&m_context,
+		SECPKG_ATTR_CIPHER_INFO, &cipherInfo);
+	if (cipherStatus != SEC_E_OK || !IsAllowedCipher(cipherInfo))
 	{
 		if (pErrorMessage != nullptr)
 			*pErrorMessage = QStringLiteral("TLS negotiated a disallowed protocol or cipher suite");
@@ -513,6 +538,67 @@ bool KSchannelTlsEngine::peerIdentity(const QString &strSourceAddress,
 		return false;
 	}
 	*pIdentity = identity;
+	return true;
+}
+
+bool KSchannelTlsEngine::exportKeyingMaterial(const QByteArray &label,
+	const QByteArray &context,
+	int nLength,
+	QByteArray *pKeyingMaterial,
+	QString *pErrorMessage)
+{
+	if (!m_bReady || !m_bContextValid || pKeyingMaterial == nullptr
+		|| label.isEmpty() || label.contains('\0')
+		|| label.size() >= USHRT_MAX || context.size() > USHRT_MAX
+		|| nLength <= 0 || nLength > 64)
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("TLS keying material request is invalid");
+		return false;
+	}
+
+	QByteArray terminatedLabel = label;
+	terminatedLabel.append('\0');
+	SecPkgContext_KeyingMaterialInfo info = {};
+	info.cbLabel = static_cast<WORD>(terminatedLabel.size());
+	info.pszLabel = terminatedLabel.data();
+	info.cbContextValue = static_cast<WORD>(context.size());
+	info.pbContextValue = context.isEmpty()
+		? nullptr : reinterpret_cast<PBYTE>(const_cast<char *>(context.constData()));
+	info.cbKeyingMaterial = static_cast<DWORD>(nLength);
+	SECURITY_STATUS status = SetContextAttributesW(&m_context,
+		SECPKG_ATTR_KEYING_MATERIAL_INFO, &info, sizeof(info));
+	if (status != SEC_E_OK)
+	{
+		if (pErrorMessage != nullptr)
+		{
+			*pErrorMessage = QStringLiteral("Unable to configure TLS keying material (0x%1)")
+				.arg(static_cast<quint32>(status), 8, 16, QLatin1Char('0'));
+		}
+		return false;
+	}
+
+	SecPkgContext_KeyingMaterial material = {};
+	status = QueryContextAttributesW(&m_context,
+		SECPKG_ATTR_KEYING_MATERIAL, &material);
+	if (status != SEC_E_OK || material.pbKeyingMaterial == nullptr
+		|| material.cbKeyingMaterial != static_cast<DWORD>(nLength))
+	{
+		if (material.pbKeyingMaterial != nullptr)
+			FreeContextBuffer(material.pbKeyingMaterial);
+		if (pErrorMessage != nullptr)
+		{
+			*pErrorMessage = QStringLiteral("Unable to export TLS keying material (0x%1)")
+				.arg(static_cast<quint32>(status), 8, 16, QLatin1Char('0'));
+		}
+		return false;
+	}
+
+	*pKeyingMaterial = QByteArray(
+		reinterpret_cast<const char *>(material.pbKeyingMaterial),
+		static_cast<qsizetype>(material.cbKeyingMaterial));
+	SecureZeroMemory(material.pbKeyingMaterial, material.cbKeyingMaterial);
+	FreeContextBuffer(material.pbKeyingMaterial);
 	return true;
 }
 

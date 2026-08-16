@@ -118,57 +118,12 @@ foundation -> protocol/core <- adapters
 4. 只有真实需求和第二种实现出现后，才评估插件体系、跨平台或更通用框架。
 5. 公网、账号、移动端等阶段变化必须单独重新评审威胁模型与部署架构。
 
-## 11. 下一阶段：设备身份、配对与信令认证
+## 11. 当前安全基线：Schannel mTLS 与设备固定
 
-当前 Access 审批只能证明“本次用户允许连接”，不能证明连接方是此前见过的同一台设备。设备名称由对端自行填写；WebRTC 虽使用 DTLS/SRTP 与 SCTP over DTLS，但 SDP 和 DTLS fingerprint 经未认证的 TCP 信令交换。下一阶段必须先补齐设备身份与信令完整性，再继续扩大远程终端等高权限能力。
+设备身份与信令保护已经纳入基础架构：每个 Windows 用户拥有 CNG ECDSA P-256 非导出私钥和自签名设备证书；信令 TCP 在固定版本前导后必须完成 Schannel TLS 1.2/1.3 双向认证。Access、SDP 和 ICE 均位于 TLS 内，不再维护自定义 challenge/proof 或逐条信令签名协议。
 
-### 11.1 安全目标
+首次连接时，两端使用 Schannel TLS Exporter 和包含双方设备 UUID、SPKI 及请求 ID 的规范化上下文生成相同的六位校验码。双方分别确认数字一致后，被控端再选择权限上限，随后才将设备 UUID、SPKI、证书摘要和权限写入签名的 v2 信任库；后续连接直接固定 UUID 与 SPKI。完整 SHA-256 SPKI 只在折叠的安全详情中提供。旧 v1 信任不迁移授权，只备份后清空并要求重新配对。
 
-- 每台电脑拥有稳定 `deviceId` 和持久化设备密钥；私钥不得写入项目目录或普通配置文件。
-- 首次连接通过两端可见的短验证码或公钥指纹完成配对，后续连接验证固定公钥。
-- 随机 nonce、Access `requestId`、双方设备 ID、权限范围和当前 WebRTC 信令必须绑定到同一份签名 transcript，旧报文和旧会话信令不能重放。
-- `autoAccept` 只适用于已配对、未撤销且请求权限不超过既有授权范围的设备；未知设备仍须首次配对。
-- 权限在被控端业务入口强制执行，React 隐藏按钮不构成安全检查。
-- 远程终端的设备级权限只表示允许发起终端申请；每次打开终端仍保留独立审批。
+`autoAccept` 只适用于已固定、未撤销且请求权限未超过信任上限的设备。最终权限仍由请求、信任上限、本次批准和能力协商取交集，并在采集、输入、剪贴板和终端的 C++ 入口强制检查。终端保留每次打开的独立审批。
 
-第一版解决身份认证和信令完整性。TCP 信令的元数据机密性不属于本轮目标；如后续需要隐藏 SDP、设备 ID 等信息，再独立评估 TLS。
-
-### 11.2 分层与实现边界
-
-- `core/security` 定义 `KDeviceIdentity`、`KPermissionScope`、`KTrustedDevice`、`KDeviceIdentityProvider` 和 `KTrustedDeviceStore`，不得包含 CNG、Win32 或 UI 类型。
-- Windows security adapter 使用 Windows CNG 的 ECDSA P-256、SHA-256 和安全随机数；密钥由系统密钥存储持有并设为不可导出。
-- `KDeviceAuthenticationFlow` 负责身份挑战、首次配对、nonce、签名校验和可信设备状态；由 `KAccessSessionFlow` 编排，但不把密码学细节放回 `KSessionCoordinator`。
-- `KAuthenticatedSignalingFlow` 包装现有 Offer、Answer 和 ICE。WebRTC adapter 继续只产生和消费原始类型化信令，不直接访问身份存储。
-- 可信设备记录保存设备 ID、固定公钥/指纹、用户别名、授权范围、配对时间、最后认证时间和撤销状态。对端声明的设备名称只能作为展示候选。
-- 发现协议仍只产生连接候选；发现报文中的设备标识不构成可信身份。
-
-签名输入必须使用固定字段顺序和长度前缀的规范化二进制编码，不能直接签名 JSON 文本或序列化 C++ 结构体内存。至少包含：协议域和版本、消息类型、Access `requestId`、双方 nonce、双方设备 ID、批准权限、sequence 和 payload SHA-256。
-
-### 11.3 四阶段交付
-
-1. **持久化设备身份与可信设备库**
-   - 增加 core 接口、Windows CNG adapter、可信设备存储及签名/验签测试。
-   - 复制 exe 或普通配置文件到另一台电脑时不得复用原设备身份；缺少对应系统私钥时生成新的 `deviceId + key`。
-2. **Access 身份认证与首次配对**
-   - 增加 `identityHello`、`identityChallenge`、`identityProof`、`identityAuthenticated` 和类型化拒绝消息。
-   - 会话流程扩展为 `TCP Connected -> AuthenticatingIdentity -> Pairing(首次) -> Authenticated -> AwaitingApproval -> Negotiating`。
-   - 两端基于同一 transcript 计算并确认六位配对码；首次配对增加来源级尝试限制。
-3. **绑定 WebRTC 信令**
-   - 对 Offer、Answer 和 ICE 外包认证信封，携带当前 Access `requestId`、发送方设备 ID、单调 sequence、transcript hash、payload hash 和签名。
-   - 未认证、错误签名、篡改 SDP/fingerprint、重复/倒序 sequence 和旧 generation 信令必须在进入 WebRTC adapter 前拒绝。
-   - 不支持身份握手的旧客户端在固定超时内明确提示升级，不允许降级为无认证连接。
-4. **权限强制与可信设备 UI**
-   - 授权拆为仅观看、键鼠、剪贴板和终端四项。
-   - 采集、输入 Router/Injector、剪贴板服务和终端服务分别在被控端入口检查有效授权。
-   - 设置页增加可信设备列表、指纹、授权范围、撤销和重新配对；审批卡片区分已验证设备与首次配对。
-
-每个阶段形成可独立验证和回滚的提交；前三阶段全部完成前，不宣称已建立可信设备认证。
-
-### 11.4 验收条件
-
-- 已配对设备可认证连接；错误签名、公钥、nonce、`requestId` 和已撤销设备均被拒绝。
-- 重放旧认证报文、修改权限范围、修改 SDP 或 DTLS fingerprint 后认证失败。
-- 未配对设备不能触发 `autoAccept`，被撤销设备必须重新配对。
-- 仅观看权限下视频可用，但键鼠、剪贴板和终端消息即使被伪造也由被控端业务层拒绝。
-- 日志不得记录私钥、完整签名、配对码、认证令牌或敏感正文。
-- Codec、身份流程、CNG/存储、信令绑定和权限检查均有自动化测试；两台 Windows 主机完成首次配对、后续认证、撤销和篡改失败的手动验证。
+具体证书约束、握手顺序和迁移行为见[设备身份、mTLS 配对与权限](docs/security/device-identity.md)，线上消息边界见[协议概览](docs/protocols/overview.md)。后续安全工作优先覆盖证书轮换、抓包验证、依赖更新和独立安全评审，不再自行设计密码协议。

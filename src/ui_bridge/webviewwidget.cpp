@@ -234,8 +234,12 @@ void KWebViewWidget::sendIncomingAccessRequestCleared(
 
 void KWebViewWidget::sendPairingRequest(const QString &strRequestId,
 	const QString &strDeviceName,
-	const QString &strFingerprint,
-	const QString &strPairingCode,
+	const QString &strLocalRole,
+	const QString &strVerificationCode,
+	const QString &strControllerFingerprint,
+	const QString &strControlledFingerprint,
+	const QString &strTlsProtocol,
+	const QString &strCipherSuite,
 	KPermissionScopes requestedPermissions,
 	qint64 nExpiresAtMs)
 {
@@ -246,8 +250,12 @@ void KWebViewWidget::sendPairingRequest(const QString &strRequestId,
 	object.insert(QStringLiteral("type"), QStringLiteral("pairingRequestChanged"));
 	object.insert(QStringLiteral("requestId"), strRequestId);
 	object.insert(QStringLiteral("deviceName"), strDeviceName);
-	object.insert(QStringLiteral("fingerprint"), strFingerprint);
-	object.insert(QStringLiteral("pairingCode"), strPairingCode);
+	object.insert(QStringLiteral("localRole"), strLocalRole);
+	object.insert(QStringLiteral("verificationCode"), strVerificationCode);
+	object.insert(QStringLiteral("controllerFingerprint"), strControllerFingerprint);
+	object.insert(QStringLiteral("controlledFingerprint"), strControlledFingerprint);
+	object.insert(QStringLiteral("tlsProtocol"), strTlsProtocol);
+	object.insert(QStringLiteral("cipherSuite"), strCipherSuite);
 	object.insert(QStringLiteral("permissions"), permissions);
 	object.insert(QStringLiteral("expiresAtMs"), QString::number(nExpiresAtMs));
 	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
@@ -308,6 +316,14 @@ void KWebViewWidget::sendTrustedDeviceError(const QString &strError)
 	QJsonObject object;
 	object.insert(QStringLiteral("type"), QStringLiteral("trustedDeviceError"));
 	object.insert(QStringLiteral("message"), strError);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendSecurityMigrationNotice(const QString &strMessage)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("securityMigrationNotice"));
+	object.insert(QStringLiteral("message"), strMessage);
 	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
 }
 

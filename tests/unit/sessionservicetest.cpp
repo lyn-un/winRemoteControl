@@ -1,4 +1,5 @@
 #include "adapters/signaling/tcpsignalingtransport.h"
+#include "adapters/windows/security/windowsdeviceidentityprovider.h"
 #include "core/input/inputinjectorinterface.h"
 #include "core/protocol/accessmessage.h"
 #include "core/protocol/protocolconstraints.h"
@@ -9,6 +10,7 @@
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDebug>
+#include <QtCore/QDir>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QThread>
 #include <QtCore/QTimer>
@@ -25,6 +27,60 @@
 namespace
 {
 	int g_nFailureCount = 0;
+
+	class KTestTlsIdentityProvider final : public KDeviceIdentityProvider
+	{
+	public:
+		explicit KTestTlsIdentityProvider(const QString &strDirectory)
+			: m_strDirectory(strDirectory), m_provider(strDirectory)
+		{
+		}
+
+		~KTestTlsIdentityProvider() override
+		{
+			m_provider.deletePersistedKey(nullptr);
+			QDir(m_strDirectory).removeRecursively();
+		}
+
+		bool initialize(QString *pErrorMessage) override
+		{
+			return m_provider.initialize(pErrorMessage);
+		}
+		KDeviceIdentity identity() const override { return m_provider.identity(); }
+		KDeviceCertificate certificate() const override { return m_provider.certificate(); }
+		void *duplicateNativeCertificate(QString *pErrorMessage) const override
+		{
+			return m_provider.duplicateNativeCertificate(pErrorMessage);
+		}
+		bool sign(const QByteArray &data, QByteArray *pSignature,
+			QString *pErrorMessage) const override
+		{
+			return m_provider.sign(data, pSignature, pErrorMessage);
+		}
+		bool verify(const QByteArray &publicKey, const QByteArray &data,
+			const QByteArray &signature, QString *pErrorMessage) const override
+		{
+			return m_provider.verify(publicKey, data, signature, pErrorMessage);
+		}
+		QByteArray randomBytes(int nByteCount, QString *pErrorMessage) const override
+		{
+			return m_provider.randomBytes(nByteCount, pErrorMessage);
+		}
+
+	private:
+		QString m_strDirectory;
+		KWindowsDeviceIdentityProvider m_provider;
+	};
+
+	std::unique_ptr<KDeviceIdentityProvider> MakeTlsIdentityProvider()
+	{
+		const QString strDirectory = QDir(QCoreApplication::applicationDirPath())
+			.filePath(QStringLiteral("tls-test-identity-%1")
+				.arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+		return std::make_unique<KTestTlsIdentityProvider>(strDirectory);
+	}
+
+#define MakeFakeIdentityProvider MakeTlsIdentityProvider
 
 	void check(bool bCondition, const QString &strDescription)
 	{
@@ -309,7 +365,8 @@ namespace
 	{
 		QObject::connect(&service, &KSessionCoordinator::pairingRequested,
 			[&service, grantedPermissions](const QString &strRequestId,
-				const QString &, const QString &,
+				const QString &, const QString &, const QString &,
+				const QString &, const QString &, const QString &,
 				const QString &, KPermissionScopes permissions, qint64)
 			{
 				service.respondPairingRequest(strRequestId, true,
@@ -350,7 +407,6 @@ namespace
 			std::make_unique<KTcpSignalingTransport>(),
 			MakeFakeIdentityProvider(), MakeFakeTrustedDeviceStore());
 		approvePairingRequests(controller);
-
 		int nStartCaptureCount = 0;
 		int nStopCaptureCount = 0;
 		QVector<QPair<bool, quint16>> listeningAvailability;
@@ -885,60 +941,83 @@ namespace
 
 	void testSignalingReceiveBoundaries()
 	{
-		KTcpSignalingTransport transport;
+		const QString strServerDirectory = QDir(QCoreApplication::applicationDirPath())
+			.filePath(QStringLiteral("tls-boundary-server-%1")
+				.arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+		const QString strClientDirectory = QDir(QCoreApplication::applicationDirPath())
+			.filePath(QStringLiteral("tls-boundary-client-%1")
+				.arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+		KWindowsDeviceIdentityProvider serverIdentity(strServerDirectory);
+		KWindowsDeviceIdentityProvider clientIdentity(strClientDirectory);
 		QString strStartError;
+		check(serverIdentity.initialize(&strStartError),
+			QStringLiteral("boundary server identity is available"));
+		check(clientIdentity.initialize(&strStartError),
+			QStringLiteral("boundary client identity is available"));
+		KTcpSignalingTransport server;
+		KTcpSignalingTransport client;
+		check(server.setIdentityProvider(&serverIdentity, &strStartError),
+			QStringLiteral("boundary server TLS identity is configured"));
+		check(client.setIdentityProvider(&clientIdentity, &strStartError),
+			QStringLiteral("boundary client TLS identity is configured"));
 		const quint16 nPort = reserveLocalPort();
-		check(transport.startServer(nPort, &strStartError),
+		check(server.startServer(nPort, &strStartError),
 			QStringLiteral("boundary test signaling server starts"));
-		bool bIncomingConnected = false;
+		bool bServerSecure = false;
+		bool bClientSecure = false;
 		QString strProtocolError;
 		int nReceivedMessages = 0;
-		QObject::connect(&transport, &KTcpSignalingTransport::incomingConnectionEstablished,
-			[&bIncomingConnected](const QString &, quint16) { bIncomingConnected = true; });
-		QObject::connect(&transport, &KTcpSignalingTransport::signalingError,
+		QObject::connect(&server, &KTcpSignalingTransport::secureChannelEstablished,
+			[&bServerSecure](const KTlsPeerIdentity &) { bServerSecure = true; });
+		QObject::connect(&client, &KTcpSignalingTransport::secureChannelEstablished,
+			[&bClientSecure](const KTlsPeerIdentity &) { bClientSecure = true; });
+		QObject::connect(&client, &KTcpSignalingTransport::signalingError,
 			[&strProtocolError](const QString &strError) { strProtocolError = strError; });
-		QObject::connect(&transport, &KTcpSignalingTransport::messageReceived,
+		QObject::connect(&server, &KTcpSignalingTransport::messageReceived,
 			[&nReceivedMessages](const QString &) { ++nReceivedMessages; });
 
-		QTcpSocket socket;
-		socket.connectToHost(QHostAddress::LocalHost, nPort);
-		check(socket.waitForConnected(1000)
-			&& waitUntil([&bIncomingConnected]() { return bIncomingConnected; }),
-			QStringLiteral("boundary test peer connects"));
-		socket.write(QByteArrayLiteral("{\"type\":\"fragment"));
-		socket.flush();
-		QCoreApplication::processEvents();
-		check(nReceivedMessages == 0,
-			QStringLiteral("truncated signaling message waits for its delimiter"));
-		socket.write(QByteArrayLiteral("ed\"}\n"));
-		socket.flush();
+		client.connectToHost(QStringLiteral("127.0.0.1"), nPort);
+		check(waitUntil([&]() { return bServerSecure && bClientSecure; }, 5000),
+			QStringLiteral("boundary test establishes mutual TLS"));
+		const QByteArray exporterLabel(
+			"EXPERIMENTAL-winRemoteControl-pairing-v1");
+		const QByteArray exporterContext("deterministic-pairing-context");
+		QByteArray serverKeyingMaterial;
+		QByteArray clientKeyingMaterial;
+		QByteArray differentKeyingMaterial;
+		QString strExporterError;
+		check(server.exportKeyingMaterial(exporterLabel, exporterContext, 32,
+			&serverKeyingMaterial, &strExporterError),
+			QStringLiteral("server exports TLS pairing keying material"));
+		check(client.exportKeyingMaterial(exporterLabel, exporterContext, 32,
+			&clientKeyingMaterial, &strExporterError),
+			QStringLiteral("client exports TLS pairing keying material"));
+		check(serverKeyingMaterial.size() == 32
+			&& serverKeyingMaterial == clientKeyingMaterial,
+			QStringLiteral("both TLS peers export identical pairing material"));
+		check(client.exportKeyingMaterial(exporterLabel,
+			exporterContext + QByteArray("-different"), 32,
+			&differentKeyingMaterial, &strExporterError)
+			&& differentKeyingMaterial != clientKeyingMaterial,
+			QStringLiteral("TLS exporter binds pairing material to its context"));
+		serverKeyingMaterial.fill('\0');
+		clientKeyingMaterial.fill('\0');
+		differentKeyingMaterial.fill('\0');
+		client.sendMessage(QStringLiteral("{\"type\":\"encrypted\"}"));
 		check(waitUntil([&nReceivedMessages]() { return nReceivedMessages == 1; }),
-			QStringLiteral("fragmented signaling message is reassembled"));
-		socket.write(QByteArrayLiteral("not-json\nnot-json\nnot-json\n"));
-		socket.flush();
-		check(waitUntil([&nReceivedMessages]() { return nReceivedMessages == 4; }),
-			QStringLiteral("transport forwards malformed payloads to protocol router"));
-		check(strProtocolError.isEmpty(),
-			QStringLiteral("transport does not interpret malformed protocol payloads"));
-		socket.disconnectFromHost();
-		waitUntil([&socket]() { return socket.state() == QAbstractSocket::UnconnectedState; });
-		transport.disconnectPeer();
-
-		strProtocolError.clear();
-		bIncomingConnected = false;
-		QTcpSocket oversizedSocket;
-		oversizedSocket.connectToHost(QHostAddress::LocalHost, nPort);
-		check(oversizedSocket.waitForConnected(1000)
-			&& waitUntil([&bIncomingConnected]() { return bIncomingConnected; }),
-			QStringLiteral("oversized signaling peer connects"));
-		oversizedSocket.write(QByteArray(
-			KProtocolConstraints::kMaximumSignalingMessageBytes + 1, 'x'));
-		oversizedSocket.flush();
-		check(waitUntil([&strProtocolError]() { return !strProtocolError.isEmpty(); }),
-			QStringLiteral("unterminated oversized signaling data is rejected"));
+			QStringLiteral("encrypted signaling payload is delivered"));
+		client.sendMessage(QString(
+			KProtocolConstraints::kMaximumSignalingMessageBytes + 1, QLatin1Char('x')));
+		check(!strProtocolError.isEmpty(),
+			QStringLiteral("oversized encrypted signaling data is rejected"));
 		check(strProtocolError.contains(QStringLiteral("size limit")),
 			QStringLiteral("oversized signaling failure is explicit"));
-		transport.stop();
+		client.stop();
+		server.stop();
+		serverIdentity.deletePersistedKey(nullptr);
+		clientIdentity.deletePersistedKey(nullptr);
+		QDir(strServerDirectory).removeRecursively();
+		QDir(strClientDirectory).removeRecursively();
 	}
 
 	void testViewOnlyPermissionBlocksInputAndClipboard()

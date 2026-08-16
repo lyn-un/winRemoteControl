@@ -47,6 +47,7 @@ export function useNativeState() {
 	const [deviceAuthentication, setDeviceAuthentication] = useState(null);
 	const [trustedDevices, setTrustedDevices] = useState([]);
 	const [trustedDeviceError, setTrustedDeviceError] = useState("");
+	const [securityMigrationNotice, setSecurityMigrationNotice] = useState("");
 	const [sessionPermissions, setSessionPermissions] = useState([]);
 	const [incomingTerminalRequest, setIncomingTerminalRequest] = useState(null);
 	const [terminalState, setTerminalState] = useState({ state: "Closed", available: false, status: "" });
@@ -211,7 +212,18 @@ export function useNativeState() {
       }
 
 		if (message.type === "pairingRequestChanged") {
-			setPairingRequest({ requestId: message.requestId || "", deviceName: message.deviceName || "Windows 设备", fingerprint: message.fingerprint || "", pairingCode: message.pairingCode || "", permissions: Array.isArray(message.permissions) ? message.permissions : [], expiresAtMs: Number(message.expiresAtMs) || Date.now() });
+			setPairingRequest({
+				requestId: message.requestId || "",
+				deviceName: message.deviceName || "Windows 设备",
+				localRole: message.localRole || "",
+				verificationCode: message.verificationCode || "",
+				controllerFingerprint: message.controllerFingerprint || "",
+				controlledFingerprint: message.controlledFingerprint || "",
+				tlsProtocol: message.tlsProtocol || "",
+				cipherSuite: message.cipherSuite || "",
+				permissions: Array.isArray(message.permissions) ? message.permissions : [],
+				expiresAtMs: Number(message.expiresAtMs) || Date.now(),
+			});
 			return;
 		}
 
@@ -233,6 +245,11 @@ export function useNativeState() {
 
 		if (message.type === "trustedDeviceError") {
 			setTrustedDeviceError(message.message || "可信设备操作失败");
+			return;
+		}
+
+		if (message.type === "securityMigrationNotice") {
+			setSecurityMigrationNotice(message.message || "安全协议已升级，需要重新配对设备。");
 			return;
 		}
 
@@ -372,6 +389,7 @@ export function useNativeState() {
 		deviceAuthentication,
 		trustedDevices,
 		trustedDeviceError,
+		securityMigrationNotice,
 		sessionPermissions,
 		incomingTerminalRequest,
 		terminalState,

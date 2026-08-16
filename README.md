@@ -53,7 +53,7 @@ build\Release\winRemoteControl.exe --trace --log-dir "D:\wrc_logs"
 - [架构概览](docs/architecture/overview.md)
 - [会话生命周期](docs/architecture/session-lifecycle.md)
 - [协议概览](docs/protocols/overview.md)
-- [设备身份、配对与权限](docs/security/device-identity.md)
+- [设备身份、mTLS 配对与权限](docs/security/device-identity.md)
 - [远程终端](docs/features/remote-terminal.md)
 - [视频链路](docs/media/video-pipeline.md)
 - [构建与测试](docs/development/build-and-test.md)
@@ -62,4 +62,4 @@ build\Release\winRemoteControl.exe --trace --log-dir "D:\wrc_logs"
 
 ## 安全边界
 
-被控端必须显式开始监听，并按设置审批接入。活动会话保持可见且可主动停止。项目不提供隐藏运行、提权、绕过 Windows 安全提示或未经同意的采集与输入。
+被控端必须显式开始监听，并按设置审批接入。信令使用 Windows Schannel TLS 1.2/1.3 双向证书认证，首次连接由两端核对当前 TLS 会话生成的六位配对数字；完整 SPKI 指纹只保留在安全详情中。活动会话保持可见且可主动停止。项目不提供隐藏运行、提权、绕过 Windows 安全提示或未经同意的采集与输入。

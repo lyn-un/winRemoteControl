@@ -97,8 +97,12 @@ signals:
 	void incomingAccessRequestCleared(const QString &strRequestId, const QString &strReason);
 	void pairingRequested(const QString &strRequestId,
 		const QString &strDeviceName,
-		const QString &strFingerprint,
-		const QString &strPairingCode,
+		const QString &strLocalRole,
+		const QString &strVerificationCode,
+		const QString &strControllerFingerprint,
+		const QString &strControlledFingerprint,
+		const QString &strTlsProtocol,
+		const QString &strCipherSuite,
 		KPermissionScopes requestedPermissions,
 		qint64 nExpiresAtMs);
 	void pairingCleared(const QString &strRequestId, const QString &strReason);

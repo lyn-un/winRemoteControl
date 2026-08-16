@@ -16,7 +16,8 @@
 
 namespace
 {
-	constexpr int kTrustStoreVersion = 1;
+	constexpr int kTrustStoreVersion = 2;
+	constexpr int kLegacyTrustStoreVersion = 1;
 	constexpr int kMaximumTrustedDevices = 256;
 
 	QString EncodeBase64Url(const QByteArray &value)
@@ -52,7 +53,8 @@ namespace
 		for (const KTrustedDevice &device : sorted)
 		{
 			writer.appendString(device.strDeviceId);
-			writer.appendBytes(device.publicKey);
+			writer.appendBytes(device.spkiSha256);
+			writer.appendBytes(device.certificateSha256);
 			writer.appendString(device.strAlias);
 			writer.appendString(device.strAdvertisedName);
 			writer.appendUInt32(static_cast<quint32>(device.permissionLimit.toInt()));
@@ -66,9 +68,11 @@ namespace
 	bool IsValidDevice(const KTrustedDevice &device)
 	{
 		return !QUuid::fromString(device.strDeviceId).isNull()
-			&& device.publicKey.size() == 65
-			&& device.publicKey.at(0) == '\x04'
-			&& device.strFingerprint == DevicePublicKeyFingerprint(device.publicKey)
+			&& device.spkiSha256.size() == 32
+			&& device.certificateSha256.size() == 32
+			&& device.strFingerprint == QStringLiteral("SHA256:%1").arg(
+				QString::fromLatin1(device.spkiSha256.toBase64(
+					QByteArray::OmitTrailingEquals)))
 			&& device.strAlias.size() <= 128
 			&& device.strAdvertisedName.size() <= 128
 			&& (static_cast<quint32>(device.permissionLimit.toInt()) & ~kAllPermissionScopeBits) == 0
@@ -110,10 +114,28 @@ QVector<KTrustedDevice> KSignedJsonTrustedDeviceStore::loadDevices(
 	}
 	QJsonParseError parseError;
 	const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parseError);
+	file.close();
 	const QJsonObject root = document.object();
 	const QJsonArray array = root.value(QStringLiteral("devices")).toArray();
+	const int nVersion = root.value(QStringLiteral("version")).toInt();
+	if (parseError.error == QJsonParseError::NoError
+		&& nVersion == kLegacyTrustStoreVersion)
+	{
+		const QString strBackupPath = m_strFilePath + QStringLiteral(".v1.bak");
+		if (!QFile::exists(strBackupPath) && !QFile::copy(m_strFilePath, strBackupPath))
+		{
+			if (pErrorMessage != nullptr)
+				*pErrorMessage = QStringLiteral("Unable to back up legacy trust store");
+			return {};
+		}
+		if (!saveDevices({}, pErrorMessage))
+			return {};
+		m_strMigrationNotice = QStringLiteral(
+			"安全协议已升级，需要重新配对设备。旧信任库已备份为 trusted_devices.json.v1.bak。");
+		return {};
+	}
 	if (parseError.error != QJsonParseError::NoError
-		|| root.value(QStringLiteral("version")).toInt() != kTrustStoreVersion
+		|| nVersion != kTrustStoreVersion
 		|| array.size() > kMaximumTrustedDevices)
 	{
 		if (pErrorMessage != nullptr)
@@ -125,8 +147,12 @@ QVector<KTrustedDevice> KSignedJsonTrustedDeviceStore::loadDevices(
 		const QJsonObject object = value.toObject();
 		KTrustedDevice device;
 		device.strDeviceId = object.value(QStringLiteral("deviceId")).toString();
-		device.publicKey = DecodeBase64Url(object.value(QStringLiteral("publicKey")).toString());
-		device.strFingerprint = DevicePublicKeyFingerprint(device.publicKey);
+		device.spkiSha256 = DecodeBase64Url(
+			object.value(QStringLiteral("spkiSha256")).toString());
+		device.certificateSha256 = DecodeBase64Url(
+			object.value(QStringLiteral("certificateSha256")).toString());
+		device.strFingerprint = QStringLiteral("SHA256:%1").arg(QString::fromLatin1(
+			device.spkiSha256.toBase64(QByteArray::OmitTrailingEquals)));
 		device.strAlias = object.value(QStringLiteral("alias")).toString();
 		device.strAdvertisedName = object.value(QStringLiteral("advertisedName")).toString();
 		device.permissionLimit = KPermissionScopes::fromInt(
@@ -153,6 +179,13 @@ QVector<KTrustedDevice> KSignedJsonTrustedDeviceStore::loadDevices(
 		return QVector<KTrustedDevice>();
 	}
 	return devices;
+}
+
+QString KSignedJsonTrustedDeviceStore::takeMigrationNotice()
+{
+	const QString strNotice = m_strMigrationNotice;
+	m_strMigrationNotice.clear();
+	return strNotice;
 }
 
 bool KSignedJsonTrustedDeviceStore::saveDevices(
@@ -188,7 +221,9 @@ bool KSignedJsonTrustedDeviceStore::saveDevices(
 	{
 		QJsonObject object;
 		object.insert(QStringLiteral("deviceId"), device.strDeviceId);
-		object.insert(QStringLiteral("publicKey"), EncodeBase64Url(device.publicKey));
+		object.insert(QStringLiteral("spkiSha256"), EncodeBase64Url(device.spkiSha256));
+		object.insert(QStringLiteral("certificateSha256"),
+			EncodeBase64Url(device.certificateSha256));
 		object.insert(QStringLiteral("alias"), device.strAlias);
 		object.insert(QStringLiteral("advertisedName"), device.strAdvertisedName);
 		object.insert(QStringLiteral("permissionBits"), device.permissionLimit.toInt());

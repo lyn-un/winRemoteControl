@@ -9,9 +9,9 @@ stateDiagram-v2
     [*] --> Idle
     Idle --> Listening: 被控端开始监听
     Idle --> Connecting: 控制端连接目标
-    Listening --> AuthenticatingIdentity: 收到 TCP 连接
-    Connecting --> AuthenticatingIdentity: TCP 已连接
-    AuthenticatingIdentity --> Pairing: 首次设备显示配对码
+    Listening --> AuthenticatingIdentity: Schannel mTLS 完成
+    Connecting --> AuthenticatingIdentity: Schannel mTLS 完成
+    AuthenticatingIdentity --> Pairing: 首次设备核对 TLS 六位配对码
     Pairing --> AwaitingApproval: 双方确认并保存信任
     AuthenticatingIdentity --> AwaitingApproval: 已配对设备认证成功
     AwaitingApproval --> Negotiating: 被控端允许
@@ -37,9 +37,9 @@ stateDiagram-v2
 
 ## 接入审批与能力协商
 
-1. 控制端建立 TCP 后先完成设备身份握手；未知设备由两端确认相同六位配对码。
+1. TCP 固定版本前导后由 Schannel 完成 TLS 1.2/1.3 双向证书握手；未知设备使用 TLS Exporter 生成六位配对码，由两端进行 Numeric Comparison。完整 SHA-256 SPKI 只用于安全详情和后续证书固定。
 2. 身份认证成功后才发送 `accessRequest`。`autoAccept` 只适用于未撤销且请求未超过权限上限的可信设备。
-3. 被控端允许后控制端创建 SDP Offer；SDP/ICE 必须通过认证信封验签。
+3. 被控端允许后控制端创建 SDP Offer；SDP/ICE 只通过已认证且加密的 TLS 通道传输。
 4. Session DataChannel 打开后双方交换 `KSessionCapabilities`。
 5. H.264、`video`、`session`、`input` 和协议版本必须存在交集；三秒内不能完成时明确报版本不兼容。
 6. 协商成功才进入 `Connected`，剪贴板、实时输入和画质上限使用交集结果。

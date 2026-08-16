@@ -48,8 +48,8 @@ QString KSessionErrorPresenter::userMessage(const KSessionError &error)
 		return QStringLiteral("本机设备身份不可用，请检查 security 目录");
 	if (error.code == AuthenticationTimeoutSessionErrorCode)
 		return QStringLiteral("设备身份认证超时");
-	if (error.code == SignatureInvalidSessionErrorCode)
-		return QStringLiteral("设备签名验证失败，已终止连接");
+	if (error.code == CertificateInvalidSessionErrorCode)
+		return QStringLiteral("设备证书验证失败，已终止连接");
 	if (error.code == PairingRejectedSessionErrorCode)
 		return QStringLiteral("设备配对已被拒绝");
 	if (error.code == PairingRateLimitedSessionErrorCode)
@@ -62,6 +62,8 @@ QString KSessionErrorPresenter::userMessage(const KSessionError &error)
 		return QStringLiteral("当前会话没有执行此操作的权限");
 	if (error.code == TrustStoreTamperedSessionErrorCode)
 		return QStringLiteral("可信设备记录校验失败，身份认证已停用");
+	if (error.code == ChannelBindingUnavailableSessionErrorCode)
+		return QStringLiteral("无法生成安全配对码，请确认两端系统和程序版本");
 	if (error.code == InvalidArgumentSessionErrorCode)
 		return QStringLiteral("连接参数无效");
 	if (error.domain == ProtocolSessionErrorDomain)

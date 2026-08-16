@@ -36,6 +36,15 @@ public:
 	{
 		return true;
 	}
+	bool exportKeyingMaterial(const QByteArray &label,
+		const QByteArray &context,
+		int nLength,
+		QByteArray *pKeyingMaterial,
+		QString *pErrorMessage) override
+	{
+		return keyingMaterialExporter.exportKeyingMaterial(label, context,
+			nLength, pKeyingMaterial, pErrorMessage);
+	}
 	void sendMessage(const QString &strMessage) override
 	{
 		strLastMessage = strMessage;
@@ -48,6 +57,7 @@ public:
 	quint16 nConnectedPort = 0;
 	int nDisconnectCount = 0;
 	int nStopCount = 0;
+	KFakeKeyingMaterialExporter keyingMaterialExporter;
 };
 
 void Check(bool bCondition, const char *pDescription)
@@ -66,6 +76,20 @@ KSessionCapabilities CompatibleCapabilities()
 		QStringLiteral("video"), QStringLiteral("session"), QStringLiteral("input")
 	};
 	return capabilities;
+}
+
+KTlsPeerIdentity FakePeerIdentity(const KFakeDeviceIdentityProvider &identity)
+{
+	const KDeviceCertificate certificate = identity.certificate();
+	KTlsPeerIdentity peer;
+	peer.strDeviceId = certificate.strDeviceId;
+	peer.spkiSha256 = certificate.spkiSha256;
+	peer.certificateSha256 = certificate.certificateSha256;
+	peer.validFromUtc = certificate.validFromUtc;
+	peer.validToUtc = certificate.validToUtc;
+	peer.strTlsProtocol = QStringLiteral("TLS1.3");
+	peer.strCipherSuite = QStringLiteral("TLS_AES_256_GCM_SHA384");
+	return peer;
 }
 
 void TestCapabilityFlow()
@@ -97,13 +121,14 @@ void TestAccessFlowOwnsTransportBoundary()
 		&& flow.listeningPort() == 39000,
 		"access flow owns listening endpoint");
 	flow.connectToHost(QStringLiteral("127.0.0.1"), 39001);
+	emit transport.secureChannelEstablished(FakePeerIdentity(identity));
 	Check(flow.matchesEndpoint(QStringLiteral("127.0.0.1"), 39001)
 		&& flow.hasLastEndpoint(),
 		"access flow owns the last outgoing endpoint");
 	flow.beginOutgoing(7, QStringLiteral("controller"));
-	KIdentityMessage hello;
-	Check(KIdentityMessageCodec::decode(transport.strLastMessage, &hello, &strError)
-		&& hello.type == HelloIdentityMessageType,
+	KTlsPairingMessage hello;
+	Check(KTlsPairingMessageCodec::decode(transport.strLastMessage, &hello, &strError)
+		&& hello.type == HelloTlsPairingMessageType,
 		"access flow starts identity authentication before access approval");
 }
 
@@ -114,6 +139,7 @@ void TestAccessFlowRejectsApprovalBeforeAuthentication()
 	KFakeTrustedDeviceStore store;
 	store.setIdentityProvider(&identity);
 	KAccessSessionFlow flow(&transport, &identity, &store);
+	emit transport.secureChannelEstablished(FakePeerIdentity(identity));
 	flow.beginOutgoing(11, QStringLiteral("controller"));
 	int nOutgoingAccepted = 0;
 	QObject::connect(&flow, &KAccessSessionFlow::outgoingAccessAccepted,

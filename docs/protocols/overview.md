@@ -1,6 +1,6 @@
 # 协议概览
 
-项目使用两层传输：TCP 承载接入审批和 WebRTC SDP/ICE 信令；WebRTC 承载 H.264 视频及应用 DataChannel。React 不解析或构造线上协议。
+项目使用两层传输：Schannel mTLS over TCP 承载接入审批和 WebRTC SDP/ICE 信令；WebRTC 承载 H.264 视频及应用 DataChannel。React 不解析或构造线上协议。
 
 ## 类型化信封
 
@@ -16,18 +16,17 @@ Codec 校验版本、字段类型、UUID、数值范围和消息大小。当前 
 
 ## TCP 接入与信令
 
-默认 TCP 端口是 `39000`。接入阶段支持：
+默认 TCP 端口是 `39000`。TCP 首先交换固定版本前导，之后必须完成 TLS 1.2/1.3 双向证书握手，不允许回退明文。TLS 内的接入阶段支持：
 
-- `identityHello`、`identityChallenge`、`identityProof`
-- `pairingDecision`、`identityAuthenticated`、认证拒绝
+- `tlsPairingHello`（固定验证方法 `tls-exporter-numeric-v1`）、`tlsPairingDecision`、`tlsPairingReady`、配对拒绝
 
 - `accessRequest`
 - `accessPending`
 - `accessAccepted`
 - `accessRejected`
-- `serverBusy`（接入槽在读取请求前已被占用时使用的统一 Envelope）
+- 前导状态 `OK/BUSY/INCOMPATIBLE`
 
-身份认证与审批通过前到达的 SDP/ICE 被拒绝。之后 Offer、Answer 和 ICE Candidate 位于 `authenticatedSignaling` 信封中，由设备 ECDSA 私钥签名，并绑定 request ID、双方身份、transcript、generation、权限、payload hash 和单向递增 sequence。
+设备身份固定和审批通过前到达的 SDP/ICE 被拒绝。之后 Offer、Answer 和 ICE Candidate 使用原有类型化 JSON framing，但只允许在已建立的 Schannel 通道内收发。TLS 提供保密性、完整性、顺序与防重放，不再存在逐条信令签名信封。
 
 局域网发现是独立 UDP 协议，固定端口 `39001`。发现结果只提供连接候选，不等同于身份认证或接入授权。
 
@@ -63,4 +62,4 @@ Session DataChannel 打开后交换 `KSessionCapabilities`，包括：
 - 真实来源地址取 TCP/UDP socket。
 - 新客户端要求能力协商；旧客户端三秒内得到明确不兼容错误。
 - 协议拒绝不会降级为未校验 JSON，也不会绕过被控端审批。
-- TCP 元数据目前只认证完整性、不加密；WebRTC 媒体和 DataChannel 由 DTLS/SRTP 与 SCTP over DTLS 加密。
+- TCP 固定前导之外的身份、Access、SDP 和 ICE 均由 Schannel TLS 加密；WebRTC 媒体和 DataChannel 继续由 DTLS/SRTP 与 SCTP over DTLS 加密。

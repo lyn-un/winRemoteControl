@@ -3,6 +3,7 @@
 
 #include "core/security/deviceidentityprovider.h"
 #include "core/security/trusteddevicestore.h"
+#include "core/transport/keyingmaterialexporter.h"
 
 #include <QtCore/QCryptographicHash>
 #include <QtCore/QDateTime>
@@ -91,6 +92,44 @@ public:
 private:
 	KDeviceIdentityProvider *m_pIdentityProvider = nullptr;
 	QVector<KTrustedDevice> m_devices;
+};
+
+class KFakeKeyingMaterialExporter final : public KKeyingMaterialExporter
+{
+public:
+	bool exportKeyingMaterial(const QByteArray &label,
+		const QByteArray &context,
+		int nLength,
+		QByteArray *pKeyingMaterial,
+		QString *pErrorMessage) override
+	{
+		if (m_bFail || pKeyingMaterial == nullptr || nLength <= 0)
+		{
+			if (pErrorMessage != nullptr)
+				*pErrorMessage = QStringLiteral("Fake TLS exporter failed");
+			return false;
+		}
+		QByteArray material;
+		quint32 nCounter = 0;
+		while (material.size() < nLength)
+		{
+			QByteArray input = m_secret + label + context;
+			input.append(static_cast<char>((nCounter >> 24) & 0xff));
+			input.append(static_cast<char>((nCounter >> 16) & 0xff));
+			input.append(static_cast<char>((nCounter >> 8) & 0xff));
+			input.append(static_cast<char>(nCounter & 0xff));
+			material.append(QCryptographicHash::hash(input, QCryptographicHash::Sha256));
+			++nCounter;
+		}
+		*pKeyingMaterial = material.left(nLength);
+		return true;
+	}
+
+	void setFailure(bool bFail) { m_bFail = bFail; }
+
+private:
+	QByteArray m_secret = QByteArrayLiteral("fake-tls-exporter-secret");
+	bool m_bFail = false;
 };
 
 inline std::unique_ptr<KDeviceIdentityProvider> MakeFakeIdentityProvider()
