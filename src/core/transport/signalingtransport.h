@@ -4,6 +4,10 @@
 #include <QtCore/QObject>
 #include <QtCore/QString>
 
+#include "core/transport/tlspeeridentity.h"
+
+class KDeviceIdentityProvider;
+
 class KSignalingTransport : public QObject
 {
 	Q_OBJECT
@@ -24,6 +28,14 @@ public:
 	virtual void disconnectPeer() = 0;
 	virtual void stop() = 0;
 	virtual void setServerBusyMessage(const QString &strMessage) = 0;
+	virtual bool setIdentityProvider(KDeviceIdentityProvider *pIdentityProvider,
+		QString *pErrorMessage)
+	{
+		Q_UNUSED(pIdentityProvider);
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("Secure signaling is not supported");
+		return false;
+	}
 
 public slots:
 	virtual void sendMessage(const QString &strMessage) = 0;
@@ -36,6 +48,8 @@ signals:
 	void outgoingConnectionFailed(const QString &strMessage);
 	void incomingConnectionEstablished(const QString &strSourceAddress, quint16 nSourcePort);
 	void connectionLost();
+	void secureChannelEstablished(const KTlsPeerIdentity &peer);
+	void tlsHandshakeFailed(const QString &strReason);
 };
 
 #endif // _WINREMOTECONTROL_SIGNALINGTRANSPORT_H_

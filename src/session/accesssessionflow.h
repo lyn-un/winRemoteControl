@@ -83,6 +83,7 @@ signals:
 	void identityAuthenticated(const KDeviceAuthenticationContext &context);
 
 private:
+	bool ensureSecureIdentity(QString *pErrorMessage);
 	void sendAccessMessage(const KAccessMessage &message);
 	void acceptIncoming();
 	void handleApprovalTimeout(const QString &strRequestId, quint64 nGeneration);
@@ -90,6 +91,7 @@ private:
 	void handleAuthenticationRejected(const QString &strReason);
 
 	KSignalingTransport *m_pTransport = nullptr;
+	KDeviceIdentityProvider *m_pIdentityProvider = nullptr;
 	KAccessApprovalController *m_pApprovalController = nullptr;
 	KDeviceAuthenticationFlow *m_pAuthenticationFlow = nullptr;
 	KApplicationSettings m_settings;

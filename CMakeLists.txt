@@ -100,6 +100,8 @@ target_link_libraries(wrc_protocol PUBLIC
 )
 
 add_library(wrc_core STATIC
+	src/core/security/devicecertificate.cpp
+	src/core/security/devicecertificate.h
 	src/core/security/deviceidentity.cpp
 	src/core/security/deviceidentity.h
 	src/core/security/deviceidentityprovider.h
@@ -130,6 +132,8 @@ add_library(wrc_core STATIC
 	src/core/settings/applicationsettingsstore.h
 	src/core/transport/remotepeertransport.h
 	src/core/transport/signalingtransport.h
+	src/core/transport/tlspeeridentity.cpp
+	src/core/transport/tlspeeridentity.h
 	src/core/transport/networkstatstracker.cpp
 	src/core/transport/networkstatstracker.h
 	src/core/transport/outboundmessagequeue.cpp
@@ -184,6 +188,7 @@ target_link_libraries(wrc_windows_security_adapter PUBLIC
 	Qt6::Core
 	bcrypt
 	ncrypt
+	crypt32
 )
 endif()
 
@@ -290,6 +295,8 @@ target_link_libraries(wrc_session_application PUBLIC
 )
 
 add_library(wrc_signaling_adapter STATIC
+	src/adapters/signaling/schanneltlsengine.cpp
+	src/adapters/signaling/schanneltlsengine.h
 	src/adapters/signaling/tcpsignalingtransport.cpp
 	src/adapters/signaling/tcpsignalingtransport.h
 )
@@ -479,11 +486,15 @@ target_include_directories(wrc_signaling_adapter PUBLIC
 	"${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 
+target_compile_definitions(wrc_signaling_adapter PRIVATE SECURITY_WIN32)
+
 target_link_libraries(wrc_signaling_adapter PUBLIC
 	wrc_core
 	wrc_diagnostics
 	Qt6::Core
 	Qt6::Network
+	secur32
+	crypt32
 )
 
 add_library(wrc_ffmpeg_adapter STATIC

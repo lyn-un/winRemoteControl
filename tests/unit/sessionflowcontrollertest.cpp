@@ -32,6 +32,10 @@ public:
 	{
 		strBusyMessage = strMessage;
 	}
+	bool setIdentityProvider(KDeviceIdentityProvider *, QString *) override
+	{
+		return true;
+	}
 	void sendMessage(const QString &strMessage) override
 	{
 		strLastMessage = strMessage;

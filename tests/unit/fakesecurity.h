@@ -5,6 +5,7 @@
 #include "core/security/trusteddevicestore.h"
 
 #include <QtCore/QCryptographicHash>
+#include <QtCore/QDateTime>
 #include <QtCore/QUuid>
 
 #include <memory>
@@ -22,6 +23,14 @@ public:
 		for (int nIndex = 1; nIndex < m_identity.publicKey.size(); ++nIndex)
 			m_identity.publicKey[nIndex] = idBytes.at((nIndex - 1) % idBytes.size());
 		m_identity.strFingerprint = DevicePublicKeyFingerprint(m_identity.publicKey);
+		m_certificate.strDeviceId = m_identity.strDeviceId;
+		m_certificate.certificateDer = QByteArrayLiteral("fake-certificate");
+		m_certificate.spkiSha256 = QCryptographicHash::hash(
+			m_identity.publicKey, QCryptographicHash::Sha256);
+		m_certificate.certificateSha256 = QCryptographicHash::hash(
+			m_certificate.certificateDer, QCryptographicHash::Sha256);
+		m_certificate.validFromUtc = QDateTime::currentDateTimeUtc().addDays(-1);
+		m_certificate.validToUtc = QDateTime::currentDateTimeUtc().addYears(1);
 	}
 
 	bool initialize(QString *) override { return true; }
@@ -52,9 +61,17 @@ public:
 			bytes[nIndex] = seed.at(nIndex % seed.size());
 		return bytes;
 	}
+	KDeviceCertificate certificate() const override { return m_certificate; }
+	void *duplicateNativeCertificate(QString *pErrorMessage) const override
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("Native certificates are unavailable in fake security");
+		return nullptr;
+	}
 
 private:
 	KDeviceIdentity m_identity;
+	KDeviceCertificate m_certificate;
 };
 
 class KFakeTrustedDeviceStore final : public KTrustedDeviceStore

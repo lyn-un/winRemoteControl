@@ -2,6 +2,7 @@
 #define _WINREMOTECONTROL_CORE_SECURITY_DEVICEIDENTITYPROVIDER_H_
 
 #include "core/security/deviceidentity.h"
+#include "core/security/devicecertificate.h"
 
 class KDeviceIdentityProvider
 {
@@ -19,6 +20,8 @@ public:
 		QString *pErrorMessage) const = 0;
 	virtual QByteArray randomBytes(int nByteCount,
 		QString *pErrorMessage) const = 0;
+	virtual KDeviceCertificate certificate() const = 0;
+	virtual void *duplicateNativeCertificate(QString *pErrorMessage) const = 0;
 };
 
 #endif // _WINREMOTECONTROL_CORE_SECURITY_DEVICEIDENTITYPROVIDER_H_

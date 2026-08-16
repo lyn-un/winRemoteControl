@@ -1,6 +1,7 @@
 #ifndef _WINREMOTECONTROL_TCPSIGNALINGTRANSPORT_H_
 #define _WINREMOTECONTROL_TCPSIGNALINGTRANSPORT_H_
 
+#include "adapters/signaling/schanneltlsengine.h"
 #include "core/transport/signalingtransport.h"
 
 #include <QtCore/QByteArray>
@@ -8,6 +9,7 @@
 #include <QtCore/QObject>
 #include <QtCore/QString>
 
+class KDeviceIdentityProvider;
 class QTcpServer;
 class QTcpSocket;
 class QTimer;
@@ -28,6 +30,8 @@ public:
 	void disconnectPeer() override;
 	void stop() override;
 	void setServerBusyMessage(const QString &strMessage) override;
+	bool setIdentityProvider(KDeviceIdentityProvider *pIdentityProvider,
+		QString *pErrorMessage) override;
 	bool isConnected() const;
 
 public slots:
@@ -43,18 +47,38 @@ private slots:
 	void handleReadTimeout();
 
 private:
+	enum ConnectionStage
+	{
+		IdleStage,
+		AwaitingClientPrefaceStage,
+		AwaitingServerPrefaceStage,
+		TlsHandshakeStage,
+		SecureStage
+	};
+
 	void setSocket(QTcpSocket *pSocket);
 	void closeSocket();
+	void writeRaw(const QByteArray &data);
+	bool beginTls(bool bServer, QString *pErrorMessage);
+	bool processPreface(QString *pErrorMessage);
+	bool processTls(QString *pErrorMessage);
+	bool processPlaintext(QString *pErrorMessage);
+	void completeSecureConnection();
 	void failOutgoingConnection(const QString &strReason, const QString &strMessage);
-	void rejectPeerData(const QString &strMessage);
+	void rejectPeerData(const QString &strMessage, bool bTlsFailure = false);
 
 	QTcpServer *m_pServer = nullptr;
 	QTcpSocket *m_pSocket = nullptr;
 	QTimer *m_pConnectTimeoutTimer = nullptr;
 	QTimer *m_pReadTimeoutTimer = nullptr;
-	QByteArray m_readBuffer;
+	KDeviceIdentityProvider *m_pIdentityProvider = nullptr;
+	KSchannelTlsEngine m_tlsEngine;
+	QByteArray m_encryptedBuffer;
+	QByteArray m_plaintextBuffer;
 	QByteArray m_serverBusyMessage;
 	QElapsedTimer m_connectElapsedTimer;
+	ConnectionStage m_stage = IdleStage;
+	bool m_bOutgoing = false;
 	bool m_bOutgoingConnectionPending = false;
 	bool m_bPeerBusy = false;
 };

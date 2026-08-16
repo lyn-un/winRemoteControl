@@ -20,6 +20,7 @@ KAccessSessionFlow::KAccessSessionFlow(KSignalingTransport *pTransport,
 	QObject *pParent)
 	: QObject(pParent)
 	, m_pTransport(pTransport)
+	, m_pIdentityProvider(pIdentityProvider)
 	, m_pApprovalController(new KAccessApprovalController(this))
 	, m_pAuthenticationFlow(new KDeviceAuthenticationFlow(
 		pIdentityProvider, pTrustedDeviceStore, this))
@@ -67,6 +68,8 @@ void KAccessSessionFlow::setApplicationSettings(
 bool KAccessSessionFlow::startListening(quint16 nPort, QString *pErrorMessage)
 {
 	m_bConnected = false;
+	if (!ensureSecureIdentity(pErrorMessage))
+		return false;
 	if (!m_pTransport->startServer(nPort, pErrorMessage))
 		return false;
 	m_nListeningPort = nPort;
@@ -81,7 +84,29 @@ void KAccessSessionFlow::connectToHost(const QString &strHost, quint16 nPort)
 	m_nLastPort = nPort;
 	m_bConnected = false;
 	m_pTransport->stop();
+	QString strError;
+	if (!ensureSecureIdentity(&strError))
+	{
+		emit outgoingConnectionFailed(strError);
+		return;
+	}
 	m_pTransport->connectToHost(strHost, nPort);
+}
+
+bool KAccessSessionFlow::ensureSecureIdentity(QString *pErrorMessage)
+{
+	if (m_pIdentityProvider == nullptr)
+	{
+		if (pErrorMessage != nullptr && pErrorMessage->isEmpty())
+			*pErrorMessage = QStringLiteral("Device identity is unavailable");
+		return false;
+	}
+	if (!m_pIdentityProvider->certificate().isValid()
+		&& !m_pIdentityProvider->initialize(pErrorMessage))
+	{
+		return false;
+	}
+	return m_pTransport->setIdentityProvider(m_pIdentityProvider, pErrorMessage);
 }
 
 void KAccessSessionFlow::disconnectPeer()

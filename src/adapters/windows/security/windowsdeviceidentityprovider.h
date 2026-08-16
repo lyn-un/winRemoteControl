@@ -27,6 +27,8 @@ public:
 		QString *pErrorMessage) const override;
 	QByteArray randomBytes(int nByteCount,
 		QString *pErrorMessage) const override;
+	KDeviceCertificate certificate() const override;
+	void *duplicateNativeCertificate(QString *pErrorMessage) const override;
 
 	bool deletePersistedKey(QString *pErrorMessage);
 
@@ -38,12 +40,18 @@ private:
 		QString *pErrorMessage);
 	bool exportPublicKey(QByteArray *pPublicKey, QString *pErrorMessage) const;
 	bool saveDescriptor(QString *pErrorMessage) const;
+	bool ensureCertificate(QString *pErrorMessage);
+	bool createCertificate(QString *pErrorMessage);
+	bool loadCertificate(QString *pErrorMessage);
 	void closeKey();
+	void closeCertificate();
 
 	QString m_strSecurityDirectory;
 	KDeviceIdentity m_identity;
 	NCRYPT_PROV_HANDLE m_hProvider = 0;
 	NCRYPT_KEY_HANDLE m_hKey = 0;
+	void *m_pCertificateContext = nullptr;
+	KDeviceCertificate m_certificate;
 };
 
 #endif // _WINREMOTECONTROL_ADAPTERS_WINDOWS_SECURITY_WINDOWSDEVICEIDENTITYPROVIDER_H_
