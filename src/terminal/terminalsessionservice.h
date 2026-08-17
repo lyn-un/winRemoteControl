@@ -78,7 +78,7 @@ private:
 	bool startHost(const QString &strRequestId, int nColumns, int nRows);
 	void stopHost(bool bNotifyRemote, const QString &strReason);
 	void resetSession();
-	void setState(KTerminalState state, const QString &strStatus);
+	bool setState(KTerminalState state, const QString &strStatus);
 	void enqueueOutput(const QByteArray &data);
 	void flushOutput();
 	bool enqueueInput(const QByteArray &data);

@@ -11,6 +11,7 @@ namespace
 	constexpr char kPairingHello[] = "tlsPairingHello";
 	constexpr char kPairingDecision[] = "tlsPairingDecision";
 	constexpr char kPairingReady[] = "tlsPairingReady";
+	constexpr char kPairingCommitted[] = "tlsPairingCommitted";
 	constexpr char kPairingRejected[] = "tlsPairingRejected";
 
 	bool Fail(const QString &strMessage, QString *pErrorMessage)
@@ -28,6 +29,8 @@ namespace
 			return DecisionTlsPairingMessageType;
 		if (strType == QString::fromLatin1(kPairingReady))
 			return ReadyTlsPairingMessageType;
+		if (strType == QString::fromLatin1(kPairingCommitted))
+			return CommittedTlsPairingMessageType;
 		if (strType == QString::fromLatin1(kPairingRejected))
 			return RejectedTlsPairingMessageType;
 		return InvalidTlsPairingMessageType;
@@ -46,6 +49,8 @@ QString KTlsPairingMessageCodec::encode(const KTlsPairingMessage &message)
 		object.insert(QStringLiteral("verificationMethod"),
 			message.strVerificationMethod.left(64));
 	}
+	if (!message.strTrustCommitId.isEmpty())
+		object.insert(QStringLiteral("trustCommitId"), message.strTrustCommitId);
 	if (message.permissions.toInt() != 0)
 	{
 		QJsonArray permissions;
@@ -95,6 +100,8 @@ bool KTlsPairingMessageCodec::decode(const KProtocolEnvelope &envelope,
 	message.strDeviceName = object.value(QStringLiteral("deviceName")).toString();
 	message.strVerificationMethod = object.value(
 		QStringLiteral("verificationMethod")).toString();
+	message.strTrustCommitId = object.value(
+		QStringLiteral("trustCommitId")).toString();
 	const QJsonValue permissionsValue = object.value(QStringLiteral("permissions"));
 	if (!permissionsValue.isUndefined())
 	{
@@ -117,6 +124,8 @@ bool KTlsPairingMessageCodec::decode(const KProtocolEnvelope &envelope,
 			|| message.strDeviceName.size() > 128
 			|| message.strVerificationMethod.isEmpty()
 			|| message.strVerificationMethod.size() > 64
+			|| (!message.strTrustCommitId.isEmpty()
+				&& QUuid(message.strTrustCommitId).isNull())
 			|| !message.permissions.testFlag(ViewScreenPermissionScope))
 		{
 			return Fail(QStringLiteral("TLS pairing peer fields are invalid"), pErrorMessage);
@@ -129,7 +138,8 @@ bool KTlsPairingMessageCodec::decode(const KProtocolEnvelope &envelope,
 			return Fail(QStringLiteral("TLS pairing decision is invalid"), pErrorMessage);
 		message.bAccepted = acceptedValue.toBool();
 	}
-	else if (message.type == ReadyTlsPairingMessageType)
+	else if (message.type == ReadyTlsPairingMessageType
+		|| message.type == CommittedTlsPairingMessageType)
 	{
 		if (QUuid(message.strDeviceId).isNull()
 			|| !message.permissions.testFlag(ViewScreenPermissionScope))
@@ -157,6 +167,8 @@ QString KTlsPairingMessageCodec::typeName(KTlsPairingMessageType type)
 		return QString::fromLatin1(kPairingDecision);
 	if (type == ReadyTlsPairingMessageType)
 		return QString::fromLatin1(kPairingReady);
+	if (type == CommittedTlsPairingMessageType)
+		return QString::fromLatin1(kPairingCommitted);
 	if (type == RejectedTlsPairingMessageType)
 		return QString::fromLatin1(kPairingRejected);
 	return QStringLiteral("invalid");

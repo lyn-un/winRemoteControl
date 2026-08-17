@@ -12,6 +12,7 @@ bool KAtomicJsonFile::write(const QString &strFilePath,
 	QString *pErrorMessage)
 {
 	QSaveFile saveFile(strFilePath);
+	saveFile.setDirectWriteFallback(false);
 	if (saveFile.open(QIODevice::WriteOnly))
 	{
 		if (saveFile.write(data) == data.size() && saveFile.commit())
@@ -34,23 +35,19 @@ bool KAtomicJsonFile::write(const QString &strFilePath,
 		return false;
 	}
 	temporaryFile.close();
-	const BOOL bMoved = MoveFileExW(
-		reinterpret_cast<LPCWSTR>(strTemporaryPath.utf16()),
-		reinterpret_cast<LPCWSTR>(strFilePath.utf16()),
-		MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
-	if (bMoved)
+	const LPCWSTR pTemporaryPath =
+		reinterpret_cast<LPCWSTR>(strTemporaryPath.utf16());
+	const LPCWSTR pDestinationPath =
+		reinterpret_cast<LPCWSTR>(strFilePath.utf16());
+	const bool bDestinationExists = GetFileAttributesW(pDestinationPath)
+		!= INVALID_FILE_ATTRIBUTES;
+	const BOOL bReplaced = bDestinationExists
+		? ReplaceFileW(pDestinationPath, pTemporaryPath, nullptr,
+			REPLACEFILE_WRITE_THROUGH, nullptr, nullptr)
+		: MoveFileExW(pTemporaryPath, pDestinationPath, MOVEFILE_WRITE_THROUGH);
+	if (bReplaced)
 		return true;
 	const DWORD nError = GetLastError();
-	QFile directFile(strFilePath);
-	if (nError == ERROR_ACCESS_DENIED
-		&& directFile.open(QIODevice::WriteOnly | QIODevice::Truncate)
-		&& directFile.write(data) == data.size()
-		&& directFile.flush())
-	{
-		directFile.close();
-		QFile::remove(strTemporaryPath);
-		return true;
-	}
 	QFile::remove(strTemporaryPath);
 	if (pErrorMessage != nullptr)
 	{

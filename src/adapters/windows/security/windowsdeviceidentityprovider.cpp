@@ -428,7 +428,9 @@ bool KWindowsDeviceIdentityProvider::loadDescriptor(QString *pErrorMessage)
 		return false;
 	}
 	QJsonParseError parseError;
-	const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parseError);
+	const QByteArray descriptorData = file.readAll();
+	file.close();
+	const QJsonDocument document = QJsonDocument::fromJson(descriptorData, &parseError);
 	const QJsonObject object = document.object();
 	KDeviceIdentity loaded;
 	loaded.strDeviceId = object.value(QStringLiteral("deviceId")).toString();

@@ -59,6 +59,39 @@ namespace
 				result.strTechnicalMessage);
 	}
 
+	static KSessionErrorCode sessionErrorCode(const KSecurityStatus &status)
+	{
+		switch (status.code)
+		{
+		case IdentityUnavailableSecurityErrorCode:
+			return IdentityUnavailableSessionErrorCode;
+		case AuthenticationTimeoutSecurityErrorCode:
+			return AuthenticationTimeoutSessionErrorCode;
+		case CertificateInvalidSecurityErrorCode:
+			return CertificateInvalidSessionErrorCode;
+		case PairingRejectedSecurityErrorCode:
+			return PairingRejectedSessionErrorCode;
+		case PairingRateLimitedSecurityErrorCode:
+			return PairingRateLimitedSessionErrorCode;
+		case DeviceKeyChangedSecurityErrorCode:
+			return DeviceKeyChangedSessionErrorCode;
+		case DeviceRevokedSecurityErrorCode:
+			return DeviceRevokedSessionErrorCode;
+		case PermissionDeniedSecurityErrorCode:
+			return PermissionDeniedSessionErrorCode;
+		case TrustStoreTamperedSecurityErrorCode:
+			return TrustStoreTamperedSessionErrorCode;
+		case ChannelBindingUnavailableSecurityErrorCode:
+			return ChannelBindingUnavailableSessionErrorCode;
+		case ProtocolIncompatibleSecurityErrorCode:
+			return IncompatibleProtocolSessionErrorCode;
+		case CancelledSecurityErrorCode:
+			return ApprovalRejectedSessionErrorCode;
+		default:
+			return UnknownSessionErrorCode;
+		}
+	}
+
 }
 
 KSessionCoordinator::KSessionCoordinator(
@@ -212,6 +245,8 @@ KSessionCoordinator::KSessionCoordinator(
 			updateListeningAvailability(true, m_nListeningPort);
 			publishSessionState();
 		});
+	connect(m_pAccessSessionFlow, &KAccessSessionFlow::incomingSecurityRejected,
+		this, &KSessionCoordinator::handleIncomingSecurityRejected);
 	connect(m_pAccessSessionFlow, &KAccessSessionFlow::outgoingAccessAccepted,
 		this, [this]()
 		{
@@ -224,6 +259,8 @@ KSessionCoordinator::KSessionCoordinator(
 		});
 	connect(m_pAccessSessionFlow, &KAccessSessionFlow::outgoingAccessRejected,
 		this, &KSessionCoordinator::handleOutgoingAccessRejected);
+	connect(m_pAccessSessionFlow, &KAccessSessionFlow::outgoingSecurityRejected,
+		this, &KSessionCoordinator::handleOutgoingSecurityRejected);
 	connect(m_pInputInjector, &KInputInjector::inputError,
 		this, [this](const QString &strMessage)
 		{
@@ -323,6 +360,7 @@ void KSessionCoordinator::initializeProtocolRoutes()
 		};
 	for (KTlsPairingMessageType type : { HelloTlsPairingMessageType,
 		DecisionTlsPairingMessageType, ReadyTlsPairingMessageType,
+		CommittedTlsPairingMessageType,
 		RejectedTlsPairingMessageType })
 	{
 		m_protocolRouter.registerHandler(SignalingProtocolChannel,
@@ -2113,55 +2151,57 @@ void KSessionCoordinator::handleOutgoingAccessRejected(const QString &strReason)
 	{
 		code = RemoteAccessDisabledSessionErrorCode;
 	}
-	else if (strReason == QStringLiteral("identity_unavailable"))
-	{
-		domain = SecuritySessionErrorDomain;
-		code = IdentityUnavailableSessionErrorCode;
-	}
-	else if (strReason == QStringLiteral("authentication_timeout"))
-	{
-		domain = SecuritySessionErrorDomain;
-		code = AuthenticationTimeoutSessionErrorCode;
-		bRetryable = true;
-	}
-	else if (strReason == QStringLiteral("certificate_invalid"))
-	{
-		domain = SecuritySessionErrorDomain;
-		code = CertificateInvalidSessionErrorCode;
-	}
-	else if (strReason == QStringLiteral("pairing_rejected"))
-	{
-		domain = SecuritySessionErrorDomain;
-		code = PairingRejectedSessionErrorCode;
-	}
-	else if (strReason == QStringLiteral("pairing_rate_limited"))
-	{
-		domain = SecuritySessionErrorDomain;
-		code = PairingRateLimitedSessionErrorCode;
-	}
-	else if (strReason == QStringLiteral("device_key_changed"))
-	{
-		domain = SecuritySessionErrorDomain;
-		code = DeviceKeyChangedSessionErrorCode;
-	}
-	else if (strReason == QStringLiteral("device_revoked"))
-	{
-		domain = SecuritySessionErrorDomain;
-		code = DeviceRevokedSessionErrorCode;
-	}
-	else if (strReason == QStringLiteral("trust_store_tampered"))
-	{
-		domain = SecuritySessionErrorDomain;
-		code = TrustStoreTamperedSessionErrorCode;
-	}
-	else if (strReason == QStringLiteral("channel_binding_unavailable"))
-	{
-		domain = SecuritySessionErrorDomain;
-		code = ChannelBindingUnavailableSessionErrorCode;
-	}
 	reportSessionError(domain, code,
 		ApprovalSessionErrorStage, bRetryable,
 		QStringLiteral("Access rejected: %1").arg(strReason));
+}
+
+void KSessionCoordinator::handleIncomingSecurityRejected(
+	const KSecurityStatus &status)
+{
+	if (m_sessionStateMachine.role() != ControlledSessionRole
+		|| (!m_sessionStateMachine.isAwaitingApproval()
+			&& !m_sessionStateMachine.isAuthenticatingIdentity()
+			&& !m_sessionStateMachine.isPairing()))
+	{
+		return;
+	}
+	reportSessionError(SecuritySessionErrorDomain, sessionErrorCode(status),
+		ApprovalSessionErrorStage, status.bRetryable,
+		QStringLiteral("requestId=%1 generation=%2 securityDomain=%3 "
+			"securityStage=%4 reason=%5 technical=%6")
+			.arg(status.strRequestId)
+			.arg(status.nGeneration)
+			.arg(KSecurityStatus::domainName(status.domain),
+				KSecurityStatus::stageName(status.stage),
+				status.strProtocolReason, status.strTechnicalMessage));
+	m_sessionStateMachine.rejectConnection();
+	m_pAccessSessionFlow->disconnectPeer();
+	updateListeningAvailability(true, m_nListeningPort);
+	publishSessionState();
+}
+
+void KSessionCoordinator::handleOutgoingSecurityRejected(
+	const KSecurityStatus &status)
+{
+	if (m_sessionStateMachine.role() != ControllerSessionRole
+		|| (!m_sessionStateMachine.isAwaitingApproval()
+			&& !m_sessionStateMachine.isAuthenticatingIdentity()
+			&& !m_sessionStateMachine.isPairing()))
+	{
+		return;
+	}
+	finishSession(ConnectFailedSessionEndReason, status.strProtocolReason,
+		false, false, false);
+	reportSessionError(SecuritySessionErrorDomain, sessionErrorCode(status),
+		ApprovalSessionErrorStage, status.bRetryable,
+		QStringLiteral("requestId=%1 generation=%2 securityDomain=%3 "
+			"securityStage=%4 reason=%5 technical=%6")
+			.arg(status.strRequestId)
+			.arg(status.nGeneration)
+			.arg(KSecurityStatus::domainName(status.domain),
+				KSecurityStatus::stageName(status.stage),
+				status.strProtocolReason, status.strTechnicalMessage));
 }
 
 void KSessionCoordinator::updateListeningAvailability(bool bAvailable, quint16 nPort)

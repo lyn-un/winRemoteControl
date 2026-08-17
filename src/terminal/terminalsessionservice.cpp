@@ -78,7 +78,10 @@ KTerminalSessionService::KTerminalSessionService(
 				return;
 			reportTerminalError(ShutdownTimeoutSessionErrorCode,
 				QStringLiteral("ConPTY shutdown timed out"));
-			setState(FailedTerminalState, QStringLiteral("终端关闭超时"));
+			if (!setState(FailedTerminalState, QStringLiteral("终端关闭超时，等待底层清理")))
+			{
+				writeTrace(QStringLiteral("terminal_stop_timeout_state_failed"));
+			}
 			writeTrace(QStringLiteral("terminal_stop_timeout"));
 		});
 	connect(m_pSessionController, &KSessionController::sessionStateChanged,
@@ -209,6 +212,13 @@ bool KTerminalSessionService::isFrontendSupported(QString *pReason) const
 
 void KTerminalSessionService::openCurrentTerminal(int nColumns, int nRows)
 {
+	if (m_bHostStopPending)
+	{
+		reportTerminalError(ShutdownTimeoutSessionErrorCode,
+			QStringLiteral("Previous ConPTY host is still stopping"), true);
+		requestState();
+		return;
+	}
 	if (m_state == RunningTerminalState || m_state == AwaitingApprovalTerminalState)
 	{
 		if (m_spTerminalFrontend != nullptr)
@@ -798,14 +808,15 @@ void KTerminalSessionService::resetSession()
 	setState(ClosedTerminalState, QStringLiteral("终端未连接"));
 }
 
-void KTerminalSessionService::setState(KTerminalState state, const QString &strStatus)
+bool KTerminalSessionService::setState(KTerminalState state,
+	const QString &strStatus)
 {
 	if (!m_stateMachine.transitionTo(state))
 	{
 		writeTrace(QStringLiteral("terminal_state_rejected"),
 			QStringLiteral("from=%1 to=%2")
 				.arg(TerminalStateName(m_stateMachine.state()), TerminalStateName(state)));
-		return;
+		return false;
 	}
 	m_state = state;
 	m_strStatus = strStatus;
@@ -816,6 +827,7 @@ void KTerminalSessionService::setState(KTerminalState state, const QString &strS
 	const bool bAvailable = bLocalSupported && m_bChannelOpen
 		&& m_capabilities.channels.contains(QStringLiteral("terminal"));
 	emit stateChanged(state, bAvailable, strStatus, m_strDeviceName, m_strDeviceSource);
+	return true;
 }
 
 void KTerminalSessionService::enqueueOutput(const QByteArray &data)

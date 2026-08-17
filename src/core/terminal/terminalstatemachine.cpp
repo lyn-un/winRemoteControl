@@ -10,7 +10,7 @@ bool KTerminalStateMachine::canTransitionTo(KTerminalState nextState) const
 	if (nextState == m_state)
 		return true;
 	if (nextState == FailedTerminalState)
-		return m_state != ClosedTerminalState && m_state != ClosingTerminalState;
+		return m_state != ClosedTerminalState;
 	switch (m_state)
 	{
 	case ClosedTerminalState:

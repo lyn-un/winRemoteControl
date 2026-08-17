@@ -13,8 +13,15 @@
 namespace
 {
 	constexpr int kInitialIdentityTimeoutMs = 3000;
-	constexpr int kMaximumSourceFailures = 5;
-	constexpr qint64 kSourceFailureWindowMs = 10 * 60 * 1000LL;
+
+	bool ShouldRecordSourceFailure(const QString &strReason)
+	{
+		return strReason == QStringLiteral("authentication_timeout")
+			|| strReason == QStringLiteral("protocol_incompatible")
+			|| strReason == QStringLiteral("pairing_rejected")
+			|| strReason == QStringLiteral("device_key_changed")
+			|| strReason == QStringLiteral("device_revoked");
+	}
 }
 
 KDeviceAuthenticationFlow::KDeviceAuthenticationFlow(
@@ -24,16 +31,17 @@ KDeviceAuthenticationFlow::KDeviceAuthenticationFlow(
 	QObject *pParent)
 	: QObject(pParent)
 	, m_pIdentityProvider(pIdentityProvider)
-	, m_pTrustedDeviceStore(pTrustedDeviceStore)
 	, m_pKeyingMaterialExporter(pKeyingMaterialExporter)
+	, m_trustedDeviceService(pTrustedDeviceStore)
 	, m_pTimer(new QTimer(this))
 {
 	Q_ASSERT(m_pIdentityProvider != nullptr);
-	Q_ASSERT(m_pTrustedDeviceStore != nullptr);
+	Q_ASSERT(pTrustedDeviceStore != nullptr);
 	Q_ASSERT(m_pKeyingMaterialExporter != nullptr);
 	m_pTimer->setSingleShot(true);
 	connect(m_pTimer, &QTimer::timeout, this,
-		[this]() { fail(QStringLiteral("authentication_timeout"), true); });
+		[this]() { fail(QStringLiteral("authentication_timeout"), true,
+			UserApprovalSecurityStage); });
 }
 
 void KDeviceAuthenticationFlow::setApprovalTimeoutSeconds(int nTimeoutSeconds)
@@ -65,6 +73,7 @@ bool KDeviceAuthenticationFlow::beginOutgoing(const QString &strRequestId,
 	m_strLocalDeviceName = strDeviceName.left(128);
 	m_context.strRequestId = strRequestId;
 	m_context.requestedPermissions = requestedPermissions;
+	m_transaction.begin(strRequestId, nGeneration);
 	m_pTimer->start(kInitialIdentityTimeoutMs);
 	sendHello();
 	return true;
@@ -98,15 +107,20 @@ bool KDeviceAuthenticationFlow::handleMessage(const KTlsPairingMessage &message,
 {
 	if (!m_bActive || nGeneration != m_nGeneration)
 		return false;
-	if (!m_context.strRequestId.isEmpty()
-		&& message.strRequestId != m_context.strRequestId)
+	if (message.type != HelloTlsPairingMessageType
+		&& !m_transaction.matches(message.strRequestId, nGeneration))
 	{
+		KSessionTraceLogger::write(m_bOutgoing ? QStringLiteral("controller")
+				: QStringLiteral("controlled"),
+			QStringLiteral("pairing_message_dropped"), QStringLiteral("stale"), -1,
+			QStringLiteral("requestId=%1 generation=%2 type=%3")
+				.arg(message.strRequestId).arg(nGeneration)
+				.arg(KTlsPairingMessageCodec::typeName(message.type)));
 		return false;
 	}
 	if (message.type == RejectedTlsPairingMessageType)
 	{
-		clear(message.strReason);
-		emit authenticationRejected(message.strReason);
+		fail(message.strReason, false, UserApprovalSecurityStage);
 		return true;
 	}
 	if (message.type == HelloTlsPairingMessageType)
@@ -114,7 +128,9 @@ bool KDeviceAuthenticationFlow::handleMessage(const KTlsPairingMessage &message,
 	if (message.type == DecisionTlsPairingMessageType)
 		return handlePairingDecision(message);
 	if (message.type == ReadyTlsPairingMessageType)
-		return handleAuthenticated(message);
+		return handlePrepared(message);
+	if (message.type == CommittedTlsPairingMessageType)
+		return handleCommitted(message);
 	return false;
 }
 
@@ -137,8 +153,8 @@ void KDeviceAuthenticationFlow::respondPairing(const QString &strRequestId,
 		bAccepted ? QStringLiteral("accepted") : QStringLiteral("pairing_rejected"));
 	if (!bAccepted)
 	{
-		recordSourceFailure();
-		fail(QStringLiteral("pairing_rejected"), true);
+		fail(QStringLiteral("pairing_rejected"), true,
+			UserApprovalSecurityStage);
 		return;
 	}
 	const KPermissionScopes permissions = m_bOutgoing
@@ -146,7 +162,8 @@ void KDeviceAuthenticationFlow::respondPairing(const QString &strRequestId,
 		: (grantedPermissions & m_context.requestedPermissions);
 	if (!permissions.testFlag(ViewScreenPermissionScope))
 	{
-		fail(QStringLiteral("pairing_rejected"), true);
+		fail(QStringLiteral("pairing_rejected"), true,
+			UserApprovalSecurityStage);
 		return;
 	}
 	sendPairingDecision(true, permissions);
@@ -158,6 +175,7 @@ void KDeviceAuthenticationFlow::cancel(const QString &strReason,
 {
 	if (!m_bActive)
 		return;
+	rollbackPairing(strReason);
 	if (bEmitOutcome)
 	{
 		fail(strReason, bNotifyRemote);
@@ -195,32 +213,36 @@ bool KDeviceAuthenticationFlow::handleHello(const KTlsPairingMessage &message)
 	if (message.strVerificationMethod
 		!= KTlsPairingVerification::verificationMethod())
 	{
-		fail(QStringLiteral("protocol_incompatible"), true);
+		fail(QStringLiteral("protocol_incompatible"), true,
+			PairingHelloSecurityStage);
 		return true;
 	}
-	if (m_bHelloReceived || message.strDeviceId != m_securePeer.strDeviceId)
+	if (message.strDeviceId != m_securePeer.strDeviceId)
 	{
-		fail(QStringLiteral("device_key_changed"), true);
+		fail(QStringLiteral("device_key_changed"), true,
+			PairingHelloSecurityStage);
 		return true;
 	}
 	if (!m_bOutgoing)
 	{
 		m_context.strRequestId = message.strRequestId;
 		m_context.requestedPermissions = message.permissions;
+		m_transaction.begin(message.strRequestId, m_nGeneration);
 	}
-	else if (message.strRequestId != m_context.strRequestId)
+	else if (!m_transaction.matches(message.strRequestId, m_nGeneration))
 	{
 		return false;
 	}
+	if (!m_transaction.markHelloReceived())
+		return false;
 	m_context.strRemoteDeviceName = message.strDeviceName;
-	m_bHelloReceived = true;
 	QString strReason;
-	if (!inspectPeerTrust(&strReason))
+	if (!inspectPeerTrust(message.strTrustCommitId, &strReason))
 	{
-		fail(strReason, true);
+		fail(strReason, true, PairingHelloSecurityStage);
 		return true;
 	}
-	if (!m_bHelloSent)
+	if (!m_transaction.helloSent())
 		sendHello();
 	m_pTimer->start(m_nApprovalTimeoutSeconds * 1000);
 	beginPairingOrAutomaticDecision();
@@ -230,33 +252,50 @@ bool KDeviceAuthenticationFlow::handleHello(const KTlsPairingMessage &message)
 bool KDeviceAuthenticationFlow::handlePairingDecision(
 	const KTlsPairingMessage &message)
 {
-	if (!m_bHelloReceived || message.strDeviceId != m_securePeer.strDeviceId)
+	if (!m_transaction.helloReceived()
+		|| message.strDeviceId != m_securePeer.strDeviceId)
 		return false;
 	if (!message.bAccepted)
 	{
-		clear(QStringLiteral("pairing_rejected"));
-		emit authenticationRejected(QStringLiteral("pairing_rejected"));
+		fail(QStringLiteral("pairing_rejected"), false,
+			UserApprovalSecurityStage);
 		return true;
 	}
-	m_remoteDecisionPermissions = message.permissions;
-	m_bRemoteDecisionReceived = true;
-	trySendAuthenticated();
+	if (!m_transaction.markRemoteDecision(message.permissions))
+		return false;
+	tryPrepare();
 	return true;
 }
 
-bool KDeviceAuthenticationFlow::handleAuthenticated(
+bool KDeviceAuthenticationFlow::handlePrepared(
 	const KTlsPairingMessage &message)
 {
 	const KPermissionScopes effective = m_bOutgoing
-		? m_remoteDecisionPermissions : m_localDecisionPermissions;
+		? m_transaction.remotePermissions() : m_transaction.localPermissions();
 	if (message.strDeviceId != m_securePeer.strDeviceId
 		|| message.permissions != effective)
 	{
-		fail(QStringLiteral("protocol_incompatible"), true);
+		fail(QStringLiteral("protocol_incompatible"), true,
+			PrepareSecurityStage);
 		return true;
 	}
-	m_bRemoteAuthenticatedReceived = true;
-	trySendAuthenticated();
+	if (!m_transaction.markRemotePrepared())
+		return false;
+	tryPrepare();
+	tryCommit();
+	return true;
+}
+
+bool KDeviceAuthenticationFlow::handleCommitted(
+	const KTlsPairingMessage &message)
+{
+	if (message.strDeviceId != m_securePeer.strDeviceId
+		|| message.permissions != m_context.effectivePermissions
+		|| !m_transaction.markRemoteCommitted())
+	{
+		return false;
+	}
+	tryCommit();
 	tryComplete();
 	return true;
 }
@@ -267,8 +306,7 @@ bool KDeviceAuthenticationFlow::loadTrust(QString *pErrorMessage)
 		return false;
 	m_localCertificate = m_pIdentityProvider->certificate();
 	QString strStoreError;
-	m_trustedDevices = m_pTrustedDeviceStore->loadDevices(&strStoreError);
-	if (!strStoreError.isEmpty())
+	if (!m_trustedDeviceService.load(&strStoreError))
 	{
 		if (pErrorMessage != nullptr)
 			*pErrorMessage = strStoreError;
@@ -290,9 +328,12 @@ bool KDeviceAuthenticationFlow::initializePeerContext(QString *pErrorMessage)
 	return true;
 }
 
-bool KDeviceAuthenticationFlow::inspectPeerTrust(QString *pReason)
+bool KDeviceAuthenticationFlow::inspectPeerTrust(
+	const QString &strPeerCommitId,
+	QString *pReason)
 {
-	KTrustedDevice *pTrusted = findPeerTrust();
+	const KTrustedDevice *pTrusted = m_trustedDeviceService.find(
+		m_context.strRemoteDeviceId);
 	if (pTrusted == nullptr)
 	{
 		m_context.bTrustedDevice = false;
@@ -309,7 +350,14 @@ bool KDeviceAuthenticationFlow::inspectPeerTrust(QString *pReason)
 		*pReason = QStringLiteral("device_key_changed");
 		return false;
 	}
-	m_context.bTrustedDevice = true;
+	m_context.bTrustedDevice = m_trustedDeviceService.isMutuallyTrusted(
+		m_context.strRemoteDeviceId, m_securePeer.spkiSha256,
+		strPeerCommitId);
+	if (!m_context.bTrustedDevice)
+	{
+		m_context.bRequestWithinTrust = false;
+		return true;
+	}
 	m_context.bRequestWithinTrust =
 		(m_context.requestedPermissions & ~pTrusted->permissionLimit).toInt() == 0;
 	return true;
@@ -323,17 +371,23 @@ void KDeviceAuthenticationFlow::sendHello()
 	hello.strDeviceId = m_localCertificate.strDeviceId;
 	hello.strDeviceName = m_strLocalDeviceName;
 	hello.strVerificationMethod = KTlsPairingVerification::verificationMethod();
+	hello.strTrustCommitId = m_trustedDeviceService.mutualCommitId(
+		m_context.strRemoteDeviceId, m_securePeer.spkiSha256);
 	hello.permissions = m_context.requestedPermissions;
-	m_bHelloSent = true;
+	if (!m_transaction.markHelloSent())
+		return;
 	emit messageReady(hello);
 }
 
 void KDeviceAuthenticationFlow::beginPairingOrAutomaticDecision()
 {
-	if (!m_bHelloReceived || m_bLocalDecisionSent || m_bPairingPromptVisible)
+	if (!m_transaction.helloReceived()
+		|| m_transaction.localPermissions().toInt() != 0
+		|| m_bPairingPromptVisible)
 		return;
-	const KTrustedDevice *pTrusted = findPeerTrust();
-	if (pTrusted != nullptr)
+	const KTrustedDevice *pTrusted = m_trustedDeviceService.find(
+		m_context.strRemoteDeviceId);
+	if (m_context.bTrustedDevice && pTrusted != nullptr)
 	{
 		const KPermissionScopes permissions = m_bOutgoing
 			? m_context.requestedPermissions
@@ -344,7 +398,8 @@ void KDeviceAuthenticationFlow::beginPairingOrAutomaticDecision()
 	QString strError;
 	if (!createPairingVerification(&strError))
 	{
-		fail(QStringLiteral("channel_binding_unavailable"), true);
+		fail(QStringLiteral("channel_binding_unavailable"), true,
+			PairingHelloSecurityStage, strError);
 		return;
 	}
 	m_bPairingPromptVisible = true;
@@ -392,56 +447,105 @@ bool KDeviceAuthenticationFlow::createPairingVerification(QString *pErrorMessage
 void KDeviceAuthenticationFlow::sendPairingDecision(bool bAccepted,
 	KPermissionScopes permissions)
 {
+	if (!bAccepted || !m_transaction.markLocalDecision(permissions))
+		return;
 	KTlsPairingMessage decision;
 	decision.type = DecisionTlsPairingMessageType;
 	decision.strRequestId = m_context.strRequestId;
 	decision.strDeviceId = m_localCertificate.strDeviceId;
 	decision.bAccepted = bAccepted;
 	decision.permissions = permissions;
-	m_localDecisionPermissions = permissions;
-	m_bLocalDecisionSent = true;
 	emit messageReady(decision);
-	trySendAuthenticated();
+	tryPrepare();
 }
 
-void KDeviceAuthenticationFlow::trySendAuthenticated()
+void KDeviceAuthenticationFlow::tryPrepare()
 {
-	if (!m_bLocalDecisionSent || !m_bRemoteDecisionReceived
-		|| m_bLocalAuthenticatedSent)
+	if (!m_transaction.decisionsComplete()
+		|| m_transaction.localPrepared())
 	{
 		return;
 	}
 	const KPermissionScopes effective = m_bOutgoing
-		? m_remoteDecisionPermissions : m_localDecisionPermissions;
+		? m_transaction.remotePermissions() : m_transaction.localPermissions();
 	if (!effective.testFlag(ViewScreenPermissionScope))
 	{
-		fail(QStringLiteral("pairing_rejected"), true);
+		fail(QStringLiteral("pairing_rejected"), true,
+			UserApprovalSecurityStage);
 		return;
 	}
+	m_context.effectivePermissions = effective;
+	if (!m_context.bTrustedDevice)
+	{
+		QString strError;
+		if (!m_trustedDeviceService.prepare(m_context.strRequestId,
+			m_securePeer, m_context.strRemoteDeviceName, effective, &strError))
+		{
+			fail(QStringLiteral("identity_unavailable"), true,
+				PrepareSecurityStage, strError);
+			return;
+		}
+	}
+	if (!m_transaction.markLocalPrepared())
+		return;
 	KTlsPairingMessage ready;
 	ready.type = ReadyTlsPairingMessageType;
 	ready.strRequestId = m_context.strRequestId;
 	ready.strDeviceId = m_localCertificate.strDeviceId;
 	ready.permissions = effective;
-	m_context.effectivePermissions = effective;
-	m_bLocalAuthenticatedSent = true;
 	emit messageReady(ready);
+	tryCommit();
+	tryComplete();
+}
+
+void KDeviceAuthenticationFlow::tryCommit()
+{
+	if (!m_transaction.preparedComplete()
+		|| m_transaction.localCommitted())
+	{
+		return;
+	}
+	if (!m_context.bTrustedDevice)
+	{
+		QString strError;
+		if (!m_trustedDeviceService.commit(m_context.strRequestId, &strError))
+		{
+			fail(QStringLiteral("identity_unavailable"), true,
+				CommitSecurityStage, strError);
+			return;
+		}
+	}
+	if (!m_transaction.markLocalCommitted())
+		return;
+	KTlsPairingMessage committed;
+	committed.type = CommittedTlsPairingMessageType;
+	committed.strRequestId = m_context.strRequestId;
+	committed.strDeviceId = m_localCertificate.strDeviceId;
+	committed.permissions = m_context.effectivePermissions;
+	emit messageReady(committed);
 	tryComplete();
 }
 
 void KDeviceAuthenticationFlow::tryComplete()
 {
-	if (!m_bLocalAuthenticatedSent || !m_bRemoteAuthenticatedReceived
-		|| m_bAuthenticated)
+	if (!m_transaction.committedComplete() || m_bAuthenticated)
 	{
 		return;
 	}
 	QString strError;
-	if (!persistPeerTrust(&strError))
+	if (!m_trustedDeviceService.updateAuthenticated(
+		m_context.strRemoteDeviceId, m_context.strRemoteDeviceName,
+		m_securePeer.certificateSha256, &strError))
 	{
-		fail(QStringLiteral("identity_unavailable"), true);
+		fail(QStringLiteral("identity_unavailable"), true,
+			CommitSecurityStage, strError);
 		return;
 	}
+	if (!m_transaction.markCompleted())
+		return;
+	m_trustedDeviceService.complete(m_context.strRequestId);
+	m_context.bTrustedDevice = true;
+	m_context.bRequestWithinTrust = true;
 	m_bAuthenticated = true;
 	m_bActive = false;
 	m_pTimer->stop();
@@ -461,31 +565,20 @@ void KDeviceAuthenticationFlow::tryComplete()
 	emit authenticationSucceeded(m_context);
 }
 
-bool KDeviceAuthenticationFlow::persistPeerTrust(QString *pErrorMessage)
+void KDeviceAuthenticationFlow::rollbackPairing(const QString &strReason)
 {
-	KTrustedDevice *pTrusted = findPeerTrust();
-	const qint64 nNowMs = QDateTime::currentMSecsSinceEpoch();
-	if (pTrusted == nullptr)
+	if (!m_trustedDeviceService.hasTransaction(m_context.strRequestId))
+		return;
+	QString strRollbackError;
+	if (!m_trustedDeviceService.rollback(m_context.strRequestId,
+		&strRollbackError))
 	{
-		KTrustedDevice trusted;
-		trusted.strDeviceId = m_context.strRemoteDeviceId;
-		trusted.spkiSha256 = m_securePeer.spkiSha256;
-		trusted.certificateSha256 = m_securePeer.certificateSha256;
-		trusted.strFingerprint = m_context.strRemoteFingerprint;
-		trusted.strAlias = m_context.strRemoteDeviceName;
-		trusted.strAdvertisedName = m_context.strRemoteDeviceName;
-		trusted.permissionLimit = m_context.effectivePermissions;
-		trusted.nPairedAtMs = nNowMs;
-		trusted.nLastAuthenticatedAtMs = nNowMs;
-		m_trustedDevices.append(trusted);
+		KSessionTraceLogger::write(m_bOutgoing ? QStringLiteral("controller")
+				: QStringLiteral("controlled"),
+			QStringLiteral("pairing_rollback_failed"), QStringLiteral("error"), -1,
+			QStringLiteral("requestId=%1 reason=%2 error=%3")
+				.arg(m_context.strRequestId, strReason, strRollbackError));
 	}
-	else
-	{
-		pTrusted->strAdvertisedName = m_context.strRemoteDeviceName;
-		pTrusted->certificateSha256 = m_securePeer.certificateSha256;
-		pTrusted->nLastAuthenticatedAtMs = nNowMs;
-	}
-	return m_pTrustedDeviceStore->saveDevices(m_trustedDevices, pErrorMessage);
 }
 
 QString KDeviceAuthenticationFlow::localFingerprint() const
@@ -503,50 +596,52 @@ QString KDeviceAuthenticationFlow::controlledFingerprint() const
 	return m_bOutgoing ? m_context.strRemoteFingerprint : localFingerprint();
 }
 
-KTrustedDevice *KDeviceAuthenticationFlow::findPeerTrust()
-{
-	for (KTrustedDevice &device : m_trustedDevices)
-	{
-		if (device.strDeviceId == m_context.strRemoteDeviceId)
-			return &device;
-	}
-	return nullptr;
-}
-
-const KTrustedDevice *KDeviceAuthenticationFlow::findPeerTrust() const
-{
-	for (const KTrustedDevice &device : m_trustedDevices)
-	{
-		if (device.strDeviceId == m_context.strRemoteDeviceId)
-			return &device;
-	}
-	return nullptr;
-}
-
 bool KDeviceAuthenticationFlow::isSourceRateLimited()
 {
-	QVector<qint64> &failures = m_sourceFailures[m_strSourceAddress];
-	const qint64 nCutoff = QDateTime::currentMSecsSinceEpoch() - kSourceFailureWindowMs;
-	while (!failures.isEmpty() && failures.first() < nCutoff)
-		failures.removeFirst();
-	return failures.size() >= kMaximumSourceFailures;
+	return m_sourceFailureTracker.isRateLimited(m_strSourceAddress,
+		QDateTime::currentMSecsSinceEpoch());
 }
 
 void KDeviceAuthenticationFlow::recordSourceFailure()
 {
-	if (!m_bOutgoing && !m_strSourceAddress.isEmpty())
-		m_sourceFailures[m_strSourceAddress].append(QDateTime::currentMSecsSinceEpoch());
+	if (m_bOutgoing || m_strSourceAddress.isEmpty())
+		return;
+	m_sourceFailureTracker.recordFailure(m_strSourceAddress,
+		QDateTime::currentMSecsSinceEpoch());
 }
 
 void KDeviceAuthenticationFlow::fail(const QString &strReason,
-	bool bNotifyRemote)
+	bool bNotifyRemote,
+	KSecurityStage stage,
+	const QString &strTechnicalMessage)
 {
+	KSecurityStatus status = KSecurityStatus::fromProtocolReason(
+		strReason, stage, strTechnicalMessage);
+	if (!status.isValid())
+	{
+		status = KSecurityStatus::fromProtocolReason(QStringLiteral("cancelled"),
+			stage, strTechnicalMessage.isEmpty() ? strReason : strTechnicalMessage);
+	}
+	status.strRequestId = m_context.strRequestId;
+	status.nGeneration = m_nGeneration;
+	status.bOutgoing = m_bOutgoing;
+	rollbackPairing(strReason);
+	m_transaction.markFailed();
+	if (ShouldRecordSourceFailure(strReason))
+		recordSourceFailure();
 	KSessionTraceLogger::write(m_bOutgoing ? QStringLiteral("controller")
 			: QStringLiteral("controlled"),
 		QStringLiteral("authentication"), QStringLiteral("rejected"), -1,
-		QStringLiteral("reason=%1 deviceId=%2 fingerprint=%3")
-			.arg(strReason, m_context.strRemoteDeviceId,
-				QString::fromLatin1(m_securePeer.spkiSha256.toHex().left(12))));
+		QStringLiteral("requestId=%1 generation=%2 domain=%3 code=%4 stage=%5 "
+			"deviceId=%6 fingerprint=%7 technical=%8")
+			.arg(m_context.strRequestId)
+			.arg(m_nGeneration)
+			.arg(KSecurityStatus::domainName(status.domain))
+			.arg(KSecurityStatus::codeName(status.code))
+			.arg(KSecurityStatus::stageName(status.stage))
+			.arg(m_context.strRemoteDeviceId)
+			.arg(QString::fromLatin1(m_securePeer.spkiSha256.toHex().left(12)))
+			.arg(status.strTechnicalMessage));
 	const QString strRequestId = m_context.strRequestId;
 	if (bNotifyRemote && !strRequestId.isEmpty())
 	{
@@ -558,12 +653,13 @@ void KDeviceAuthenticationFlow::fail(const QString &strReason,
 		emit messageReady(rejected);
 	}
 	clear(strReason);
-	emit authenticationRejected(strReason);
+	emit authenticationRejected(status);
 }
 
 void KDeviceAuthenticationFlow::clear(const QString &strReason,
 	bool bKeepPeerIdentity)
 {
+	rollbackPairing(strReason);
 	const QString strRequestId = m_context.strRequestId;
 	m_pTimer->stop();
 	if (m_bPairingPromptVisible)
@@ -575,17 +671,10 @@ void KDeviceAuthenticationFlow::clear(const QString &strReason,
 	m_strLocalDeviceName.clear();
 	m_strSourceAddress.clear();
 	m_strVerificationCode.clear();
-	m_localDecisionPermissions = KPermissionScopes();
-	m_remoteDecisionPermissions = KPermissionScopes();
+	m_transaction.reset();
 	m_nGeneration = 0;
 	m_bOutgoing = false;
 	m_bActive = false;
 	m_bAuthenticated = false;
-	m_bHelloSent = false;
-	m_bHelloReceived = false;
 	m_bPairingPromptVisible = false;
-	m_bLocalDecisionSent = false;
-	m_bRemoteDecisionReceived = false;
-	m_bLocalAuthenticatedSent = false;
-	m_bRemoteAuthenticatedReceived = false;
 }

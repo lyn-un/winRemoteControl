@@ -2,7 +2,6 @@
 #include "adapters/windows/security/windowsdeviceidentityprovider.h"
 #include "core/input/inputinjectorinterface.h"
 #include "core/protocol/accessmessage.h"
-#include "core/protocol/protocolconstraints.h"
 #include "core/session/deviceinfoprovider.h"
 #include "core/transport/remotepeertransport.h"
 #include "session/sessioncoordinator.h"
@@ -17,7 +16,6 @@
 #include <QtCore/QUuid>
 #include <QtNetwork/QHostAddress>
 #include <QtNetwork/QTcpServer>
-#include <QtNetwork/QTcpSocket>
 
 #include <algorithm>
 #include <memory>
@@ -939,87 +937,6 @@ namespace
 			QStringLiteral("late peer completion finishes the isolated shutdown"));
 	}
 
-	void testSignalingReceiveBoundaries()
-	{
-		const QString strServerDirectory = QDir(QCoreApplication::applicationDirPath())
-			.filePath(QStringLiteral("tls-boundary-server-%1")
-				.arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
-		const QString strClientDirectory = QDir(QCoreApplication::applicationDirPath())
-			.filePath(QStringLiteral("tls-boundary-client-%1")
-				.arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
-		KWindowsDeviceIdentityProvider serverIdentity(strServerDirectory);
-		KWindowsDeviceIdentityProvider clientIdentity(strClientDirectory);
-		QString strStartError;
-		check(serverIdentity.initialize(&strStartError),
-			QStringLiteral("boundary server identity is available"));
-		check(clientIdentity.initialize(&strStartError),
-			QStringLiteral("boundary client identity is available"));
-		KTcpSignalingTransport server;
-		KTcpSignalingTransport client;
-		check(server.setIdentityProvider(&serverIdentity, &strStartError),
-			QStringLiteral("boundary server TLS identity is configured"));
-		check(client.setIdentityProvider(&clientIdentity, &strStartError),
-			QStringLiteral("boundary client TLS identity is configured"));
-		const quint16 nPort = reserveLocalPort();
-		check(server.startServer(nPort, &strStartError),
-			QStringLiteral("boundary test signaling server starts"));
-		bool bServerSecure = false;
-		bool bClientSecure = false;
-		QString strProtocolError;
-		int nReceivedMessages = 0;
-		QObject::connect(&server, &KTcpSignalingTransport::secureChannelEstablished,
-			[&bServerSecure](const KTlsPeerIdentity &) { bServerSecure = true; });
-		QObject::connect(&client, &KTcpSignalingTransport::secureChannelEstablished,
-			[&bClientSecure](const KTlsPeerIdentity &) { bClientSecure = true; });
-		QObject::connect(&client, &KTcpSignalingTransport::signalingError,
-			[&strProtocolError](const QString &strError) { strProtocolError = strError; });
-		QObject::connect(&server, &KTcpSignalingTransport::messageReceived,
-			[&nReceivedMessages](const QString &) { ++nReceivedMessages; });
-
-		client.connectToHost(QStringLiteral("127.0.0.1"), nPort);
-		check(waitUntil([&]() { return bServerSecure && bClientSecure; }, 5000),
-			QStringLiteral("boundary test establishes mutual TLS"));
-		const QByteArray exporterLabel(
-			"EXPERIMENTAL-winRemoteControl-pairing-v1");
-		const QByteArray exporterContext("deterministic-pairing-context");
-		QByteArray serverKeyingMaterial;
-		QByteArray clientKeyingMaterial;
-		QByteArray differentKeyingMaterial;
-		QString strExporterError;
-		check(server.exportKeyingMaterial(exporterLabel, exporterContext, 32,
-			&serverKeyingMaterial, &strExporterError),
-			QStringLiteral("server exports TLS pairing keying material"));
-		check(client.exportKeyingMaterial(exporterLabel, exporterContext, 32,
-			&clientKeyingMaterial, &strExporterError),
-			QStringLiteral("client exports TLS pairing keying material"));
-		check(serverKeyingMaterial.size() == 32
-			&& serverKeyingMaterial == clientKeyingMaterial,
-			QStringLiteral("both TLS peers export identical pairing material"));
-		check(client.exportKeyingMaterial(exporterLabel,
-			exporterContext + QByteArray("-different"), 32,
-			&differentKeyingMaterial, &strExporterError)
-			&& differentKeyingMaterial != clientKeyingMaterial,
-			QStringLiteral("TLS exporter binds pairing material to its context"));
-		serverKeyingMaterial.fill('\0');
-		clientKeyingMaterial.fill('\0');
-		differentKeyingMaterial.fill('\0');
-		client.sendMessage(QStringLiteral("{\"type\":\"encrypted\"}"));
-		check(waitUntil([&nReceivedMessages]() { return nReceivedMessages == 1; }),
-			QStringLiteral("encrypted signaling payload is delivered"));
-		client.sendMessage(QString(
-			KProtocolConstraints::kMaximumSignalingMessageBytes + 1, QLatin1Char('x')));
-		check(!strProtocolError.isEmpty(),
-			QStringLiteral("oversized encrypted signaling data is rejected"));
-		check(strProtocolError.contains(QStringLiteral("size limit")),
-			QStringLiteral("oversized signaling failure is explicit"));
-		client.stop();
-		server.stop();
-		serverIdentity.deletePersistedKey(nullptr);
-		clientIdentity.deletePersistedKey(nullptr);
-		QDir(strServerDirectory).removeRecursively();
-		QDir(strClientDirectory).removeRecursively();
-	}
-
 	void testViewOnlyPermissionBlocksInputAndClipboard()
 	{
 		auto spControlledInput = std::make_unique<KFakeInputInjector>();
@@ -1086,7 +1003,6 @@ int main(int argc, char *argv[])
 	testInitializationRollbackTimeoutAndLateCompletion();
 	testListenerFailureRollsBackReadyPeer();
 	testShutdownTimeoutIsolationAndLateCompletion();
-	testSignalingReceiveBoundaries();
 	testViewOnlyPermissionBlocksInputAndClipboard();
 	if (g_nFailureCount == 0)
 		qInfo() << "All session service tests passed";

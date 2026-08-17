@@ -43,6 +43,8 @@ if(WRC_BUILD_APP)
 			"Disable WRC_BUILD_APP for a dependency-light core build.")
 	endif()
 	find_package(Qt6 REQUIRED COMPONENTS Widgets Gui Network)
+elseif(WIN32 AND WRC_BUILD_TESTS)
+	find_package(Qt6 REQUIRED COMPONENTS Network)
 endif()
 
 include(CTest)
@@ -121,6 +123,10 @@ add_library(wrc_core STATIC
 	src/core/security/deviceidentityprovider.h
 	src/core/security/securitycanonicalwriter.cpp
 	src/core/security/securitycanonicalwriter.h
+	src/core/security/securitystatus.cpp
+	src/core/security/securitystatus.h
+	src/core/security/sourcefailuretracker.cpp
+	src/core/security/sourcefailuretracker.h
 	src/core/security/tlspairingverification.cpp
 	src/core/security/tlspairingverification.h
 	src/core/security/trusteddevice.h
@@ -238,6 +244,50 @@ target_link_libraries(wrc_session_contract PUBLIC
 	Qt6::Core
 )
 
+if(WIN32 AND (WRC_BUILD_APP OR WRC_BUILD_TESTS))
+add_library(wrc_signaling_adapter STATIC
+	src/adapters/signaling/schanneltlsengine.cpp
+	src/adapters/signaling/schanneltlsengine.h
+	src/adapters/signaling/tcpsignalingtransport.cpp
+	src/adapters/signaling/tcpsignalingtransport.h
+)
+
+target_include_directories(wrc_signaling_adapter PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_compile_definitions(wrc_signaling_adapter PRIVATE SECURITY_WIN32)
+
+target_link_libraries(wrc_signaling_adapter PUBLIC
+	wrc_core
+	wrc_diagnostics
+	Qt6::Core
+	Qt6::Network
+	secur32
+	crypt32
+)
+endif()
+
+add_library(wrc_authentication_application STATIC
+	src/session/deviceauthenticationflow.cpp
+	src/session/deviceauthenticationflow.h
+	src/session/pairingtransaction.cpp
+	src/session/pairingtransaction.h
+	src/session/trusteddeviceservice.cpp
+	src/session/trusteddeviceservice.h
+)
+
+target_include_directories(wrc_authentication_application PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_authentication_application PUBLIC
+	wrc_core
+	wrc_protocol
+	wrc_diagnostics
+	Qt6::Core
+)
+
 if(WRC_BUILD_APP)
 add_library(wrc_windows_adapters STATIC
 	src/adapters/clipboard/clipboardchangefilter.cpp
@@ -271,8 +321,6 @@ target_link_libraries(wrc_windows_adapters PUBLIC
 add_library(wrc_session_application STATIC
 	src/input/inputinjector.cpp
 	src/input/inputinjector.h
-	src/session/deviceauthenticationflow.cpp
-	src/session/deviceauthenticationflow.h
 	src/session/accessapprovalcontroller.cpp
 	src/session/accessapprovalcontroller.h
 	src/session/accesssessionflow.cpp
@@ -303,15 +351,9 @@ target_link_libraries(wrc_session_application PUBLIC
 	wrc_core
 	wrc_protocol
 	wrc_session_contract
+	wrc_authentication_application
 	wrc_diagnostics
 	Qt6::Core
-)
-
-add_library(wrc_signaling_adapter STATIC
-	src/adapters/signaling/schanneltlsengine.cpp
-	src/adapters/signaling/schanneltlsengine.h
-	src/adapters/signaling/tcpsignalingtransport.cpp
-	src/adapters/signaling/tcpsignalingtransport.h
 )
 
 add_library(wrc_discovery_application STATIC
@@ -493,21 +535,6 @@ target_link_libraries(wrc_udp_discovery_adapter PUBLIC
 	Qt6::Core
 	Qt6::Network
 	ws2_32
-)
-
-target_include_directories(wrc_signaling_adapter PUBLIC
-	"${CMAKE_CURRENT_SOURCE_DIR}/src"
-)
-
-target_compile_definitions(wrc_signaling_adapter PRIVATE SECURITY_WIN32)
-
-target_link_libraries(wrc_signaling_adapter PUBLIC
-	wrc_core
-	wrc_diagnostics
-	Qt6::Core
-	Qt6::Network
-	secur32
-	crypt32
 )
 
 add_library(wrc_ffmpeg_adapter STATIC
@@ -783,6 +810,22 @@ if(WRC_BUILD_TESTS)
 	set_tests_properties(wrc_device_identity_tests PROPERTIES
 		ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
 	)
+
+	add_executable(wrc_schannel_transport_tests
+		tests/integration/schanneltransporttest.cpp
+	)
+	target_link_libraries(wrc_schannel_transport_tests PRIVATE
+		wrc_signaling_adapter
+		wrc_windows_security_adapter
+		Qt6::Core
+		Qt6::Network
+	)
+	add_test(NAME wrc_schannel_transport_tests
+		COMMAND wrc_schannel_transport_tests)
+	set_tests_properties(wrc_schannel_transport_tests PROPERTIES
+		ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Network>"
+		TIMEOUT 15
+	)
 	endif()
 
 	add_executable(wrc_protocol_tests
@@ -873,6 +916,16 @@ if(WRC_BUILD_TESTS)
 		PROPERTIES ENVIRONMENT_MODIFICATION
 			"Path=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
 	)
+
+	add_executable(wrc_device_authentication_tests
+		tests/unit/deviceauthenticationtest.cpp
+	)
+	target_link_libraries(wrc_device_authentication_tests PRIVATE
+		wrc_authentication_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_device_authentication_tests
+		COMMAND wrc_device_authentication_tests)
 
 	if(WRC_BUILD_APP)
 	add_executable(wrc_input_injector_tests
@@ -981,16 +1034,6 @@ if(WRC_BUILD_TESTS)
 		Qt6::Core
 	)
 	add_test(NAME wrc_access_approval_tests COMMAND wrc_access_approval_tests)
-
-	add_executable(wrc_device_authentication_tests
-		tests/unit/deviceauthenticationtest.cpp
-	)
-	target_link_libraries(wrc_device_authentication_tests PRIVATE
-		wrc_session_application
-		Qt6::Core
-	)
-	add_test(NAME wrc_device_authentication_tests
-		COMMAND wrc_device_authentication_tests)
 
 	add_executable(wrc_session_command_dispatcher_tests
 		tests/unit/sessioncommanddispatchertest.cpp

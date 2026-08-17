@@ -21,20 +21,33 @@ sequenceDiagram
     Note over C,H: "双方分别确认数字一致"
     C->>H: tlsPairingDecision（控制端确认）
     H->>C: tlsPairingDecision（被控端确认及权限上限）
-    C->>H: tlsPairingReady
-    H->>C: tlsPairingReady
+    C->>H: tlsPairingReady（Pending 已原子写入）
+    H->>C: tlsPairingReady（Pending 已原子写入）
+    C->>H: tlsPairingCommitted（本地已提交）
+    H->>C: tlsPairingCommitted（本地已提交）
+    Note over C,H: 双方都收到 Committed 后才发布 authenticationSucceeded
     C->>H: accessRequest（TLS 内）
 ```
 
 未知设备的 `tlsPairingHello` 必须声明 `verificationMethod=tls-exporter-numeric-v1`。两端使用 Schannel 的 TLS Keying Material Exporter，标签固定为 `EXPERIMENTAL-winRemoteControl-pairing-v1`；上下文按固定角色顺序包含协议版本、Access `requestId`、双方设备 UUID 和 SPKI SHA-256。导出结果的前 32 位映射为保留前导零的六位数字，例如 `482 731`。导出材料和数字均不通过协议发送，也不写入日志或存储。
 
-两端均确认数字一致后才保存信任关系；控制端只确认身份，被控端随后选择可信权限上限。拒绝、超时、断线、TLS Exporter 不可用或写入失败不留下半配对记录。完整指纹格式仍为 `SHA256:<Base64(SHA256(SPKI DER))>`，但仅放在折叠安全详情中。后续连接比较设备 UUID 与固定 SPKI；同一 UUID 更换公钥时以 `device_key_changed` 拒绝，必须撤销后重新配对。
+两端均确认数字一致后进入独立的 `KPairingTransaction`。可信记录先以 `Pending` 状态和本次 `requestId` 原子写入；双方交换 `Ready` 后再提交为 `Mutual` 并交换 `Committed`。只有双方都收到同一事务的 `Committed`，才发布认证成功。拒绝、超时、断线、TLS Exporter 不可用或任一端写入失败会回滚本次事务；更新已有记录时恢复完整旧记录。程序启动时会清理崩溃遗留的 `Pending`，而 `Mutual` 记录只有在下一次握手中双方声明相同提交 ID 才可自动认证，因此单端提交不能独自形成有效信任。
+
+完整指纹格式仍为 `SHA256:<Base64(SHA256(SPKI DER))>`，但仅放在折叠安全详情中。后续连接比较设备 UUID、固定 SPKI 与双方提交 ID；同一 UUID 更换公钥时以 `device_key_changed` 拒绝，必须撤销后重新配对。
 
 `tlsPairing*` 只负责交换验证方法、首次用户确认、权限选择和双方提交结果，不携带配对数字、TLS 导出材料、公钥、nonce、自定义 proof、配对秘密或签名。设备持有证明、加密、完整性、顺序及防重放全部由 Schannel TLS 提供。系统不支持 TLS Exporter 时明确返回 `channel_binding_unavailable`，不会降级为人工比较指纹。
 
 ## 信任库迁移
 
-可信设备库格式为 v2，记录 SPKI SHA-256 与证书 SHA-256。旧自定义认证协议建立的 v1 信任不会继承：首次读取时原文件备份为 `trusted_devices.json.v1.bak`，随后创建空 v2 信任库，设备需要重新配对。私钥和证书私钥从不写入该文件。
+可信设备库格式为 v3，额外记录 `commitState` 与 `pairingTransactionId`。v1/v2 信任不能证明双方完成新提交协议：首次读取时原文件分别备份为 `.v1.bak`/`.v2.bak`，随后创建空 v3 信任库并要求重新配对。私钥和证书私钥从不写入该文件。
+
+正式文件始终通过同目录临时文件和 `QSaveFile`/`ReplaceFileW` 原子替换；禁止直接截断旧文件。临时写入或替换失败时保留上一份有效、已签名的信任库。
+
+## 资源限制与错误边界
+
+未认证连接的固定前导、TLS 握手密文、已加密信令和 socket 发送队列都有独立硬上限。监听 backlog、待处理连接和来源失败表也有固定容量；恶意握手失败进入十分钟滑动窗口，本机证书库或文件系统错误不会误封远端来源。
+
+安全失败由 `KSecurityStatus` 表达，包含稳定的 domain、code、stage、是否可重试、是否需要重新配对及内部技术信息。协议只发送有限拒绝原因；Win32/Schannel 细节只写本地诊断日志。
 
 ## 权限
 

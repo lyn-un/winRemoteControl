@@ -122,7 +122,7 @@ foundation -> protocol/core <- adapters
 
 设备身份与信令保护已经纳入基础架构：每个 Windows 用户拥有 CNG ECDSA P-256 非导出私钥和自签名设备证书；信令 TCP 在固定版本前导后必须完成 Schannel TLS 1.2/1.3 双向认证。Access、SDP 和 ICE 均位于 TLS 内，不再维护自定义 challenge/proof 或逐条信令签名协议。
 
-首次连接时，两端使用 Schannel TLS Exporter 和包含双方设备 UUID、SPKI 及请求 ID 的规范化上下文生成相同的六位校验码。双方分别确认数字一致后，被控端再选择权限上限，随后才将设备 UUID、SPKI、证书摘要和权限写入签名的 v2 信任库；后续连接直接固定 UUID 与 SPKI。完整 SHA-256 SPKI 只在折叠的安全详情中提供。旧 v1 信任不迁移授权，只备份后清空并要求重新配对。
+首次连接时，两端使用 Schannel TLS Exporter 和包含双方设备 UUID、SPKI 及请求 ID 的规范化上下文生成相同的六位校验码。双方分别确认数字一致后，被控端再选择权限上限，随后通过 Pending、Ready、Committed 三阶段事务将设备 UUID、SPKI、证书摘要和权限写入签名的 v3 信任库；只有双方提交完成才发布认证成功。后续连接固定 UUID、SPKI 与双方共同提交 ID。完整 SHA-256 SPKI 只在折叠的安全详情中提供。旧 v1/v2 信任不迁移授权，只备份后清空并要求重新配对。
 
 `autoAccept` 只适用于已固定、未撤销且请求权限未超过信任上限的设备。最终权限仍由请求、信任上限、本次批准和能力协商取交集，并在采集、输入、剪贴板和终端的 C++ 入口强制检查。终端保留每次打开的独立审批。
 

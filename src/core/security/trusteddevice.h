@@ -8,6 +8,12 @@
 #include <QtCore/QString>
 #include <QtCore/QVector>
 
+enum KTrustedDeviceCommitState
+{
+	PendingTrustedDeviceCommitState,
+	MutualTrustedDeviceCommitState
+};
+
 struct KTrustedDevice
 {
 	QString strDeviceId;
@@ -20,6 +26,8 @@ struct KTrustedDevice
 	qint64 nPairedAtMs = 0;
 	qint64 nLastAuthenticatedAtMs = 0;
 	bool bRevoked = false;
+	KTrustedDeviceCommitState commitState = MutualTrustedDeviceCommitState;
+	QString strPairingTransactionId;
 };
 
 Q_DECLARE_METATYPE(KTrustedDevice)

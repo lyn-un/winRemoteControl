@@ -83,15 +83,30 @@ public:
 		m_pIdentityProvider = pIdentityProvider;
 	}
 	QVector<KTrustedDevice> loadDevices(QString *) override { return m_devices; }
-	bool saveDevices(const QVector<KTrustedDevice> &devices, QString *) override
+	bool saveDevices(const QVector<KTrustedDevice> &devices, QString *pErrorMessage) override
 	{
+		++m_nSaveCount;
+		if (m_pIdentityProvider == nullptr
+			|| (m_nFailOnSaveCall > 0 && m_nSaveCount == m_nFailOnSaveCall))
+		{
+			if (pErrorMessage != nullptr)
+				*pErrorMessage = QStringLiteral("Injected trusted-device save failure");
+			return false;
+		}
 		m_devices = devices;
-		return m_pIdentityProvider != nullptr;
+		return true;
 	}
+
+	void setDevices(const QVector<KTrustedDevice> &devices) { m_devices = devices; }
+	const QVector<KTrustedDevice> &devices() const { return m_devices; }
+	void failOnSaveCall(int nSaveCall) { m_nFailOnSaveCall = nSaveCall; }
+	int saveCount() const { return m_nSaveCount; }
 
 private:
 	KDeviceIdentityProvider *m_pIdentityProvider = nullptr;
 	QVector<KTrustedDevice> m_devices;
+	int m_nSaveCount = 0;
+	int m_nFailOnSaveCall = 0;
 };
 
 class KFakeKeyingMaterialExporter final : public KKeyingMaterialExporter

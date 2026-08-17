@@ -2,12 +2,15 @@
 #define _WINREMOTECONTROL_TCPSIGNALINGTRANSPORT_H_
 
 #include "adapters/signaling/schanneltlsengine.h"
+#include "core/security/sourcefailuretracker.h"
 #include "core/transport/signalingtransport.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QElapsedTimer>
+#include <QtCore/QHash>
 #include <QtCore/QObject>
 #include <QtCore/QString>
+#include <QtCore/QVector>
 
 class KDeviceIdentityProvider;
 class QTcpServer;
@@ -63,14 +66,19 @@ private:
 
 	void setSocket(QTcpSocket *pSocket);
 	void closeSocket();
-	void writeRaw(const QByteArray &data);
+	bool writeRaw(const QByteArray &data, QString *pErrorMessage = nullptr);
+	qsizetype maximumEncryptedBufferBytes() const;
+	bool readAvailableData(QString *pErrorMessage);
 	bool beginTls(bool bServer, QString *pErrorMessage);
 	bool processPreface(QString *pErrorMessage);
 	bool processTls(QString *pErrorMessage);
 	bool processPlaintext(QString *pErrorMessage);
 	void completeSecureConnection();
 	void failOutgoingConnection(const QString &strReason, const QString &strMessage);
-	void rejectPeerData(const QString &strMessage, bool bTlsFailure = false);
+	void rejectPeerData(const QString &strMessage, bool bTlsFailure = false,
+		bool bCountSourceFailure = false);
+	bool isSourceRateLimited(const QString &strSourceAddress);
+	void recordSourceFailure(const QString &strSourceAddress);
 
 	QTcpServer *m_pServer = nullptr;
 	QTcpSocket *m_pSocket = nullptr;
@@ -81,6 +89,7 @@ private:
 	QByteArray m_encryptedBuffer;
 	QByteArray m_plaintextBuffer;
 	QByteArray m_serverBusyMessage;
+	KSourceFailureTracker m_sourceFailureTracker;
 	QElapsedTimer m_connectElapsedTimer;
 	ConnectionStage m_stage = IdleStage;
 	bool m_bOutgoing = false;

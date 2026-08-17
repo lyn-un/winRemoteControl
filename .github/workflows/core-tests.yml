@@ -37,3 +37,20 @@ jobs:
         run: cmake --build --preset terminal-tests
       - name: Run terminal tests
         run: ctest --preset terminal-tests
+
+  security-tests:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          cache: true
+      - name: Configure Schannel security targets
+        run: cmake --preset security-tests
+      - name: Build Schannel security tests
+        run: cmake --build --preset security-tests
+      - name: Run Schannel security tests
+        run: ctest --preset security-tests

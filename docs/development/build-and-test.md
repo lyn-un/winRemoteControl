@@ -54,6 +54,19 @@ cmake --build --preset core-tests
 ctest --preset core-tests
 ```
 
+## Schannel 安全链路测试
+
+安全 preset 只构建协议、设备身份、配对事务和真实 Schannel TCP 测试，不依赖 WebRTC、FFmpeg 或 WebView2：
+
+```cmd
+set QTDIR=D:\Qt\6.10.2\msvc2022_64
+cmake --preset security-tests
+cmake --build --preset security-tests
+ctest --preset security-tests
+```
+
+GitHub Actions 的 `security-tests` job 会在 `windows-2022` 上执行真实客户端/服务端 mTLS 握手、对端证书提取、TLS Exporter、加密信令收发及未认证输入上限测试；每个测试有 30 秒超时。
+
 ## 测试结构
 
 - Codec：边界、畸形字段、版本、大小限制和往返编码。

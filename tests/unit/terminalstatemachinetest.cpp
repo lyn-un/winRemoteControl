@@ -13,6 +13,7 @@ int main(int argc, char *argv[])
 		|| !machine.transitionTo(PausedTerminalState)
 		|| !machine.transitionTo(RunningTerminalState)
 		|| !machine.transitionTo(ClosingTerminalState)
+		|| !machine.transitionTo(FailedTerminalState)
 		|| !machine.transitionTo(ClosedTerminalState))
 	{
 		return 1;

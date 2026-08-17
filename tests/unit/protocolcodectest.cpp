@@ -736,6 +736,8 @@ namespace
 		source.strDeviceId = QStringLiteral("123e4567-e89b-12d3-a456-426614174000");
 		source.strDeviceName = QStringLiteral("被控端");
 		source.strVerificationMethod = QStringLiteral("tls-exporter-numeric-v1");
+		source.strTrustCommitId = QStringLiteral(
+			"7ca76045-2ded-4f65-9912-16ff5ee3d0cc");
 		source.permissions = KPermissionScopes::fromInt(kAllPermissionScopeBits);
 		KTlsPairingMessage decoded;
 		QString strError;
@@ -744,6 +746,7 @@ namespace
 			&& decoded.type == source.type
 			&& decoded.strDeviceId == source.strDeviceId
 			&& decoded.strVerificationMethod == source.strVerificationMethod
+			&& decoded.strTrustCommitId == source.strTrustCommitId
 			&& decoded.permissions == source.permissions,
 			QStringLiteral("TLS pairing hello round-trips"));
 
@@ -753,6 +756,12 @@ namespace
 			KTlsPairingMessageCodec::encode(source), &decoded, nullptr)
 			&& decoded.bAccepted,
 			QStringLiteral("TLS pairing decision round-trips"));
+
+		source.type = CommittedTlsPairingMessageType;
+		check(KTlsPairingMessageCodec::decode(
+			KTlsPairingMessageCodec::encode(source), &decoded, nullptr)
+			&& decoded.type == CommittedTlsPairingMessageType,
+			QStringLiteral("TLS pairing commit round-trips"));
 
 		check(!KTlsPairingMessageCodec::decode(
 			QStringLiteral("{\"version\":1,\"channel\":\"signaling\","

@@ -15,6 +15,7 @@ namespace
 	constexpr qsizetype kMaximumInputQueueBytes = 256 * 1024;
 	constexpr qsizetype kMaximumInputQueueMessages = 256;
 	constexpr DWORD kProcessStopWaitMs = 2000;
+	constexpr DWORD kWriteThreadStopWaitMs = 2000;
 
 	void CloseNativeHandle(HANDLE *pHandle)
 	{
@@ -396,10 +397,36 @@ void KWindowsPseudoConsole::teardown(quint64 nGeneration)
 		::TerminateJobObject(m_hJob, 1);
 	if (nExitCode == STILL_ACTIVE && m_hProcess != nullptr)
 		::TerminateProcess(m_hProcess, 1);
-	CloseNativeHandle(&m_hInputWrite);
 	m_inputCondition.notify_all();
 	if (m_writeThread.joinable())
+	{
+		const HANDLE hWriteThread = m_writeThread.native_handle();
+		if (!::CancelSynchronousIo(hWriteThread))
+		{
+			const DWORD nCancelError = ::GetLastError();
+			if (nCancelError != ERROR_NOT_FOUND)
+			{
+				KSessionTraceLogger::write(QStringLiteral("controlled"),
+					QStringLiteral("terminal_write_cancel_failed"),
+					QStringLiteral("lifecycle"), -1,
+					QStringLiteral("generation=%1 win32=%2")
+						.arg(nGeneration).arg(nCancelError));
+			}
+		}
+		if (::WaitForSingleObject(hWriteThread, kWriteThreadStopWaitMs) == WAIT_TIMEOUT)
+		{
+			KSessionTraceLogger::write(QStringLiteral("controlled"),
+				QStringLiteral("terminal_write_stop_timeout"),
+				QStringLiteral("lifecycle"), -1,
+				QStringLiteral("generation=%1 fallback=close_input")
+					.arg(nGeneration));
+			// Cancellation should normally release WriteFile. Closing the pipe is a
+			// bounded last resort, used only after the writer ignored cancellation.
+			CloseNativeHandle(&m_hInputWrite);
+		}
 		m_writeThread.join();
+	}
+	CloseNativeHandle(&m_hInputWrite);
 	if (m_hProcess != nullptr)
 		::WaitForSingleObject(m_hProcess, kProcessStopWaitMs);
 	if (m_processThread.joinable())

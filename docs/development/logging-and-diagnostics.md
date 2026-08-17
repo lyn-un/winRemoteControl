@@ -49,7 +49,7 @@ winRemoteControl.exe
 | 范围 | 重点事件 |
 | --- | --- |
 | TCP/审批 | `signaling_connect_start/success/failed`、access request/accepted/rejected/timeout |
-| 身份安全 | `device_pairing`、`device_authentication`、`security_drop permission_denied`；只记录内部 ID、短指纹、权限和原因 |
+| 身份安全 | `device_pairing`、`device_authentication`、`pairing_rollback_failed`、`security_drop permission_denied`；失败统一带 requestId、generation、domain、code、stage，只记录内部 ID、短指纹、权限和原因 |
 | 协商 | SDP/ICE、capabilities sent/negotiated/rejected、DataChannel state |
 | 初始化 | WebRTC initialization stage、rollback start/finished/timeout |
 | 会话 | `session_recovery_start/success/failed`、`session_end`、shutdown pending components |

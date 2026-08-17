@@ -18,7 +18,7 @@ Codec 校验版本、字段类型、UUID、数值范围和消息大小。当前 
 
 默认 TCP 端口是 `39000`。TCP 首先交换固定版本前导，之后必须完成 TLS 1.2/1.3 双向证书握手，不允许回退明文。TLS 内的接入阶段支持：
 
-- `tlsPairingHello`（固定验证方法 `tls-exporter-numeric-v1`）、`tlsPairingDecision`、`tlsPairingReady`、配对拒绝
+- `tlsPairingHello`（固定验证方法 `tls-exporter-numeric-v1`）、`tlsPairingDecision`、`tlsPairingReady`、`tlsPairingCommitted`、配对拒绝
 
 - `accessRequest`
 - `accessPending`
@@ -27,6 +27,8 @@ Codec 校验版本、字段类型、UUID、数值范围和消息大小。当前 
 - 前导状态 `OK/BUSY/INCOMPATIBLE`
 
 设备身份固定和审批通过前到达的 SDP/ICE 被拒绝。之后 Offer、Answer 和 ICE Candidate 使用原有类型化 JSON framing，但只允许在已建立的 Schannel 通道内收发。TLS 提供保密性、完整性、顺序与防重放，不再存在逐条信令签名信封。
+
+`Ready` 表示与 `requestId` 绑定的 Pending 信任已落盘；`Committed` 表示本地记录已经提交。只有双方都收到 `Committed` 后才进入身份认证成功状态。重复、旧 generation 或不匹配 requestId 的事务消息不会改变当前信任状态。
 
 局域网发现是独立 UDP 协议，固定端口 `39001`。发现结果只提供连接候选，不等同于身份认证或接入授权。
 

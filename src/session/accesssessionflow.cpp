@@ -297,14 +297,14 @@ void KAccessSessionFlow::handleAuthenticationSucceeded(
 	sendAccessMessage(message);
 }
 
-void KAccessSessionFlow::handleAuthenticationRejected(const QString &strReason)
+void KAccessSessionFlow::handleAuthenticationRejected(const KSecurityStatus &status)
 {
 	const KAccessApprovalRequest request = m_pApprovalController->request();
-	clearApproval(strReason);
+	clearApproval(status.strProtocolReason);
 	if (request.side == IncomingAccessApprovalSide)
-		emit incomingAccessRejected(strReason);
+		emit incomingSecurityRejected(status);
 	else if (request.side == OutgoingAccessApprovalSide)
-		emit outgoingAccessRejected(strReason);
+		emit outgoingSecurityRejected(status);
 }
 
 void KAccessSessionFlow::respondIncoming(

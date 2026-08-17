@@ -56,6 +56,21 @@
         "WRC_ENABLE_FFMPEG": "OFF",
         "WRC_ENABLE_WEBVIEW2": "OFF"
       }
+    },
+    {
+      "name": "security-tests",
+      "displayName": "Dependency-light Schannel security tests",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/security-tests",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "$env{QTDIR}",
+        "WRC_BUILD_APP": "OFF",
+        "WRC_BUILD_TESTS": "ON",
+        "WRC_ENABLE_WEBRTC": "OFF",
+        "WRC_ENABLE_FFMPEG": "OFF",
+        "WRC_ENABLE_WEBVIEW2": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -87,6 +102,17 @@
         "wrc_terminal_write_all_tests",
         "wrc_terminal_state_machine_tests"
       ]
+    },
+    {
+      "name": "security-tests",
+      "configurePreset": "security-tests",
+      "configuration": "Release",
+      "targets": [
+        "wrc_protocol_tests",
+        "wrc_device_identity_tests",
+        "wrc_device_authentication_tests",
+        "wrc_schannel_transport_tests"
+      ]
     }
   ],
   "testPresets": [
@@ -116,6 +142,25 @@
       "filter": {
         "include": {
           "name": "^wrc_(terminal|windows_pseudoconsole)"
+        }
+      },
+      "execution": {
+        "timeout": 30
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "security-tests",
+      "configurePreset": "security-tests",
+      "configuration": "Release",
+      "environment": {
+        "PATH": "$env{QTDIR}\\bin;$penv{PATH}"
+      },
+      "filter": {
+        "include": {
+          "name": "^wrc_(protocol|device_identity|device_authentication|schannel_transport)_tests$"
         }
       },
       "execution": {

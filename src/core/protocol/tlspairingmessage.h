@@ -14,6 +14,7 @@ enum KTlsPairingMessageType
 	HelloTlsPairingMessageType,
 	DecisionTlsPairingMessageType,
 	ReadyTlsPairingMessageType,
+	CommittedTlsPairingMessageType,
 	RejectedTlsPairingMessageType
 };
 
@@ -24,6 +25,7 @@ struct KTlsPairingMessage
 	QString strDeviceId;
 	QString strDeviceName;
 	QString strVerificationMethod;
+	QString strTrustCommitId;
 	KPermissionScopes permissions;
 	bool bAccepted = false;
 	QString strReason;

@@ -71,6 +71,10 @@ namespace
 			emit terminalError(nGeneration, QStringLiteral("runtime_failed"),
 				QStringLiteral("injected runtime failure"));
 		}
+		void finishStop(quint64 nGeneration)
+		{
+			emit stopped(nGeneration);
+		}
 
 		int nStartCount = 0;
 		int nStopCount = 0;
@@ -878,6 +882,56 @@ namespace
 				QStringLiteral("shutdown cancels a local approval without leaking host state"));
 		}
 	}
+
+	void TestHostStopTimeoutConvergesAfterLateCompletion()
+	{
+		auto spHost = std::make_unique<KFakeTerminalHost>();
+		KFakeTerminalHost *pHost = spHost.get();
+		pHost->bEmitStopped = false;
+		KFakeSessionController controlled;
+		KTerminalSessionService service(std::move(spHost), &controlled);
+		QVector<KTerminalState> states;
+		QVector<KSessionError> errors;
+		QObject::connect(&service, &KTerminalSessionService::stateChanged,
+			[&states](KTerminalState state, bool, const QString &,
+				const QString &, const QString &) { states.append(state); });
+		QObject::connect(&service, &KTerminalSessionService::structuredTerminalError,
+			[&errors](const KSessionError &error) { errors.append(error); });
+		controlled.makeReady();
+		KTerminalMessage request;
+		request.type = OpenRequestTerminalMessageType;
+		request.strRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+		request.nColumns = 100;
+		request.nRows = 30;
+		AssignCommandId(&request);
+		emit controlled.terminalControlMessageReceived(request);
+		service.respondIncomingRequest(request.strRequestId, true);
+		AcknowledgeLastCommand(&controlled);
+		service.closeTerminal();
+		ProcessEventsFor(3200);
+		Check(!states.isEmpty() && states.last() == FailedTerminalState,
+			QStringLiteral("unresponsive host stop converges to Failed"));
+		Check(!errors.isEmpty()
+			&& errors.last().code == ShutdownTimeoutSessionErrorCode,
+			QStringLiteral("host stop timeout reports a structured error"));
+		const int nStartCount = pHost->nStartCount;
+		service.openCurrentTerminal();
+		Check(pHost->nStartCount == nStartCount,
+			QStringLiteral("timed-out host cannot be reused before late completion"));
+		pHost->finishStop(controlled.nGeneration);
+		Check(states.last() == ClosedTerminalState,
+			QStringLiteral("late stopped signal converges Failed to Closed"));
+		KTerminalMessage nextRequest;
+		nextRequest.type = OpenRequestTerminalMessageType;
+		nextRequest.strRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+		nextRequest.nColumns = 100;
+		nextRequest.nRows = 30;
+		AssignCommandId(&nextRequest);
+		emit controlled.terminalControlMessageReceived(nextRequest);
+		service.respondIncomingRequest(nextRequest.strRequestId, true);
+		Check(pHost->nStartCount == nStartCount + 1,
+			QStringLiteral("terminal can be opened after late cleanup completes"));
+	}
 }
 
 int main(int argc, char *argv[])
@@ -901,5 +955,6 @@ int main(int argc, char *argv[])
 	TestApprovalTimeoutAndRecoveryFailureConverge();
 	TestPendingOutputOverflowFailsClosed();
 	TestShutdownConvergesFromActiveStates();
+	TestHostStopTimeoutConvergesAfterLateCompletion();
 	return g_nFailureCount == 0 ? 0 : 1;
 }

@@ -1,3 +1,4 @@
+#include "adapters/windows/security/atomicjsonfile.h"
 #include "adapters/windows/security/signedjsontrusteddevicestore.h"
 #include "adapters/windows/security/windowsdeviceidentityprovider.h"
 
@@ -9,6 +10,8 @@
 #include <QtCore/QJsonObject>
 #include <QtCore/QTextStream>
 #include <QtCore/QUuid>
+
+#include <windows.h>
 
 namespace
 {
@@ -34,6 +37,9 @@ namespace
 			ViewScreenPermissionScope | InputControlPermissionScope);
 		device.nPairedAtMs = 100;
 		device.nLastAuthenticatedAtMs = 200;
+		device.commitState = MutualTrustedDeviceCommitState;
+		device.strPairingTransactionId = QUuid::createUuid().toString(
+			QUuid::WithoutBraces);
 		return device;
 	}
 }
@@ -100,6 +106,45 @@ int main(int nArgumentCount, char **pArguments)
 	const QVector<KTrustedDevice> loadedDevices = store.loadDevices(&strError);
 	if (!Require(loadedDevices.size() == 1,
 		QStringLiteral("Trusted device store did not round trip")))
+	{
+		provider.deletePersistedKey(nullptr);
+		return 1;
+	}
+
+	QFile originalStoreFile(strStorePath);
+	if (!Require(originalStoreFile.open(QIODevice::ReadOnly),
+		QStringLiteral("Unable to read original trust store")))
+	{
+		provider.deletePersistedKey(nullptr);
+		return 1;
+	}
+	const QByteArray originalStoreData = originalStoreFile.readAll();
+	originalStoreFile.close();
+	const HANDLE hLockedStore = CreateFileW(
+		reinterpret_cast<LPCWSTR>(strStorePath.utf16()),
+		GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+		FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (!Require(hLockedStore != INVALID_HANDLE_VALUE,
+		QStringLiteral("Unable to lock trust store for atomic write test")))
+	{
+		provider.deletePersistedKey(nullptr);
+		return 1;
+	}
+	strError.clear();
+	const bool bLockedWriteSucceeded = KAtomicJsonFile::write(strStorePath,
+		QByteArray("replacement-must-not-be-written"), &strError);
+	CloseHandle(hLockedStore);
+	QFile preservedStoreFile(strStorePath);
+	const bool bPreservedStoreOpened = preservedStoreFile.open(QIODevice::ReadOnly);
+	const QByteArray preservedStoreData = bPreservedStoreOpened
+		? preservedStoreFile.readAll() : QByteArray();
+	preservedStoreFile.close();
+	if (!Require(!bLockedWriteSucceeded,
+		QStringLiteral("Atomic write unexpectedly replaced a locked trust store"))
+		|| !Require(!strError.isEmpty(),
+			QStringLiteral("Atomic write failure did not report an error"))
+		|| !Require(bPreservedStoreOpened && preservedStoreData == originalStoreData,
+			QStringLiteral("Failed atomic replacement damaged the original trust store")))
 	{
 		provider.deletePersistedKey(nullptr);
 		return 1;

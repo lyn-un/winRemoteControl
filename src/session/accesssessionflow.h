@@ -73,6 +73,8 @@ signals:
 	void incomingAccessRejected(const QString &strReason);
 	void outgoingAccessAccepted();
 	void outgoingAccessRejected(const QString &strReason);
+	void incomingSecurityRejected(const KSecurityStatus &status);
+	void outgoingSecurityRejected(const KSecurityStatus &status);
 	void pairingRequested(const QString &strRequestId,
 		const QString &strDeviceName,
 		const QString &strLocalRole,
@@ -92,7 +94,7 @@ private:
 	void acceptIncoming();
 	void handleApprovalTimeout(const QString &strRequestId, quint64 nGeneration);
 	void handleAuthenticationSucceeded(const KDeviceAuthenticationContext &context);
-	void handleAuthenticationRejected(const QString &strReason);
+	void handleAuthenticationRejected(const KSecurityStatus &status);
 
 	KSignalingTransport *m_pTransport = nullptr;
 	KDeviceIdentityProvider *m_pIdentityProvider = nullptr;

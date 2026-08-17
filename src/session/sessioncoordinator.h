@@ -11,6 +11,7 @@
 #include "core/protocol/sessionmessage.h"
 #include "core/protocol/protocolrouter.h"
 #include "core/session/sessionstatemachine.h"
+#include "core/security/securitystatus.h"
 #include "core/security/trusteddevice.h"
 #include "core/transport/remotepeertransport.h"
 #include "session/sessioncontroller.h"
@@ -163,6 +164,8 @@ private:
 	KProtocolHandlerResult handleBusyEnvelope(const KProtocolEnvelope &envelope);
 	void handleInvalidSignalingMessage(KProtocolRouteStatus status, const QString &strError);
 	void handleOutgoingAccessRejected(const QString &strReason);
+	void handleIncomingSecurityRejected(const KSecurityStatus &status);
+	void handleOutgoingSecurityRejected(const KSecurityStatus &status);
 	void handleSignalingConnectionLost();
 	void handlePeerConnectionInterrupted();
 	void handlePeerConnectionRestored();

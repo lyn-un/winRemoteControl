@@ -31,7 +31,7 @@ QString KSessionError::codeName(KSessionErrorCode code)
 		"terminal_unavailable", "terminal_approval_rejected", "terminal_input_overflow",
 		"terminal_output_overflow", "terminal_host_start_failed",
 		"terminal_relay_handshake_failed", "terminal_command_timeout",
-		"identity_unavailable", "authentication_timeout", "signature_invalid",
+		"identity_unavailable", "authentication_timeout", "certificate_invalid",
 		"pairing_rejected", "pairing_rate_limited", "device_key_changed",
 		"device_revoked", "permission_denied", "trust_store_tampered",
 		"channel_binding_unavailable"

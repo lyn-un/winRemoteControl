@@ -5,6 +5,7 @@
 #include "core/protocol/protocolconstraints.h"
 #include "core/security/deviceidentityprovider.h"
 
+#include <QtCore/QDateTime>
 #include <QtCore/QTimer>
 #include <QtNetwork/QHostAddress>
 #include <QtNetwork/QNetworkProxy>
@@ -20,6 +21,12 @@ namespace
 	constexpr char kServerBusyPreface[] = "WRC2BUSY";
 	constexpr char kServerIncompatiblePreface[] = "WRC2BAD\0";
 	constexpr qsizetype kPrefaceBytes = 8;
+	constexpr qsizetype kMaximumTlsHandshakeBufferBytes = 256 * 1024;
+	constexpr qsizetype kMaximumSecureRecordBufferBytes =
+		KProtocolConstraints::kMaximumSignalingMessageBytes + 64 * 1024;
+	constexpr qint64 kSocketWriteHighWaterBytes = 512 * 1024;
+	constexpr int kMaximumPendingConnections = 4;
+	constexpr int kListenBacklogSize = 8;
 
 	QByteArray FixedPreface(const char *pData)
 	{
@@ -72,6 +79,8 @@ bool KTcpSignalingTransport::startServer(quint16 nPort, QString *pErrorMessage)
 
 	m_pServer = new QTcpServer(this);
 	m_pServer->setProxy(QNetworkProxy::NoProxy);
+	m_pServer->setMaxPendingConnections(kMaximumPendingConnections);
+	m_pServer->setListenBacklogSize(kListenBacklogSize);
 	connect(m_pServer, &QTcpServer::newConnection,
 		this, &KTcpSignalingTransport::handleNewConnection);
 	if (!m_pServer->listen(QHostAddress::AnyIPv4, nPort))
@@ -183,54 +192,84 @@ void KTcpSignalingTransport::sendMessage(const QString &strMessage)
 		return;
 	}
 	for (const QByteArray &record : records)
-		writeRaw(record);
+	{
+		if (!writeRaw(record, &strError))
+		{
+			rejectPeerData(strError);
+			return;
+		}
+	}
 }
 
 void KTcpSignalingTransport::handleNewConnection()
 {
 	if (m_pServer == nullptr)
 		return;
-	QTcpSocket *pSocket = m_pServer->nextPendingConnection();
-	if (pSocket == nullptr)
-		return;
-	pSocket->setProxy(QNetworkProxy::NoProxy);
-	if (m_bPeerBusy || isConnected())
+	while (m_pServer->hasPendingConnections())
 	{
-		pSocket->write(FixedPreface(kServerBusyPreface));
-		pSocket->flush();
-		pSocket->disconnectFromHost();
-		pSocket->deleteLater();
-		return;
+		QTcpSocket *pSocket = m_pServer->nextPendingConnection();
+		if (pSocket == nullptr)
+			return;
+		pSocket->setProxy(QNetworkProxy::NoProxy);
+		if (isSourceRateLimited(pSocket->peerAddress().toString()))
+		{
+			pSocket->write(FixedPreface(kServerBusyPreface));
+			pSocket->disconnectFromHost();
+			pSocket->deleteLater();
+			continue;
+		}
+		if (m_bPeerBusy || isConnected())
+		{
+			pSocket->write(FixedPreface(kServerBusyPreface));
+			pSocket->flush();
+			pSocket->disconnectFromHost();
+			pSocket->deleteLater();
+			continue;
+		}
+		closeSocket();
+		setSocket(pSocket);
+		m_bOutgoing = false;
+		m_bPeerBusy = true;
+		m_stage = AwaitingClientPrefaceStage;
+		m_pReadTimeoutTimer->start(kTlsHandshakeTimeoutMs);
+		emit stateChanged(QStringLiteral("Securing"));
 	}
-	closeSocket();
-	setSocket(pSocket);
-	m_bOutgoing = false;
-	m_bPeerBusy = true;
-	m_stage = AwaitingClientPrefaceStage;
-	m_pReadTimeoutTimer->start(kTlsHandshakeTimeoutMs);
-	emit stateChanged(QStringLiteral("Securing"));
 }
 
 void KTcpSignalingTransport::handleReadyRead()
 {
 	if (m_pSocket == nullptr)
 		return;
-	m_encryptedBuffer.append(m_pSocket->readAll());
 	QString strError;
-	if (m_stage == AwaitingClientPrefaceStage
-		|| m_stage == AwaitingServerPrefaceStage)
+	while (m_pSocket != nullptr && m_pSocket->bytesAvailable() > 0)
 	{
-		if (!processPreface(&strError))
-			rejectPeerData(strError, true);
-		return;
+		if (!readAvailableData(&strError))
+		{
+			rejectPeerData(strError, true, true);
+			return;
+		}
+		if (m_stage == AwaitingClientPrefaceStage
+			|| m_stage == AwaitingServerPrefaceStage)
+		{
+			if (!processPreface(&strError))
+			{
+				const bool bPeerFailure = strError.contains(
+					QStringLiteral("protocol version"));
+				rejectPeerData(strError, true, bPeerFailure);
+				return;
+			}
+		}
+		else if (m_stage == TlsHandshakeStage && !processTls(&strError))
+		{
+			rejectPeerData(strError, true, true);
+			return;
+		}
+		else if (m_stage == SecureStage && !processPlaintext(&strError))
+		{
+			rejectPeerData(strError, true, true);
+			return;
+		}
 	}
-	if (m_stage == TlsHandshakeStage && !processTls(&strError))
-	{
-		rejectPeerData(strError, true);
-		return;
-	}
-	if (m_stage == SecureStage && !processPlaintext(&strError))
-		rejectPeerData(strError, true);
 }
 
 void KTcpSignalingTransport::handleConnected()
@@ -240,7 +279,9 @@ void KTcpSignalingTransport::handleConnected()
 	m_pConnectTimeoutTimer->stop();
 	m_stage = AwaitingServerPrefaceStage;
 	m_pReadTimeoutTimer->start(kTlsHandshakeTimeoutMs);
-	writeRaw(FixedPreface(kClientPreface));
+	QString strError;
+	if (!writeRaw(FixedPreface(kClientPreface), &strError))
+		rejectPeerData(strError);
 }
 
 void KTcpSignalingTransport::handleDisconnected()
@@ -280,7 +321,8 @@ void KTcpSignalingTransport::handleConnectTimeout()
 void KTcpSignalingTransport::handleReadTimeout()
 {
 	if (isConnected())
-		rejectPeerData(QStringLiteral("Secure signaling handshake timed out"), true);
+		rejectPeerData(QStringLiteral("Secure signaling handshake timed out"), true,
+			!m_bOutgoing);
 }
 
 void KTcpSignalingTransport::setSocket(QTcpSocket *pSocket)
@@ -315,12 +357,65 @@ void KTcpSignalingTransport::closeSocket()
 	m_pSocket = nullptr;
 }
 
-void KTcpSignalingTransport::writeRaw(const QByteArray &data)
+bool KTcpSignalingTransport::writeRaw(const QByteArray &data,
+	QString *pErrorMessage)
 {
 	if (m_pSocket == nullptr || data.isEmpty())
-		return;
-	m_pSocket->write(data);
+		return false;
+	if (data.size() > kSocketWriteHighWaterBytes
+		|| m_pSocket->bytesToWrite()
+			> kSocketWriteHighWaterBytes - data.size())
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("Secure signaling send buffer exceeds size limit");
+		return false;
+	}
+	const qint64 nAcceptedBytes = m_pSocket->write(data);
+	if (nAcceptedBytes != data.size())
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("Unable to queue complete secure signaling data");
+		return false;
+	}
 	m_pSocket->flush();
+	return true;
+}
+
+qsizetype KTcpSignalingTransport::maximumEncryptedBufferBytes() const
+{
+	if (m_stage == AwaitingClientPrefaceStage
+		|| m_stage == AwaitingServerPrefaceStage)
+	{
+		return kPrefaceBytes;
+	}
+	if (m_stage == TlsHandshakeStage)
+		return kMaximumTlsHandshakeBufferBytes;
+	if (m_stage == SecureStage)
+		return kMaximumSecureRecordBufferBytes;
+	return 0;
+}
+
+bool KTcpSignalingTransport::readAvailableData(QString *pErrorMessage)
+{
+	const qsizetype nMaximumBytes = maximumEncryptedBufferBytes();
+	const qsizetype nRemainingBytes = nMaximumBytes - m_encryptedBuffer.size();
+	if (nMaximumBytes <= 0 || nRemainingBytes <= 0)
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("Secure signaling receive buffer exceeds size limit");
+		return false;
+	}
+	const qint64 nReadBytes = qMin<qint64>(m_pSocket->bytesAvailable(),
+		static_cast<qint64>(nRemainingBytes));
+	const QByteArray data = m_pSocket->read(nReadBytes);
+	if (data.isEmpty())
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("Unable to read secure signaling data");
+		return false;
+	}
+	m_encryptedBuffer.append(data);
+	return true;
 }
 
 bool KTcpSignalingTransport::beginTls(bool bServer, QString *pErrorMessage)
@@ -336,7 +431,10 @@ bool KTcpSignalingTransport::beginTls(bool bServer, QString *pErrorMessage)
 	if (!m_tlsEngine.start(&records, pErrorMessage))
 		return false;
 	for (const QByteArray &record : records)
-		writeRaw(record);
+	{
+		if (!writeRaw(record, pErrorMessage))
+			return false;
+	}
 	return true;
 }
 
@@ -355,7 +453,8 @@ bool KTcpSignalingTransport::processPreface(QString *pErrorMessage)
 				*pErrorMessage = QStringLiteral("Secure signaling protocol version is incompatible");
 			return false;
 		}
-		writeRaw(FixedPreface(kServerOkPreface));
+		if (!writeRaw(FixedPreface(kServerOkPreface), pErrorMessage))
+			return false;
 		if (!beginTls(true, pErrorMessage))
 			return false;
 	}
@@ -391,7 +490,10 @@ bool KTcpSignalingTransport::processTls(QString *pErrorMessage)
 		return false;
 	}
 	for (const QByteArray &record : records)
-		writeRaw(record);
+	{
+		if (!writeRaw(record, pErrorMessage))
+			return false;
+	}
 	if (!bCompleted)
 		return true;
 	completeSecureConnection();
@@ -475,8 +577,13 @@ void KTcpSignalingTransport::completeSecureConnection()
 }
 
 void KTcpSignalingTransport::rejectPeerData(const QString &strMessage,
-	bool bTlsFailure)
+	bool bTlsFailure,
+	bool bCountSourceFailure)
 {
+	const QString strSourceAddress = m_pSocket != nullptr
+		? m_pSocket->peerAddress().toString() : QString();
+	if (!m_bOutgoing && bCountSourceFailure)
+		recordSourceFailure(strSourceAddress);
 	if (bTlsFailure)
 	{
 		KSessionTraceLogger::write(m_bOutgoing ? QStringLiteral("controller")
@@ -507,6 +614,20 @@ void KTcpSignalingTransport::rejectPeerData(const QString &strMessage,
 	emit stateChanged(m_pServer != nullptr && m_pServer->isListening()
 		? QStringLiteral("Listening") : QStringLiteral("ConnectionFailed"));
 	emit connectionLost();
+}
+
+bool KTcpSignalingTransport::isSourceRateLimited(
+	const QString &strSourceAddress)
+{
+	return m_sourceFailureTracker.isRateLimited(strSourceAddress,
+		QDateTime::currentMSecsSinceEpoch());
+}
+
+void KTcpSignalingTransport::recordSourceFailure(
+	const QString &strSourceAddress)
+{
+	m_sourceFailureTracker.recordFailure(strSourceAddress,
+		QDateTime::currentMSecsSinceEpoch());
 }
 
 void KTcpSignalingTransport::failOutgoingConnection(

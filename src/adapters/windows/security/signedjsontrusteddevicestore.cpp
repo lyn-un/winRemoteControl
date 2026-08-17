@@ -16,8 +16,7 @@
 
 namespace
 {
-	constexpr int kTrustStoreVersion = 2;
-	constexpr int kLegacyTrustStoreVersion = 1;
+	constexpr int kTrustStoreVersion = 3;
 	constexpr int kMaximumTrustedDevices = 256;
 
 	QString EncodeBase64Url(const QByteArray &value)
@@ -61,6 +60,8 @@ namespace
 			writer.appendUInt64(static_cast<quint64>(device.nPairedAtMs));
 			writer.appendUInt64(static_cast<quint64>(device.nLastAuthenticatedAtMs));
 			writer.appendBool(device.bRevoked);
+			writer.appendUInt32(static_cast<quint32>(device.commitState));
+			writer.appendString(device.strPairingTransactionId);
 		}
 		return writer.data();
 	}
@@ -77,7 +78,10 @@ namespace
 			&& device.strAdvertisedName.size() <= 128
 			&& (static_cast<quint32>(device.permissionLimit.toInt()) & ~kAllPermissionScopeBits) == 0
 			&& device.nPairedAtMs >= 0
-			&& device.nLastAuthenticatedAtMs >= 0;
+			&& device.nLastAuthenticatedAtMs >= 0
+			&& (device.commitState == PendingTrustedDeviceCommitState
+				|| device.commitState == MutualTrustedDeviceCommitState)
+			&& !QUuid(device.strPairingTransactionId).isNull();
 	}
 }
 
@@ -119,9 +123,10 @@ QVector<KTrustedDevice> KSignedJsonTrustedDeviceStore::loadDevices(
 	const QJsonArray array = root.value(QStringLiteral("devices")).toArray();
 	const int nVersion = root.value(QStringLiteral("version")).toInt();
 	if (parseError.error == QJsonParseError::NoError
-		&& nVersion == kLegacyTrustStoreVersion)
+		&& (nVersion == 1 || nVersion == 2))
 	{
-		const QString strBackupPath = m_strFilePath + QStringLiteral(".v1.bak");
+		const QString strBackupPath = QStringLiteral("%1.v%2.bak")
+			.arg(m_strFilePath).arg(nVersion);
 		if (!QFile::exists(strBackupPath) && !QFile::copy(m_strFilePath, strBackupPath))
 		{
 			if (pErrorMessage != nullptr)
@@ -131,7 +136,7 @@ QVector<KTrustedDevice> KSignedJsonTrustedDeviceStore::loadDevices(
 		if (!saveDevices({}, pErrorMessage))
 			return {};
 		m_strMigrationNotice = QStringLiteral(
-			"安全协议已升级，需要重新配对设备。旧信任库已备份为 trusted_devices.json.v1.bak。");
+			"安全配对事务已升级，需要重新配对设备。旧信任库已备份。");
 		return {};
 	}
 	if (parseError.error != QJsonParseError::NoError
@@ -161,6 +166,10 @@ QVector<KTrustedDevice> KSignedJsonTrustedDeviceStore::loadDevices(
 		device.nLastAuthenticatedAtMs =
 			object.value(QStringLiteral("lastAuthenticatedAtMs")).toVariant().toLongLong();
 		device.bRevoked = object.value(QStringLiteral("revoked")).toBool();
+		device.commitState = static_cast<KTrustedDeviceCommitState>(
+			object.value(QStringLiteral("commitState")).toInt(-1));
+		device.strPairingTransactionId = object.value(
+			QStringLiteral("pairingTransactionId")).toString();
 		if (!IsValidDevice(device))
 		{
 			if (pErrorMessage != nullptr)
@@ -231,6 +240,10 @@ bool KSignedJsonTrustedDeviceStore::saveDevices(
 		object.insert(QStringLiteral("lastAuthenticatedAtMs"),
 			QString::number(device.nLastAuthenticatedAtMs));
 		object.insert(QStringLiteral("revoked"), device.bRevoked);
+		object.insert(QStringLiteral("commitState"),
+			static_cast<int>(device.commitState));
+		object.insert(QStringLiteral("pairingTransactionId"),
+			device.strPairingTransactionId);
 		array.append(object);
 	}
 	QJsonObject root;
