@@ -24,10 +24,14 @@ namespace
 			static_cast<size_t>(spBuffer->StrideU()) * ((spBuffer->height() + 1) / 2));
 		std::memset(spBuffer->MutableDataV(), 128,
 			static_cast<size_t>(spBuffer->StrideV()) * ((spBuffer->height() + 1) / 2));
-		return webrtc::VideoFrame::Builder()
+		webrtc::VideoFrame frame = webrtc::VideoFrame::Builder()
 			.set_video_frame_buffer(spBuffer)
 			.set_timestamp_ms(nTimestampMs)
 			.build();
+		webrtc::VideoFrame::RenderParameters renderParameters;
+		renderParameters.use_low_latency_rendering = true;
+		frame.set_render_parameters(renderParameters);
+		return frame;
 	}
 }
 
@@ -40,6 +44,7 @@ int main(int nArgumentCount, char **pArguments)
 	qint64 nLastTimestampMs = -1;
 	bool bUsedWorkerThread = false;
 	bool bSharedPixelsSurvivedCopy = false;
+	bool bLowLatencyRenderMetadataPreserved = false;
 	const QThread *pOwnerThread = processor.thread();
 	QObject::connect(&processor, &KWebRtcRemoteFrameProcessor::frameReady,
 		&processor,
@@ -52,6 +57,8 @@ int main(int nArgumentCount, char **pArguments)
 				bUsedWorkerThread = QThread::currentThread() != pOwnerThread;
 				bSharedPixelsSurvivedCopy = frame.hasPixels()
 					&& copiedFrame.spBgraBuffer == frame.spBgraBuffer;
+				bLowLatencyRenderMetadataPreserved =
+					frame.bWebRtcLowLatencyRender;
 			}
 			condition.notify_all();
 		}, Qt::DirectConnection);
@@ -75,6 +82,11 @@ int main(int nArgumentCount, char **pArguments)
 	if (!bSharedPixelsSurvivedCopy)
 	{
 		std::cerr << "decoded frame pixels were deep-copied\n";
+		return 1;
+	}
+	if (!bLowLatencyRenderMetadataPreserved)
+	{
+		std::cerr << "WebRTC low-latency render metadata was not preserved\n";
 		return 1;
 	}
 	return 0;

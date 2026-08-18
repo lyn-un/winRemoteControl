@@ -1180,7 +1180,7 @@ void KWebRtcPeer::handleStatsReport(webrtc::scoped_refptr<const webrtc::RTCStats
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controller"),
 			QStringLiteral("video_stats"),
-			QStringLiteral("jitterBufferMs=%1 targetMs=%2 decodeMs=%3 framesDecoded=%4 keyFramesDecoded=%5 dropped=%6")
+			QStringLiteral("jitterBufferMs=%1 jitterTargetEstimateMs=%2 decodeMs=%3 framesDecoded=%4 keyFramesDecoded=%5 dropped=%6")
 				.arg(stats.nJitterBufferDelayMs)
 				.arg(stats.nJitterBufferTargetDelayMs)
 				.arg(stats.nDecodeTimeMs)

@@ -140,9 +140,10 @@ void KWebRtcRemoteFrameProcessor::decodeAndEmit(
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controller"),
 			QStringLiteral("remote_frame_recv"),
-			QStringLiteral("frame=%1 timestampMs=%2")
+			QStringLiteral("frame=%1 timestampMs=%2 lowLatencyRender=%3")
 				.arg(nNextFrameIndex)
-				.arg(frame.timestamp_us() / 1000));
+				.arg(frame.timestamp_us() / 1000)
+				.arg(frame.render_parameters().use_low_latency_rendering ? 1 : 0));
 	}
 
 	webrtc::scoped_refptr<webrtc::I420BufferInterface> spI420 =
@@ -155,6 +156,8 @@ void KWebRtcRemoteFrameProcessor::decodeAndEmit(
 	decodedFrame.nHeight = spI420->height();
 	decodedFrame.nFrameIndex = ++m_nFrameIndex;
 	decodedFrame.nTimestampMs = frame.timestamp_us() / 1000;
+	decodedFrame.bWebRtcLowLatencyRender =
+		frame.render_parameters().use_low_latency_rendering;
 	decodedFrame.nRemoteCallbackAtMs = nCallbackAtMs;
 	decodedFrame.spBgraBuffer = std::make_shared<std::vector<unsigned char>>(
 		static_cast<size_t>(decodedFrame.nWidth) * decodedFrame.nHeight * 4);

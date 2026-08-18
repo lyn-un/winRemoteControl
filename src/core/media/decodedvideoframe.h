@@ -16,6 +16,7 @@ struct KDecodedVideoFrame
 	qint64 nTimestampMs = 0;
 	quint64 nLastInputSeq = 0;
 	qint64 nInputAgeMs = -1;
+	bool bWebRtcLowLatencyRender = false;
 	qint64 nRemoteCallbackAtMs = -1;
 	qint64 nConversionDoneAtMs = -1;
 	qint64 nRenderEnqueuedAtMs = -1;

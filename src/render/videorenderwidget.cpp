@@ -147,12 +147,13 @@ void KVideoRenderWidget::presentFrame(const KDecodedVideoFrame &frame)
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controller"),
 			QStringLiteral("render_begin"),
-			QStringLiteral("frame=%1 sourceFrame=%2 width=%3 height=%4 timestampMs=%5 lastInputSeq=%6 inputAgeMs=%7")
+			QStringLiteral("frame=%1 sourceFrame=%2 width=%3 height=%4 timestampMs=%5 lowLatencyRender=%6 lastInputSeq=%7 inputAgeMs=%8")
 				.arg(frame.nFrameIndex)
 				.arg(frame.nSourceFrameIndex)
 				.arg(frame.nWidth)
 				.arg(frame.nHeight)
 				.arg(frame.nTimestampMs)
+				.arg(frame.bWebRtcLowLatencyRender ? 1 : 0)
 				.arg(frame.nLastInputSeq)
 				.arg(frame.nInputAgeMs));
 		renderTimer.start();
@@ -207,11 +208,12 @@ void KVideoRenderWidget::presentFrame(const KDecodedVideoFrame &frame)
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controller"),
 			QStringLiteral("render_end"),
-			QStringLiteral("frame=%1 sourceFrame=%2 width=%3 height=%4 lastInputSeq=%5 inputAgeMs=%6 costMs=%7 callbackToConvertMs=%8 convertToEnqueueMs=%9 enqueueToPresentMs=%10 callbackToPresentMs=%11 renderReceivedTotal=%12 renderPresentedTotal=%13 renderCoalescedTotal=%14")
+			QStringLiteral("frame=%1 sourceFrame=%2 width=%3 height=%4 lowLatencyRender=%5 lastInputSeq=%6 inputAgeMs=%7 costMs=%8 callbackToConvertMs=%9 convertToEnqueueMs=%10 enqueueToPresentMs=%11 callbackToPresentMs=%12 renderReceivedTotal=%13 renderPresentedTotal=%14 renderCoalescedTotal=%15")
 				.arg(frame.nFrameIndex)
 				.arg(frame.nSourceFrameIndex)
 				.arg(frame.nWidth)
 				.arg(frame.nHeight)
+				.arg(frame.bWebRtcLowLatencyRender ? 1 : 0)
 				.arg(frame.nLastInputSeq)
 				.arg(frame.nInputAgeMs)
 				.arg(renderTimer.isValid() ? renderTimer.elapsed() : -1)

@@ -39,6 +39,7 @@ WebRTC H.264 decoder 输出 I420。`KWebRtcRemoteFrameProcessor` 在专用转换
 ## 延迟策略与可观测性
 
 - 播放延迟默认使用低延迟配置，不依赖两台机器系统时间计算端到端耗时。
+- WebRTC stats 的 `jitterTargetEstimateMs` 是接收端抖动/解码目标估计，不等于画面实际等待时长。接收帧的 `lowLatencyRender=1` 来自 WebRTC `RenderParameters::use_low_latency_rendering`，表示当前帧走低延迟立即渲染路径。
 - 高频回调合并旧帧，避免“完整播放过时画面”累积延迟。
 - 采集、编码无输出、首帧重推、解码、转换入队和真正呈现均有诊断事件；`render_end` 可拆分 callback-to-convert、convert-to-enqueue、enqueue-to-present 和 callback-to-present。
 - 画质配置受能力协商的最大分辨率、FPS 和码率约束。
