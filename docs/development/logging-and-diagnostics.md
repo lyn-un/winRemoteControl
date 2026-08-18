@@ -37,7 +37,7 @@ winRemoteControl.exe --trace --latency-scenario window
 .\tools\summarize-latency-trace.ps1 -Scenario mouse
 ```
 
-脚本输出该标签最后一次运行的端到端 P50、P95、最大值、`lowLatencyRender` 样本和两层帧合并比例。
+脚本输出该标签最后一次运行的端到端 P50、P95、最大值、`lowLatencyRender` 样本和两层帧合并比例。`allSamples` 保留包含启动过渡的全会话样本，`finalWindow` 来自会话结束时最后 120 个有效样本，用于观察稳定运行阶段。
 
 未指定 `--log-dir` 时写入 exe 同级的 `logs` 目录。目录创建或文件打开失败只通过 `qWarning` 报告，不阻止程序启动。
 

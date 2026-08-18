@@ -44,10 +44,21 @@ $lowLatencyEnabled = 0
 $lowLatencyDisabled = 0
 $renderSummary = $null
 $conversionSummary = $null
+$finalWindowSummary = $null
 
 foreach ($line in $lines) {
     if ($line -match "stage=input_roundtrip .*roundTripMs=(\d+) includedInStats=1") {
         $roundTripValues += [int]$Matches[1]
+    }
+    if ($line -match "stage=input_roundtrip_summary .*samples=(\d+) totalSamples=(\d+) avgMs=(\d+) p50Ms=(\d+) p95Ms=(\d+) maxMs=(\d+)") {
+        $finalWindowSummary = [ordered]@{
+            samples = [int]$Matches[1]
+            totalSamples = [int]$Matches[2]
+            averageMs = [int]$Matches[3]
+            p50Ms = [int]$Matches[4]
+            p95Ms = [int]$Matches[5]
+            maxMs = [int]$Matches[6]
+        }
     }
     if ($line -match "stage=render_end .*lowLatencyRender=([01])") {
         if ($Matches[1] -eq "1") {
@@ -57,14 +68,14 @@ foreach ($line in $lines) {
             ++$lowLatencyDisabled
         }
     }
-    if ($line -match "stage=render_frame_coalesce_summary stage=gui_queue receivedTotal=(\d+) presentedTotal=(\d+) coalescedTotal=(\d+)") {
+    if ($line -match "stage=render_frame_coalesce_summary .*stage=gui_queue receivedTotal=(\d+) presentedTotal=(\d+) coalescedTotal=(\d+)") {
         $renderSummary = [ordered]@{
             received = [int]$Matches[1]
             presented = [int]$Matches[2]
             coalesced = [int]$Matches[3]
         }
     }
-    if ($line -match "stage=remote_callback_frame_coalesce_summary stage=conversion_queue receivedTotal=(\d+) processedTotal=(\d+) coalescedTotal=(\d+)") {
+    if ($line -match "stage=remote_callback_frame_coalesce_summary .*stage=conversion_queue receivedTotal=(\d+) processedTotal=(\d+) coalescedTotal=(\d+)") {
         $conversionSummary = [ordered]@{
             received = [int]$Matches[1]
             processed = [int]$Matches[2]
@@ -97,7 +108,10 @@ $roundTrip = [ordered]@{
 [ordered]@{
     source = (Resolve-Path -LiteralPath $LogPath).Path
     scenario = if ([string]::IsNullOrWhiteSpace($Scenario)) { "unlabeled" } else { $Scenario }
-    inputRoundTrip = $roundTrip
+    inputRoundTrip = [ordered]@{
+        allSamples = $roundTrip
+        finalWindow = $finalWindowSummary
+    }
     lowLatencyRender = [ordered]@{
         enabledSamples = $lowLatencyEnabled
         disabledSamples = $lowLatencyDisabled
