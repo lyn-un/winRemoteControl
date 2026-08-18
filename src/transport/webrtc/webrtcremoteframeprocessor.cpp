@@ -70,7 +70,7 @@ void KWebRtcRemoteFrameProcessor::enqueue(const webrtc::VideoFrame &frame)
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controller"),
 			QStringLiteral("remote_callback_frame_coalesced"),
-			QStringLiteral("receivedTotal=%1 processedTotal=%2 coalescedTotal=%3 latestTimestampMs=%4")
+			QStringLiteral("stage=conversion_queue receivedTotal=%1 processedTotal=%2 coalescedTotal=%3 latestTimestampMs=%4")
 				.arg(nReceivedFrames)
 				.arg(nProcessedFrames)
 				.arg(nDroppedFrames)
@@ -102,7 +102,7 @@ void KWebRtcRemoteFrameProcessor::clear()
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controller"),
 			QStringLiteral("remote_callback_frame_coalesce_summary"),
-			QStringLiteral("receivedTotal=%1 processedTotal=%2 coalescedTotal=%3 pendingDiscarded=%4")
+			QStringLiteral("stage=conversion_queue receivedTotal=%1 processedTotal=%2 coalescedTotal=%3 pendingDiscarded=%4")
 				.arg(nReceivedFrames)
 				.arg(nProcessedFrames)
 				.arg(nDroppedFrames)

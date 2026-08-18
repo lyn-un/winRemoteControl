@@ -86,11 +86,17 @@ void KVideoRenderWidget::enqueueFrame(const KDecodedVideoFrame &frame)
 		return;
 
 	bool bNeedQueue = false;
+	bool bFrameCoalesced = false;
+	quint64 nReceivedFrames = 0;
+	quint64 nCoalescedFrames = 0;
 	{
 		std::lock_guard<std::mutex> guard(m_frameMutex);
 		++m_nRenderReceivedFrames;
 		if (m_bHasPendingFrame)
+		{
 			++m_nRenderCoalescedFrames;
+			bFrameCoalesced = true;
+		}
 		m_latestFrame = frame;
 		m_latestFrame.nRenderEnqueuedAtMs = SteadyNowMs();
 		m_bHasPendingFrame = true;
@@ -99,6 +105,21 @@ void KVideoRenderWidget::enqueueFrame(const KDecodedVideoFrame &frame)
 			m_bPresentQueued = true;
 			bNeedQueue = true;
 		}
+		nReceivedFrames = m_nRenderReceivedFrames;
+		nCoalescedFrames = m_nRenderCoalescedFrames;
+	}
+
+	if (bFrameCoalesced
+		&& KLatencyTraceLogger::isEnabled()
+		&& (nCoalescedFrames == 1
+			|| nCoalescedFrames % kVideoTraceFrameInterval == 0))
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controller"),
+			QStringLiteral("render_frame_coalesced"),
+			QStringLiteral("stage=gui_queue receivedTotal=%1 coalescedTotal=%2 latestFrame=%3")
+				.arg(nReceivedFrames)
+				.arg(nCoalescedFrames)
+				.arg(frame.nFrameIndex));
 	}
 
 	if (bNeedQueue)
@@ -184,8 +205,17 @@ void KVideoRenderWidget::presentFrame(const KDecodedVideoFrame &frame)
 		0);
 
 	render();
-	++m_nRenderPresentedFrames;
 	const qint64 nPresentEndAtMs = SteadyNowMs();
+	quint64 nRenderReceivedFrames = 0;
+	quint64 nRenderPresentedFrames = 0;
+	quint64 nRenderCoalescedFrames = 0;
+	{
+		std::lock_guard<std::mutex> guard(m_frameMutex);
+		++m_nRenderPresentedFrames;
+		nRenderReceivedFrames = m_nRenderReceivedFrames;
+		nRenderPresentedFrames = m_nRenderPresentedFrames;
+		nRenderCoalescedFrames = m_nRenderCoalescedFrames;
+	}
 
 	if (KLatencyTraceLogger::isEnabled()
 		&& frame.nLastInputSeq > 0
@@ -225,9 +255,9 @@ void KVideoRenderWidget::presentFrame(const KDecodedVideoFrame &frame)
 					? nPresentBeginAtMs - frame.nRenderEnqueuedAtMs : -1)
 				.arg(frame.nRemoteCallbackAtMs >= 0
 					? nPresentEndAtMs - frame.nRemoteCallbackAtMs : -1)
-				.arg(m_nRenderReceivedFrames)
-				.arg(m_nRenderPresentedFrames)
-				.arg(m_nRenderCoalescedFrames));
+				.arg(nRenderReceivedFrames)
+				.arg(nRenderPresentedFrames)
+				.arg(nRenderCoalescedFrames));
 	}
 }
 
@@ -260,7 +290,7 @@ void KVideoRenderWidget::clearFrame()
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controller"),
 			QStringLiteral("render_frame_coalesce_summary"),
-			QStringLiteral("receivedTotal=%1 presentedTotal=%2 coalescedTotal=%3")
+			QStringLiteral("stage=gui_queue receivedTotal=%1 presentedTotal=%2 coalescedTotal=%3")
 				.arg(nReceivedFrames).arg(nPresentedFrames).arg(nCoalescedFrames));
 	}
 
