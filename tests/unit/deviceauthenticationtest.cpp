@@ -8,6 +8,8 @@
 #include <QtCore/QTextStream>
 #include <QtCore/QUuid>
 
+#include <algorithm>
+
 namespace
 {
 	bool Require(bool bCondition, const QString &strMessage)
@@ -16,6 +18,14 @@ namespace
 			return true;
 		QTextStream(stderr) << strMessage << Qt::endl;
 		return false;
+	}
+
+	bool RequireSecuritySuccess(const KSecurityStatus &status,
+		const QString &strContext)
+	{
+		return Require(!status.isValid(),
+			QStringLiteral("%1: %2 (%3)").arg(strContext,
+				status.strProtocolReason, status.strTechnicalMessage));
 	}
 
 	KTlsPeerIdentity PeerIdentity(const KFakeDeviceIdentityProvider &provider)
@@ -45,11 +55,11 @@ namespace
 		QObject::connect(&flow, &KDeviceAuthenticationFlow::authenticationRejected,
 			[&strRejectedReason](const KSecurityStatus &status)
 			{ strRejectedReason = status.strProtocolReason; });
-		QString strError;
-		if (!flow.beginIncoming(QStringLiteral("192.0.2.10"), 1,
-			QStringLiteral("local"), &strError))
+		if (!RequireSecuritySuccess(flow.beginIncoming(
+			QStringLiteral("192.0.2.10"), 1, QStringLiteral("local")),
+			QStringLiteral("Begin incoming verification-method test")))
 		{
-			return Require(false, strError);
+			return false;
 		}
 		KTlsPairingMessage hello;
 		hello.type = HelloTlsPairingMessageType;
@@ -68,10 +78,11 @@ namespace
 		strRejectedReason.clear();
 		flow.setSecurePeerIdentity(PeerIdentity(remoteIdentity));
 		exporter.setFailure(true);
-		if (!flow.beginIncoming(QStringLiteral("192.0.2.10"), 2,
-			QStringLiteral("local"), &strError))
+		if (!RequireSecuritySuccess(flow.beginIncoming(
+			QStringLiteral("192.0.2.10"), 2, QStringLiteral("local")),
+			QStringLiteral("Begin incoming exporter-failure test")))
 		{
-			return Require(false, strError);
+			return false;
 		}
 		hello.strRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
 		hello.strVerificationMethod = KTlsPairingVerification::verificationMethod();
@@ -122,10 +133,12 @@ namespace
 			QUuid::WithoutBraces);
 		if (!Require(service.prepare(strRequestId, peer, QStringLiteral("updated"),
 			ViewScreenPermissionScope, &strError), strError)
-			|| !Require(store.devices().size() == 1
-				&& store.devices().first().commitState
+			|| !Require(store.devices().size() == 2
+				&& store.devices().at(0).commitState
+					== MutualTrustedDeviceCommitState
+				&& store.devices().at(1).commitState
 					== PendingTrustedDeviceCommitState,
-				QStringLiteral("Prepare did not persist one pending trust record"))
+				QStringLiteral("Prepare overwrote the existing mutual trust record"))
 			|| !Require(service.rollback(strRequestId, &strError), strError)
 			|| !Require(store.devices().size() == 1
 				&& store.devices().first().strAlias == original.strAlias
@@ -139,13 +152,89 @@ namespace
 			return false;
 		}
 
+		const QString strCrashRequestId = QUuid::createUuid().toString(
+			QUuid::WithoutBraces);
+		if (!Require(service.prepare(strCrashRequestId, peer,
+			QStringLiteral("crash-update"), ViewScreenPermissionScope,
+			&strError), strError))
+		{
+			return false;
+		}
+		KTrustedDeviceService restartedAfterPrepare(&store);
+		if (!Require(restartedAfterPrepare.load(&strError), strError)
+			|| !Require(store.devices().size() == 1
+				&& store.devices().first().commitState
+					== MutualTrustedDeviceCommitState
+				&& store.devices().first().strAlias == original.strAlias
+				&& store.devices().first().permissionLimit == original.permissionLimit,
+				QStringLiteral("Restart did not recover the pre-transaction trust record")))
+		{
+			return false;
+		}
+
+		const QString strCommittedRequestId = QUuid::createUuid().toString(
+			QUuid::WithoutBraces);
+		if (!Require(restartedAfterPrepare.prepare(strCommittedRequestId, peer,
+			QStringLiteral("prepared"), ViewScreenPermissionScope, &strError), strError)
+			|| !Require(restartedAfterPrepare.commit(strCommittedRequestId,
+				QStringLiteral("committed"), peer.certificateSha256, &strError), strError)
+			|| !Require(store.devices().size() == 2,
+				QStringLiteral("Commit discarded the durable rollback record")))
+		{
+			return false;
+		}
+		const auto committedIterator = std::find_if(store.devices().cbegin(),
+			store.devices().cend(), [&strCommittedRequestId](const KTrustedDevice &device)
+			{ return device.strPairingTransactionId == strCommittedRequestId; });
+		if (!Require(committedIterator != store.devices().cend()
+				&& committedIterator->strAdvertisedName == QStringLiteral("committed")
+				&& committedIterator->certificateSha256 == peer.certificateSha256
+				&& committedIterator->nLastAuthenticatedAtMs > 0
+				&& committedIterator->commitState == MutualTrustedDeviceCommitState,
+			QStringLiteral("Commit did not persist final authentication metadata")))
+		{
+			return false;
+		}
+
+		// A crash after the local Commit but before both Committed messages must
+		// recover the previously confirmed Mutual record, not the new half-commit.
+		KTrustedDeviceService restartedAfterLocalCommit(&store);
+		if (!Require(restartedAfterLocalCommit.load(&strError), strError)
+			|| !Require(store.devices().size() == 1
+				&& store.devices().first().strPairingTransactionId
+					== original.strPairingTransactionId
+				&& store.devices().first().strAlias == original.strAlias
+				&& store.devices().first().permissionLimit == original.permissionLimit,
+				QStringLiteral("Restart accepted a one-sided committed trust update")))
+		{
+			return false;
+		}
+
+		const QString strCompletedRequestId = QUuid::createUuid().toString(
+			QUuid::WithoutBraces);
+		if (!Require(restartedAfterLocalCommit.prepare(strCompletedRequestId, peer,
+			QStringLiteral("prepared"), ViewScreenPermissionScope, &strError), strError)
+			|| !Require(restartedAfterLocalCommit.commit(strCompletedRequestId,
+				QStringLiteral("committed"), peer.certificateSha256, &strError), strError)
+			|| !Require(restartedAfterLocalCommit.complete(strCompletedRequestId,
+				&strError), strError)
+			|| !Require(store.devices().size() == 1
+				&& store.devices().first().strPairingTransactionId
+					== strCompletedRequestId
+				&& store.devices().first().strAdvertisedName
+					== QStringLiteral("committed"),
+				QStringLiteral("Completed update retained the rollback record")))
+		{
+			return false;
+		}
+
 		KTrustedDevice pending = original;
 		pending.commitState = PendingTrustedDeviceCommitState;
 		pending.strPairingTransactionId = QUuid::createUuid().toString(
 			QUuid::WithoutBraces);
 		store.setDevices({ original, pending });
-		KTrustedDeviceService restarted(&store);
-		if (!Require(restarted.load(&strError), strError)
+		KTrustedDeviceService restartedWithSyntheticPending(&store);
+		if (!Require(restartedWithSyntheticPending.load(&strError), strError)
 			|| !Require(store.devices().size() == 1
 				&& store.devices().first().commitState
 					== MutualTrustedDeviceCommitState,
@@ -198,14 +287,15 @@ namespace
 		QObject::connect(&controlled, &KDeviceAuthenticationFlow::authenticationSucceeded,
 			[&](const KDeviceAuthenticationContext &) { ++nAuthenticated; });
 
-		QString strError;
 		const KPermissionScopes permissions = KPermissionScopes::fromInt(
 			kAllPermissionScopeBits);
-		if (!Require(controlled.beginIncoming(QStringLiteral("192.0.2.1"),
-			kGeneration, QStringLiteral("controlled"), &strError), strError)
-			|| !Require(controller.beginOutgoing(
+		if (!RequireSecuritySuccess(controlled.beginIncoming(
+			QStringLiteral("192.0.2.1"), kGeneration,
+			QStringLiteral("controlled")), QStringLiteral("Begin controlled"))
+			|| !RequireSecuritySuccess(controller.beginOutgoing(
 				QUuid::createUuid().toString(QUuid::WithoutBraces), kGeneration,
-				QStringLiteral("controller"), permissions, &strError), strError))
+				QStringLiteral("controller"), permissions),
+				QStringLiteral("Begin controller")))
 		{
 			return false;
 		}
@@ -239,6 +329,45 @@ namespace
 				QStringLiteral("Expired source failures did not leave the window"));
 	}
 
+	bool TestRateLimitPrecedesIdentityAndTrustLoad()
+	{
+		KFakeDeviceIdentityProvider localIdentity;
+		KFakeDeviceIdentityProvider remoteIdentity;
+		KFakeTrustedDeviceStore store;
+		KFakeKeyingMaterialExporter exporter;
+		store.setIdentityProvider(&localIdentity);
+		KDeviceAuthenticationFlow flow(&localIdentity, &store, &exporter);
+		flow.setSecurePeerIdentity(PeerIdentity(remoteIdentity));
+		for (quint64 nGeneration = 1; nGeneration <= 5; ++nGeneration)
+		{
+			if (!RequireSecuritySuccess(flow.beginIncoming(
+				QStringLiteral(" 192.0.2.44 "), nGeneration,
+				QStringLiteral("local")), QStringLiteral("Build rate limit")))
+			{
+				return false;
+			}
+			KTlsPairingMessage hello;
+			hello.type = HelloTlsPairingMessageType;
+			hello.strRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+			hello.strDeviceId = remoteIdentity.identity().strDeviceId;
+			hello.strDeviceName = QStringLiteral("remote");
+			hello.strVerificationMethod = QStringLiteral("unsupported");
+			hello.permissions = ViewScreenPermissionScope;
+			flow.handleMessage(hello, nGeneration);
+			flow.setSecurePeerIdentity(PeerIdentity(remoteIdentity));
+		}
+		const int nInitializeCount = localIdentity.initializeCount();
+		const int nLoadCount = store.loadCount();
+		const KSecurityStatus status = flow.beginIncoming(
+			QStringLiteral("192.0.2.44"), 6, QStringLiteral("local"));
+		return Require(status.code == PairingRateLimitedSecurityErrorCode
+			&& status.stage == PairingHelloSecurityStage,
+			QStringLiteral("Rate-limited source was not rejected at admission"))
+			&& Require(localIdentity.initializeCount() == nInitializeCount
+				&& store.loadCount() == nLoadCount,
+				QStringLiteral("Rate-limited source reached identity or trust loading"));
+	}
+
 	bool TestStructuredSecurityStatus()
 	{
 		const KSecurityStatus changed = KSecurityStatus::fromProtocolReason(
@@ -268,6 +397,8 @@ int main(int nArgumentCount, char **pArguments)
 	if (!TestCommitFailureRollsBackBothPeers())
 		return 1;
 	if (!TestSourceFailureTrackerBoundsAndExpiry())
+		return 1;
+	if (!TestRateLimitPrecedesIdentityAndTrustLoad())
 		return 1;
 	if (!TestStructuredSecurityStatus())
 		return 1;
@@ -315,12 +446,15 @@ int main(int nArgumentCount, char **pArguments)
 	controlled.setSecurePeerIdentity(PeerIdentity(controllerIdentity));
 	constexpr quint64 kGeneration = 7;
 	quint64 nCurrentGeneration = kGeneration;
+	KTlsPairingMessage controllerHello;
 	KTlsPairingMessage controllerReady;
 	KTlsPairingMessage controllerCommitted;
 	QObject::connect(&controller, &KDeviceAuthenticationFlow::messageReady,
 		[&](const KTlsPairingMessage &message)
 		{
-			if (message.type == ReadyTlsPairingMessageType)
+			if (message.type == HelloTlsPairingMessageType)
+				controllerHello = message;
+			else if (message.type == ReadyTlsPairingMessageType)
 				controllerReady = message;
 			else if (message.type == CommittedTlsPairingMessageType)
 				controllerCommitted = message;
@@ -381,16 +515,17 @@ int main(int nArgumentCount, char **pArguments)
 		[&](const KSecurityStatus &status)
 		{ strControlledRejected = status.strProtocolReason; });
 
-	QString strError;
-	if (!Require(controlled.beginIncoming(QStringLiteral("192.0.2.1"),
-		kGeneration, QStringLiteral("controlled"), &strError), strError))
+	if (!RequireSecuritySuccess(controlled.beginIncoming(
+		QStringLiteral("192.0.2.1"), kGeneration,
+		QStringLiteral("controlled")), QStringLiteral("Begin controlled pairing")))
 	{
 		return 1;
 	}
 	const QString strRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
 	const KPermissionScopes allPermissions = KPermissionScopes::fromInt(kAllPermissionScopeBits);
-	if (!Require(controller.beginOutgoing(strRequestId, kGeneration,
-		QStringLiteral("controller"), allPermissions, &strError), strError)
+	if (!RequireSecuritySuccess(controller.beginOutgoing(strRequestId, kGeneration,
+		QStringLiteral("controller"), allPermissions),
+		QStringLiteral("Begin controller pairing"))
 		|| !Require(nControllerPairingCount == 1 && nControlledPairingCount == 1,
 			QStringLiteral("First authentication did not request pairing on both peers"))
 		|| !Require(strControllerControllerFingerprint
@@ -406,15 +541,34 @@ int main(int nArgumentCount, char **pArguments)
 	{
 		return 1;
 	}
+	if (!Require(controlled.handleMessage(controllerHello, kGeneration),
+		QStringLiteral("Duplicate Hello was not handled idempotently"))
+		|| !Require(nControllerPairingCount == 1 && nControlledPairingCount == 1
+			&& controlled.context().strRequestId == strRequestId,
+			QStringLiteral("Duplicate Hello reset the active pairing transaction")))
+	{
+		return 1;
+	}
+	KTlsPairingMessage conflictingHello = controllerHello;
+	conflictingHello.strRequestId = QUuid::createUuid().toString(
+		QUuid::WithoutBraces);
+	if (!Require(controlled.handleMessage(conflictingHello, kGeneration),
+		QStringLiteral("Conflicting Hello was not rejected"))
+		|| !Require(controlled.context().strRequestId == strRequestId
+			&& nControlledPairingCount == 1,
+			QStringLiteral("Conflicting Hello replaced the active transaction")))
+	{
+		return 1;
+	}
 	controller.respondPairing(strControllerRequestId, true, allPermissions);
 	controlled.respondPairing(strControlledRequestId, true, allPermissions);
 	if (!Require(nControllerAuthenticated == 1 && nControlledAuthenticated == 1,
 		QStringLiteral("Paired peers did not authenticate"))
 		|| !Require(controller.context().effectivePermissions == allPermissions,
 			QStringLiteral("Negotiated permissions are incorrect"))
-		|| !Require(controllerStore.saveCount() == 3
-			&& controlledStore.saveCount() == 3,
-			QStringLiteral("Pairing did not perform exactly prepare, commit and final update")))
+		|| !Require(controllerStore.saveCount() == 2
+			&& controlledStore.saveCount() == 2,
+			QStringLiteral("Pairing performed a required write after Committed")))
 	{
 		return 1;
 	}
@@ -427,12 +581,16 @@ int main(int nArgumentCount, char **pArguments)
 		return 1;
 	}
 
+	controllerStore.failOnSaveCall(3);
+	controlledStore.failOnSaveCall(3);
 	nCurrentGeneration = kGeneration + 1;
-	if (!Require(controlled.beginIncoming(QStringLiteral("192.0.2.1"),
-		kGeneration + 1, QStringLiteral("controlled"), &strError), strError)
-		|| !Require(controller.beginOutgoing(
+	if (!RequireSecuritySuccess(controlled.beginIncoming(
+		QStringLiteral("192.0.2.1"), kGeneration + 1,
+		QStringLiteral("controlled")), QStringLiteral("Begin trusted controlled"))
+		|| !RequireSecuritySuccess(controller.beginOutgoing(
 			QUuid::createUuid().toString(QUuid::WithoutBraces), kGeneration + 1,
-			QStringLiteral("controller"), allPermissions, &strError), strError)
+			QStringLiteral("controller"), allPermissions),
+			QStringLiteral("Begin trusted controller"))
 		|| !Require(nControllerPairingCount == 1 && nControlledPairingCount == 1,
 			QStringLiteral("Trusted peers requested pairing again"))
 		|| !Require(nControllerAuthenticated == 2 && nControlledAuthenticated == 2,

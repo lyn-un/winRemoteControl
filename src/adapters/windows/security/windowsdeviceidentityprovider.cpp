@@ -1,6 +1,7 @@
 #include "adapters/windows/security/windowsdeviceidentityprovider.h"
 
 #include "adapters/windows/security/atomicjsonfile.h"
+#include "adapters/windows/security/certificatevaliditypolicy.h"
 #include "core/security/securitycanonicalwriter.h"
 
 #include <QtCore/QDir>
@@ -22,7 +23,6 @@ namespace
 	constexpr int kP256PublicKeyBytes = 65;
 	constexpr int kP256SignatureBytes = 64;
 	constexpr int kSha256Bytes = 32;
-	constexpr int kCertificateLifetimeYears = 5;
 	constexpr int kCertificateRenewalDays = 30;
 
 	QString StatusMessage(const QString &strOperation, SECURITY_STATUS status)
@@ -126,6 +126,24 @@ namespace
 		return QDateTime(QDate(systemTime.wYear, systemTime.wMonth, systemTime.wDay),
 			QTime(systemTime.wHour, systemTime.wMinute, systemTime.wSecond,
 				systemTime.wMilliseconds), Qt::UTC);
+	}
+
+	bool SystemTimeFromDateTime(const QDateTime &dateTime, SYSTEMTIME *pSystemTime)
+	{
+		if (pSystemTime == nullptr || !dateTime.isValid())
+			return false;
+		const QDateTime utc = dateTime.toUTC();
+		const QDate date = utc.date();
+		const QTime time = utc.time();
+		*pSystemTime = {};
+		pSystemTime->wYear = static_cast<WORD>(date.year());
+		pSystemTime->wMonth = static_cast<WORD>(date.month());
+		pSystemTime->wDay = static_cast<WORD>(date.day());
+		pSystemTime->wHour = static_cast<WORD>(time.hour());
+		pSystemTime->wMinute = static_cast<WORD>(time.minute());
+		pSystemTime->wSecond = static_cast<WORD>(time.second());
+		pSystemTime->wMilliseconds = static_cast<WORD>(time.msec());
+		return true;
 	}
 
 	bool EncodeCertificateObject(LPCSTR pszType, const void *pValue,
@@ -720,10 +738,17 @@ bool KWindowsDeviceIdentityProvider::createCertificate(QString *pErrorMessage)
 	};
 	CERT_EXTENSIONS certificateExtensions = { 3, extensions };
 
+	const KCertificateValidityPeriod validity =
+		BuildDeviceCertificateValidityPeriod(QDateTime::currentDateTimeUtc());
 	SYSTEMTIME validFrom = {};
-	GetSystemTime(&validFrom);
-	SYSTEMTIME validTo = validFrom;
-	validTo.wYear = static_cast<WORD>(validTo.wYear + kCertificateLifetimeYears);
+	SYSTEMTIME validTo = {};
+	if (!SystemTimeFromDateTime(validity.validFromUtc, &validFrom)
+		|| !SystemTimeFromDateTime(validity.validToUtc, &validTo))
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("Unable to calculate certificate validity period");
+		return false;
+	}
 	CRYPT_ALGORITHM_IDENTIFIER signatureAlgorithm = {};
 	signatureAlgorithm.pszObjId = const_cast<LPSTR>(szOID_ECDSA_SHA256);
 	const QString strKeyName = KeyName(m_identity.strDeviceId);

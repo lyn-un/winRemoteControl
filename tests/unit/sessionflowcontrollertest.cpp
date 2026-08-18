@@ -4,6 +4,7 @@
 #include "fakesecurity.h"
 
 #include "core/transport/signalingtransport.h"
+#include "core/security/admissioncontroller.h"
 
 #include <QtCore/QCoreApplication>
 
@@ -32,6 +33,10 @@ public:
 	{
 		strBusyMessage = strMessage;
 	}
+	void setAdmissionController(KAdmissionController *pController) override
+	{
+		pAdmissionController = pController;
+	}
 	bool setIdentityProvider(KDeviceIdentityProvider *, QString *) override
 	{
 		return true;
@@ -58,6 +63,7 @@ public:
 	int nDisconnectCount = 0;
 	int nStopCount = 0;
 	KFakeKeyingMaterialExporter keyingMaterialExporter;
+	KAdmissionController *pAdmissionController = nullptr;
 };
 
 void Check(bool bCondition, const char *pDescription)
@@ -151,6 +157,35 @@ void TestAccessFlowRejectsApprovalBeforeAuthentication()
 		"access responses cannot bypass identity authentication");
 }
 
+void TestAccessFlowSharesAdmissionWindow()
+{
+	KFakeSignalingTransport transport;
+	KFakeDeviceIdentityProvider localIdentity;
+	KFakeDeviceIdentityProvider remoteIdentity;
+	KFakeTrustedDeviceStore store;
+	store.setIdentityProvider(&localIdentity);
+	KAccessSessionFlow flow(&transport, &localIdentity, &store);
+	Check(transport.pAdmissionController != nullptr,
+		"access flow injects a shared admission controller into transport");
+	if (transport.pAdmissionController == nullptr)
+		return;
+	const QString strSourceAddress = QStringLiteral("192.0.2.88");
+	for (int nIndex = 0; nIndex < 5; ++nIndex)
+		transport.pAdmissionController->recordPeerFailure(strSourceAddress);
+	emit transport.secureChannelEstablished(FakePeerIdentity(remoteIdentity));
+	KSecurityStatus rejection;
+	QObject::connect(&flow, &KAccessSessionFlow::incomingSecurityRejected,
+		[&rejection](const KSecurityStatus &status) { rejection = status; });
+	const int nIdentityInitializations = localIdentity.initializeCount();
+	const int nTrustLoads = store.loadCount();
+	flow.beginIncoming(strSourceAddress, 23, QStringLiteral("controlled"));
+	Check(rejection.code == PairingRateLimitedSecurityErrorCode,
+		"transport failures rate-limit the authentication layer");
+	Check(localIdentity.initializeCount() == nIdentityInitializations
+		&& store.loadCount() == nTrustLoads,
+		"shared admission rejection precedes identity and trust-store work");
+}
+
 void TestMediaFlow()
 {
 	KMediaSessionController media;
@@ -191,6 +226,7 @@ int main(int argc, char *argv[])
 	TestCapabilityFlow();
 	TestAccessFlowOwnsTransportBoundary();
 	TestAccessFlowRejectsApprovalBeforeAuthentication();
+	TestAccessFlowSharesAdmissionWindow();
 	TestMediaFlow();
 	return g_nFailureCount == 0 ? 0 : 1;
 }

@@ -132,10 +132,14 @@ namespace
 		QString *pDeviceId,
 		QString *pErrorMessage)
 	{
-		if (pCertificate == nullptr
-			|| !CertCompareCertificateName(X509_ASN_ENCODING,
-				&pCertificate->pCertInfo->Subject, &pCertificate->pCertInfo->Issuer)
-			|| CertVerifyTimeValidity(nullptr, pCertificate->pCertInfo) != 0
+		if (pCertificate == nullptr)
+		{
+			if (pErrorMessage != nullptr)
+				*pErrorMessage = QStringLiteral("Peer certificate is unavailable");
+			return false;
+		}
+		if (!CertCompareCertificateName(X509_ASN_ENCODING,
+			&pCertificate->pCertInfo->Subject, &pCertificate->pCertInfo->Issuer)
 			|| !CryptVerifyCertificateSignatureEx(0, X509_ASN_ENCODING,
 				CRYPT_VERIFY_CERT_SIGN_SUBJECT_CERT,
 				const_cast<PCERT_CONTEXT>(pCertificate),
@@ -144,7 +148,19 @@ namespace
 				0, nullptr))
 		{
 			if (pErrorMessage != nullptr)
-				*pErrorMessage = QStringLiteral("Peer certificate is not a valid current self-signed certificate");
+				*pErrorMessage = QStringLiteral("Peer certificate is not validly self-signed");
+			return false;
+		}
+		const LONG nTimeValidity = CertVerifyTimeValidity(nullptr,
+			pCertificate->pCertInfo);
+		if (nTimeValidity != 0)
+		{
+			if (pErrorMessage != nullptr)
+			{
+				*pErrorMessage = nTimeValidity < 0
+					? QStringLiteral("Peer certificate is not yet valid; check system time")
+					: QStringLiteral("Peer certificate has expired; check system time");
+			}
 			return false;
 		}
 		const CRYPT_ALGORITHM_IDENTIFIER &algorithm =
@@ -478,6 +494,66 @@ bool KSchannelTlsEngine::decrypt(QByteArray *pEncryptedBuffer,
 		else
 			pEncryptedBuffer->clear();
 	}
+	return true;
+}
+
+bool KSchannelTlsEngine::shutdown(QList<QByteArray> *pOutputRecords,
+	QString *pErrorMessage)
+{
+	if (!m_bReady || !m_bContextValid || pOutputRecords == nullptr)
+		return false;
+	DWORD nShutdownToken = SCHANNEL_SHUTDOWN;
+	SecBuffer controlBuffer = {
+		static_cast<unsigned long>(sizeof(nShutdownToken)),
+		SECBUFFER_TOKEN,
+		&nShutdownToken
+	};
+	SecBufferDesc controlDescription = {
+		SECBUFFER_VERSION, 1, &controlBuffer
+	};
+	SECURITY_STATUS status = ApplyControlToken(&m_context,
+		&controlDescription);
+	if (status != SEC_E_OK)
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = SecurityStatusMessage(
+				QStringLiteral("ApplyControlToken(SCHANNEL_SHUTDOWN)"), status);
+		return false;
+	}
+
+	SecBuffer outputBuffer = { 0, SECBUFFER_TOKEN, nullptr };
+	SecBufferDesc outputDescription = {
+		SECBUFFER_VERSION, 1, &outputBuffer
+	};
+	ULONG nAttributes = 0;
+	TimeStamp expiry = {};
+	if (m_bServer)
+	{
+		status = AcceptSecurityContext(&m_credential, &m_context, nullptr,
+			kServerContextRequirements, SECURITY_NATIVE_DREP, &m_context,
+			&outputDescription, &nAttributes, &expiry);
+	}
+	else
+	{
+		status = InitializeSecurityContextW(&m_credential, &m_context, nullptr,
+			kClientContextRequirements, 0, SECURITY_NATIVE_DREP, nullptr, 0,
+			&m_context, &outputDescription, &nAttributes, &expiry);
+	}
+	if (outputBuffer.pvBuffer != nullptr && outputBuffer.cbBuffer > 0)
+	{
+		pOutputRecords->append(QByteArray(
+			static_cast<const char *>(outputBuffer.pvBuffer),
+			static_cast<int>(outputBuffer.cbBuffer)));
+		FreeContextBuffer(outputBuffer.pvBuffer);
+	}
+	if (status != SEC_E_OK && status != SEC_I_CONTINUE_NEEDED)
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = SecurityStatusMessage(
+				QStringLiteral("Generate Schannel close_notify"), status);
+		return false;
+	}
+	m_bReady = false;
 	return true;
 }
 

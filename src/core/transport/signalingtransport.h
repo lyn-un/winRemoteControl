@@ -9,6 +9,7 @@
 #include "core/transport/tlspeeridentity.h"
 
 class KDeviceIdentityProvider;
+class KAdmissionController;
 
 class KSignalingTransport : public QObject, public KKeyingMaterialExporter
 {
@@ -26,6 +27,8 @@ public:
 	KSignalingTransport &operator=(const KSignalingTransport &) = delete;
 
 	virtual bool startServer(quint16 nPort, QString *pErrorMessage) = 0;
+	virtual quint16 listeningPort() const { return 0; }
+	virtual void setAdmissionController(KAdmissionController *) {}
 	virtual void connectToHost(const QString &strHost, quint16 nPort) = 0;
 	virtual void disconnectPeer() = 0;
 	virtual void stop() = 0;

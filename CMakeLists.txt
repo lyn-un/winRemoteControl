@@ -116,6 +116,8 @@ target_link_libraries(wrc_protocol PUBLIC
 )
 
 add_library(wrc_core STATIC
+	src/core/security/admissioncontroller.cpp
+	src/core/security/admissioncontroller.h
 	src/core/security/devicecertificate.cpp
 	src/core/security/devicecertificate.h
 	src/core/security/deviceidentity.cpp
@@ -187,6 +189,8 @@ if(WIN32)
 add_library(wrc_windows_security_adapter STATIC
 	src/adapters/windows/security/atomicjsonfile.cpp
 	src/adapters/windows/security/atomicjsonfile.h
+	src/adapters/windows/security/certificatevaliditypolicy.cpp
+	src/adapters/windows/security/certificatevaliditypolicy.h
 	src/adapters/windows/security/signedjsontrusteddevicestore.cpp
 	src/adapters/windows/security/signedjsontrusteddevicestore.h
 	src/adapters/windows/security/windowsdeviceidentityprovider.cpp
@@ -271,8 +275,12 @@ endif()
 add_library(wrc_authentication_application STATIC
 	src/session/deviceauthenticationflow.cpp
 	src/session/deviceauthenticationflow.h
+	src/session/pairingcommand.cpp
+	src/session/pairingcommand.h
 	src/session/pairingtransaction.cpp
 	src/session/pairingtransaction.h
+	src/session/securitysessioncontroller.cpp
+	src/session/securitysessioncontroller.h
 	src/session/trusteddeviceservice.cpp
 	src/session/trusteddeviceservice.h
 )
@@ -817,6 +825,7 @@ if(WRC_BUILD_TESTS)
 	target_link_libraries(wrc_schannel_transport_tests PRIVATE
 		wrc_signaling_adapter
 		wrc_windows_security_adapter
+		wrc_authentication_application
 		Qt6::Core
 		Qt6::Network
 	)
@@ -947,6 +956,17 @@ if(WRC_BUILD_TESTS)
 	)
 	add_test(NAME wrc_webrtc_peer_initialization_tests
 		COMMAND wrc_webrtc_peer_initialization_tests)
+
+	add_executable(wrc_webrtc_remote_frame_processor_tests
+		tests/unit/webrtcremoteframeprocessortest.cpp
+		src/common/framewatermark.cpp
+	)
+	target_link_libraries(wrc_webrtc_remote_frame_processor_tests PRIVATE
+		wrc_webrtc_adapter
+		Qt6::Core
+	)
+	add_test(NAME wrc_webrtc_remote_frame_processor_tests
+		COMMAND wrc_webrtc_remote_frame_processor_tests)
 
 	add_executable(wrc_capture_pipeline_tests
 		tests/unit/capturepipelinetest.cpp

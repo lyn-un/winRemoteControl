@@ -41,6 +41,8 @@ public:
 		QList<QByteArray> *pPlainTexts,
 		bool *pClosed,
 		QString *pErrorMessage);
+	bool shutdown(QList<QByteArray> *pOutputRecords,
+		QString *pErrorMessage);
 	bool peerIdentity(const QString &strSourceAddress,
 		KTlsPeerIdentity *pIdentity,
 		QString *pErrorMessage) const;

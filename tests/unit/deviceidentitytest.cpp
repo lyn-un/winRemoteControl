@@ -1,4 +1,5 @@
 #include "adapters/windows/security/atomicjsonfile.h"
+#include "adapters/windows/security/certificatevaliditypolicy.h"
 #include "adapters/windows/security/signedjsontrusteddevicestore.h"
 #include "adapters/windows/security/windowsdeviceidentityprovider.h"
 
@@ -42,11 +43,48 @@ namespace
 			QUuid::WithoutBraces);
 		return device;
 	}
+
+	FILETIME FileTimeFromDateTime(const QDateTime &dateTime)
+	{
+		const QDateTime utc = dateTime.toUTC();
+		const QDate date = utc.date();
+		const QTime time = utc.time();
+		SYSTEMTIME systemTime = {};
+		systemTime.wYear = static_cast<WORD>(date.year());
+		systemTime.wMonth = static_cast<WORD>(date.month());
+		systemTime.wDay = static_cast<WORD>(date.day());
+		systemTime.wHour = static_cast<WORD>(time.hour());
+		systemTime.wMinute = static_cast<WORD>(time.minute());
+		systemTime.wSecond = static_cast<WORD>(time.second());
+		systemTime.wMilliseconds = static_cast<WORD>(time.msec());
+		FILETIME fileTime = {};
+		SystemTimeToFileTime(&systemTime, &fileTime);
+		return fileTime;
+	}
 }
 
 int main(int nArgumentCount, char **pArguments)
 {
 	QCoreApplication application(nArgumentCount, pArguments);
+	const QDateTime policyNow(QDate(2026, 8, 17), QTime(12, 34, 56), Qt::UTC);
+	const KCertificateValidityPeriod normalValidity =
+		BuildDeviceCertificateValidityPeriod(policyNow);
+	if (!Require(normalValidity.validFromUtc == policyNow.addSecs(-5 * 60),
+		QStringLiteral("Certificate clock-skew tolerance is incorrect"))
+		|| !Require(normalValidity.validToUtc == policyNow.addYears(5),
+			QStringLiteral("Certificate lifetime is incorrect")))
+	{
+		return 1;
+	}
+	const QDateTime leapDay(QDate(2028, 2, 29), QTime(8, 0), Qt::UTC);
+	const KCertificateValidityPeriod leapValidity =
+		BuildDeviceCertificateValidityPeriod(leapDay);
+	if (!Require(leapValidity.validToUtc.date() == QDate(2033, 2, 28),
+		QStringLiteral("Leap-day certificate expiry is invalid")))
+	{
+		return 1;
+	}
+
 	const QString strDirectoryPath = QDir(QCoreApplication::applicationDirPath())
 		.filePath(QStringLiteral("device-identity-test-%1")
 			.arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
@@ -63,11 +101,56 @@ int main(int nArgumentCount, char **pArguments)
 
 	QString strError;
 	KWindowsDeviceIdentityProvider provider(strDirectoryPath);
+	const QDateTime creationStartedUtc = QDateTime::currentDateTimeUtc();
 	if (!Require(provider.initialize(&strError), strError))
 		return 1;
+	const QDateTime creationFinishedUtc = QDateTime::currentDateTimeUtc();
 	const KDeviceIdentity firstIdentity = provider.identity();
 	if (!Require(firstIdentity.isValid(), QStringLiteral("Generated identity is invalid")))
 		return 1;
+	const KDeviceCertificate firstCertificate = provider.certificate();
+	if (!Require(firstCertificate.validFromUtc
+			>= creationStartedUtc.addSecs(-5 * 60 - 1)
+			&& firstCertificate.validFromUtc
+			<= creationFinishedUtc.addSecs(-5 * 60 + 1),
+		QStringLiteral("Generated certificate was not backdated safely"))
+		|| !Require(firstCertificate.validToUtc
+			>= creationStartedUtc.addYears(5).addSecs(-1)
+			&& firstCertificate.validToUtc
+			<= creationFinishedUtc.addYears(5).addSecs(1),
+			QStringLiteral("Generated certificate expiry is incorrect")))
+	{
+		provider.deletePersistedKey(nullptr);
+		return 1;
+	}
+	PCCERT_CONTEXT pValidityCertificate = static_cast<PCCERT_CONTEXT>(
+		provider.duplicateNativeCertificate(&strError));
+	if (!Require(pValidityCertificate != nullptr, strError))
+	{
+		provider.deletePersistedKey(nullptr);
+		return 1;
+	}
+	FILETIME insideValidity = FileTimeFromDateTime(
+		firstCertificate.validFromUtc.addSecs(1));
+	FILETIME beforeValidity = FileTimeFromDateTime(
+		firstCertificate.validFromUtc.addSecs(-1));
+	FILETIME afterValidity = FileTimeFromDateTime(
+		firstCertificate.validToUtc.addSecs(1));
+	const bool bValidityCorrect = Require(CertVerifyTimeValidity(
+		&insideValidity, pValidityCertificate->pCertInfo) == 0,
+		QStringLiteral("Backdated certificate was not valid inside its window"))
+		&& Require(CertVerifyTimeValidity(
+			&beforeValidity, pValidityCertificate->pCertInfo) < 0,
+			QStringLiteral("Certificate accepted time beyond clock-skew tolerance"))
+		&& Require(CertVerifyTimeValidity(
+			&afterValidity, pValidityCertificate->pCertInfo) > 0,
+			QStringLiteral("Certificate accepted time after expiry"));
+	CertFreeCertificateContext(pValidityCertificate);
+	if (!bValidityCorrect)
+	{
+		provider.deletePersistedKey(nullptr);
+		return 1;
+	}
 
 	const QByteArray payload("identity-test-payload");
 	QByteArray signature;
@@ -86,6 +169,29 @@ int main(int nArgumentCount, char **pArguments)
 		if (!Require(reopened.initialize(&strError), strError)
 			|| !Require(reopened.identity().strDeviceId == firstIdentity.strDeviceId,
 				QStringLiteral("Identity did not persist")))
+		{
+			provider.deletePersistedKey(nullptr);
+			return 1;
+		}
+	}
+
+	PCCERT_CONTEXT pStoredCertificate = static_cast<PCCERT_CONTEXT>(
+		provider.duplicateNativeCertificate(&strError));
+	if (!Require(pStoredCertificate != nullptr, strError)
+		|| !Require(CertDeleteCertificateFromStore(pStoredCertificate) != FALSE,
+			QStringLiteral("Unable to remove certificate for renewal test")))
+	{
+		provider.deletePersistedKey(nullptr);
+		return 1;
+	}
+	{
+		KWindowsDeviceIdentityProvider renewed(strDirectoryPath);
+		if (!Require(renewed.initialize(&strError), strError)
+			|| !Require(renewed.identity().strDeviceId == firstIdentity.strDeviceId,
+				QStringLiteral("Certificate renewal changed device identity"))
+			|| !Require(renewed.certificate().spkiSha256
+				== firstCertificate.spkiSha256,
+				QStringLiteral("Certificate renewal changed the SPKI fingerprint")))
 		{
 			provider.deletePersistedKey(nullptr);
 			return 1;

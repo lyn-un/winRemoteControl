@@ -34,7 +34,12 @@ public:
 		m_certificate.validToUtc = QDateTime::currentDateTimeUtc().addYears(1);
 	}
 
-	bool initialize(QString *) override { return true; }
+	bool initialize(QString *) override
+	{
+		++m_nInitializeCount;
+		return true;
+	}
+	int initializeCount() const { return m_nInitializeCount; }
 	KDeviceIdentity identity() const override { return m_identity; }
 	bool sign(const QByteArray &data, QByteArray *pSignature, QString *) const override
 	{
@@ -73,6 +78,7 @@ public:
 private:
 	KDeviceIdentity m_identity;
 	KDeviceCertificate m_certificate;
+	int m_nInitializeCount = 0;
 };
 
 class KFakeTrustedDeviceStore final : public KTrustedDeviceStore
@@ -82,7 +88,15 @@ public:
 	{
 		m_pIdentityProvider = pIdentityProvider;
 	}
-	QVector<KTrustedDevice> loadDevices(QString *) override { return m_devices; }
+	QVector<KTrustedDevice> loadDevices(QString *) override
+	{
+		++m_nLoadCount;
+		return m_devices;
+	}
+	KTrustedDeviceStoreError lastLoadError() const override
+	{
+		return NoTrustedDeviceStoreError;
+	}
 	bool saveDevices(const QVector<KTrustedDevice> &devices, QString *pErrorMessage) override
 	{
 		++m_nSaveCount;
@@ -101,12 +115,14 @@ public:
 	const QVector<KTrustedDevice> &devices() const { return m_devices; }
 	void failOnSaveCall(int nSaveCall) { m_nFailOnSaveCall = nSaveCall; }
 	int saveCount() const { return m_nSaveCount; }
+	int loadCount() const { return m_nLoadCount; }
 
 private:
 	KDeviceIdentityProvider *m_pIdentityProvider = nullptr;
 	QVector<KTrustedDevice> m_devices;
 	int m_nSaveCount = 0;
 	int m_nFailOnSaveCall = 0;
+	int m_nLoadCount = 0;
 };
 
 class KFakeKeyingMaterialExporter final : public KKeyingMaterialExporter

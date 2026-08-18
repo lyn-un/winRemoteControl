@@ -5,6 +5,13 @@
 
 class KDeviceIdentityProvider;
 
+enum KTrustedDeviceStoreError
+{
+	NoTrustedDeviceStoreError,
+	UnavailableTrustedDeviceStoreError,
+	TamperedTrustedDeviceStoreError
+};
+
 class KTrustedDeviceStore
 {
 public:
@@ -12,6 +19,7 @@ public:
 
 	virtual void setIdentityProvider(KDeviceIdentityProvider *pIdentityProvider) = 0;
 	virtual QVector<KTrustedDevice> loadDevices(QString *pErrorMessage) = 0;
+	virtual KTrustedDeviceStoreError lastLoadError() const = 0;
 	virtual bool saveDevices(const QVector<KTrustedDevice> &devices,
 		QString *pErrorMessage) = 0;
 	virtual QString takeMigrationNotice() { return QString(); }

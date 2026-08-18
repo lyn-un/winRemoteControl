@@ -49,14 +49,14 @@ winRemoteControl.exe
 | 范围 | 重点事件 |
 | --- | --- |
 | TCP/审批 | `signaling_connect_start/success/failed`、access request/accepted/rejected/timeout |
-| 身份安全 | `device_pairing`、`device_authentication`、`pairing_rollback_failed`、`security_drop permission_denied`；失败统一带 requestId、generation、domain、code、stage，只记录内部 ID、短指纹、权限和原因 |
+| 身份安全 | `device_pairing`、`device_authentication`、`pairing_cleanup`、`pairing_rollback_failed`、`security_drop permission_denied`；失败统一带 requestId、generation、domain、code、stage，只记录内部 ID、短指纹、权限和原因 |
 | 协商 | SDP/ICE、capabilities sent/negotiated/rejected、DataChannel state |
 | 初始化 | WebRTC initialization stage、rollback start/finished/timeout |
-| 会话 | `session_recovery_start/success/failed`、`session_end`、shutdown pending components |
-| 视频 | capture、`initial_frame_retry`、`h264_encode_no_output`、decode/render、frame coalesced summary |
+| 会话 | `session_recovery_start/success/failed`、`session_end`、`signaling_closed_after_session_end`、shutdown pending components |
+| 视频 | capture、`initial_frame_retry`、`h264_encode_no_output`、decode/render、frame coalesced summary；`render_end` 的 `callbackToConvertMs`、`convertToEnqueueMs`、`enqueueToPresentMs`、`callbackToPresentMs` 用于定位控制端阶段 |
 | 输入 | `input_send/recv`、`inject_begin/end`、`input_roundtrip`、`input_roundtrip_stats` |
 | 剪贴板 | channel、send/receive/apply/drop；只记录 UUID、大小、序号和原因 |
-| 终端 | `terminal_open_requested`、`terminal_approval_pending`、`terminal_started`、`terminal_exited`、`terminal_host_error`、`terminal_relay_launch/connected/input/focus/closed` |
+| 终端 | `terminal_open_requested`、`terminal_approval_pending`、`terminal_started`、`terminal_exited`、`terminal_host_error`、writer cancellation/isolation、`terminal_relay_launch/connected/input/focus/closed` |
 
 排查跨机器问题时，需要分别收集两台电脑同一时间段的日志。日志不会通过 WebRTC 自动传输。
 

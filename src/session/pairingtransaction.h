@@ -44,6 +44,8 @@ public:
 	KPermissionScopes localPermissions() const;
 	KPermissionScopes remotePermissions() const;
 	KPairingTransactionState state() const;
+	bool isActive() const;
+	bool isTerminal() const;
 	QString requestId() const;
 	quint64 generation() const;
 

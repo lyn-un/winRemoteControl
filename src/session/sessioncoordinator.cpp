@@ -92,6 +92,30 @@ namespace
 		}
 	}
 
+	static KSessionErrorStage sessionErrorStage(const KSecurityStatus &status)
+	{
+		switch (status.stage)
+		{
+		case ConnectSecurityStage:
+		case PrefaceSecurityStage:
+		case TlsHandshakeSecurityStage:
+			return ConnectingSessionErrorStage;
+		case TrustLoadSecurityStage:
+		case TrustRollbackSecurityStage:
+			return StartupSessionErrorStage;
+		case PermissionCheckSecurityStage:
+			return NegotiationSessionErrorStage;
+		case PairingHelloSecurityStage:
+		case UserApprovalSecurityStage:
+		case PrepareSecurityStage:
+		case CommitSecurityStage:
+			return ApprovalSessionErrorStage;
+		case UnknownSecurityStage:
+		default:
+			return UnknownSessionErrorStage;
+		}
+	}
+
 }
 
 KSessionCoordinator::KSessionCoordinator(
@@ -157,8 +181,25 @@ KSessionCoordinator::KSessionCoordinator(
 	connect(m_pAccessSessionFlow, &KAccessSessionFlow::signalingError,
 		this, [this](const QString &strMessage)
 		{
+			const KSessionState state = m_sessionStateMachine.state();
+			if (m_sessionStateMachine.isStopping()
+				|| state == ShutdownTimedOutSessionState
+				|| state == IdleSessionState
+				|| state == ListeningSessionState)
+			{
+				KSessionTraceLogger::write(
+					roleToString(m_sessionStateMachine.role()),
+					QStringLiteral("signaling_closed_after_session_end"),
+					QStringLiteral("expected"), -1,
+					QStringLiteral("generation=%1 state=%2 technical=%3")
+						.arg(m_sessionStateMachine.generation())
+						.arg(KSessionStateMachine::stateName(state), strMessage));
+				return;
+			}
+			const KSessionErrorStage stage = m_sessionStateMachine.isNegotiating()
+				? NegotiationSessionErrorStage : ConnectedSessionErrorStage;
 			reportSessionError(SignalingSessionErrorDomain,
-				ConnectionFailedSessionErrorCode, ConnectingSessionErrorStage,
+				ConnectionFailedSessionErrorCode, stage,
 				true, strMessage);
 		});
 	connect(m_pAccessSessionFlow, &KAccessSessionFlow::outgoingConnectionEstablished,
@@ -1072,12 +1113,16 @@ void KSessionCoordinator::finishSession(KSessionEndReason reason,
 	bool bReportError)
 {
 	const bool bRecovering = m_sessionStateMachine.isReconnecting();
-	if (m_sessionStateMachine.isAwaitingApproval()
+	const bool bCancelApproval = m_sessionStateMachine.isAwaitingApproval()
 		|| m_sessionStateMachine.isAuthenticatingIdentity()
-		|| m_sessionStateMachine.isPairing())
-		m_pAccessSessionFlow->cancelApproval(QStringLiteral("cancelled"), bNotifyRemote);
+		|| m_sessionStateMachine.isPairing();
 	if (!m_sessionStateMachine.beginStopping())
 		return;
+	// Enter Stopping before sending any cancellation message. The peer may close
+	// the TLS socket synchronously in response; that close is expected teardown,
+	// not a new signaling failure for the session being rejected.
+	if (bCancelApproval)
+		m_pAccessSessionFlow->cancelApproval(QStringLiteral("cancelled"), bNotifyRemote);
 	updateListeningAvailability(false);
 
 	const QString strReason = KSessionStateMachine::endReasonName(reason, strDetail);
@@ -1534,7 +1579,7 @@ void KSessionCoordinator::handleRemoteFrame(const KDecodedVideoFrame &frame)
 	// coalesces again before present, so this middle layer only forwards the
 	// frame instead of adding another mutex+QueuedConnection hop.
 	if (!hasPermission(ViewScreenPermissionScope)
-		|| frame.nWidth <= 0 || frame.nHeight <= 0 || frame.vecBgraBuffer.empty())
+		|| frame.nWidth <= 0 || frame.nHeight <= 0 || !frame.hasPixels())
 		return;
 
 	emit remoteFrameReady(frame);
@@ -2167,7 +2212,7 @@ void KSessionCoordinator::handleIncomingSecurityRejected(
 		return;
 	}
 	reportSessionError(SecuritySessionErrorDomain, sessionErrorCode(status),
-		ApprovalSessionErrorStage, status.bRetryable,
+		sessionErrorStage(status), status.bRetryable,
 		QStringLiteral("requestId=%1 generation=%2 securityDomain=%3 "
 			"securityStage=%4 reason=%5 technical=%6")
 			.arg(status.strRequestId)
@@ -2194,7 +2239,7 @@ void KSessionCoordinator::handleOutgoingSecurityRejected(
 	finishSession(ConnectFailedSessionEndReason, status.strProtocolReason,
 		false, false, false);
 	reportSessionError(SecuritySessionErrorDomain, sessionErrorCode(status),
-		ApprovalSessionErrorStage, status.bRetryable,
+		sessionErrorStage(status), status.bRetryable,
 		QStringLiteral("requestId=%1 generation=%2 securityDomain=%3 "
 			"securityStage=%4 reason=%5 technical=%6")
 			.arg(status.strRequestId)

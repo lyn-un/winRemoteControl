@@ -1,5 +1,7 @@
 #include "adapters/signaling/tcpsignalingtransport.h"
 
+#include "core/security/admissioncontroller.h"
+
 #include "common/latencytracelogger.h"
 #include "common/sessiontracelogger.h"
 #include "core/protocol/protocolconstraints.h"
@@ -39,6 +41,8 @@ KTcpSignalingTransport::KTcpSignalingTransport(QObject *pParent)
 	, m_pConnectTimeoutTimer(new QTimer(this))
 	, m_pReadTimeoutTimer(new QTimer(this))
 {
+	m_pFallbackAdmissionController = new KAdmissionController();
+	m_pAdmissionController = m_pFallbackAdmissionController;
 	m_pConnectTimeoutTimer->setSingleShot(true);
 	m_pReadTimeoutTimer->setSingleShot(true);
 	connect(m_pConnectTimeoutTimer, &QTimer::timeout,
@@ -50,6 +54,14 @@ KTcpSignalingTransport::KTcpSignalingTransport(QObject *pParent)
 KTcpSignalingTransport::~KTcpSignalingTransport()
 {
 	stop();
+	delete m_pFallbackAdmissionController;
+}
+
+void KTcpSignalingTransport::setAdmissionController(
+	KAdmissionController *pController)
+{
+	m_pAdmissionController = pController != nullptr
+		? pController : m_pFallbackAdmissionController;
 }
 
 bool KTcpSignalingTransport::setIdentityProvider(
@@ -94,6 +106,11 @@ bool KTcpSignalingTransport::startServer(quint16 nPort, QString *pErrorMessage)
 	return true;
 }
 
+quint16 KTcpSignalingTransport::listeningPort() const
+{
+	return m_pServer != nullptr ? m_pServer->serverPort() : 0;
+}
+
 void KTcpSignalingTransport::connectToHost(const QString &strHost, quint16 nPort)
 {
 	stop();
@@ -129,7 +146,7 @@ void KTcpSignalingTransport::disconnectPeer()
 	m_pConnectTimeoutTimer->stop();
 	m_pReadTimeoutTimer->stop();
 	m_connectElapsedTimer.invalidate();
-	closeSocket();
+	closeSocket(true);
 	emit stateChanged(m_pServer != nullptr && m_pServer->isListening()
 		? QStringLiteral("Listening") : QStringLiteral("Idle"));
 }
@@ -141,7 +158,7 @@ void KTcpSignalingTransport::stop()
 	m_pConnectTimeoutTimer->stop();
 	m_pReadTimeoutTimer->stop();
 	m_connectElapsedTimer.invalidate();
-	closeSocket();
+	closeSocket(true);
 	if (m_pServer != nullptr)
 	{
 		m_pServer->close();
@@ -214,6 +231,7 @@ void KTcpSignalingTransport::handleNewConnection()
 		if (isSourceRateLimited(pSocket->peerAddress().toString()))
 		{
 			pSocket->write(FixedPreface(kServerBusyPreface));
+			pSocket->flush();
 			pSocket->disconnectFromHost();
 			pSocket->deleteLater();
 			continue;
@@ -288,9 +306,28 @@ void KTcpSignalingTransport::handleDisconnected()
 {
 	m_pReadTimeoutTimer->stop();
 	const bool bWasPending = m_bOutgoingConnectionPending;
+	const bool bHandshakeTruncated = m_stage == AwaitingClientPrefaceStage
+		|| m_stage == AwaitingServerPrefaceStage
+		|| m_stage == TlsHandshakeStage;
+	const QString strSourceAddress = m_pSocket != nullptr
+		? m_pSocket->peerAddress().toString() : QString();
 	m_bOutgoingConnectionPending = false;
 	m_bPeerBusy = false;
 	m_stage = IdleStage;
+	if (bHandshakeTruncated)
+	{
+		if (!m_bOutgoing)
+			recordSourceFailure(strSourceAddress);
+		KSessionError error;
+		error.domain = SecuritySessionErrorDomain;
+		error.code = ConnectionFailedSessionErrorCode;
+		error.stage = m_bOutgoing ? ConnectingSessionErrorStage
+			: ListeningSessionErrorStage;
+		error.bRetryable = true;
+		error.strTechnicalMessage = QStringLiteral(
+			"Secure signaling handshake was truncated by the peer");
+		emit tlsHandshakeFailed(error);
+	}
 	if (bWasPending)
 		emit outgoingConnectionFailed(QStringLiteral("Secure signaling connection closed"));
 	emit stateChanged(QStringLiteral("Disconnected"));
@@ -342,9 +379,30 @@ void KTcpSignalingTransport::setSocket(QTcpSocket *pSocket)
 		this, &KTcpSignalingTransport::handleSocketError);
 }
 
-void KTcpSignalingTransport::closeSocket()
+void KTcpSignalingTransport::closeSocket(bool bSendCloseNotify)
 {
 	m_pReadTimeoutTimer->stop();
+	if (bSendCloseNotify && m_stage == SecureStage && m_pSocket != nullptr
+		&& m_pSocket->state() == QAbstractSocket::ConnectedState)
+	{
+		QList<QByteArray> closeRecords;
+		QString strCloseError;
+		if (m_tlsEngine.shutdown(&closeRecords, &strCloseError))
+		{
+			for (const QByteArray &record : closeRecords)
+			{
+				if (!writeRaw(record, &strCloseError))
+					break;
+			}
+		}
+		if (!strCloseError.isEmpty())
+		{
+			KSessionTraceLogger::write(m_bOutgoing
+					? QStringLiteral("controller") : QStringLiteral("controlled"),
+				QStringLiteral("tls"), QStringLiteral("close_notify_failed"), -1,
+				QStringLiteral("error=%1").arg(strCloseError));
+		}
+	}
 	m_tlsEngine.clear();
 	m_encryptedBuffer.clear();
 	m_plaintextBuffer.clear();
@@ -511,12 +569,6 @@ bool KTcpSignalingTransport::processPlaintext(QString *pErrorMessage)
 	{
 		return false;
 	}
-	if (bClosed)
-	{
-		if (pErrorMessage != nullptr)
-			*pErrorMessage = QStringLiteral("The secure signaling channel was closed");
-		return false;
-	}
 	for (const QByteArray &plainText : plainTexts)
 		m_plaintextBuffer.append(plainText);
 	if (m_plaintextBuffer.size() > KProtocolConstraints::kMaximumSignalingMessageBytes + 1)
@@ -533,7 +585,27 @@ bool KTcpSignalingTransport::processPlaintext(QString *pErrorMessage)
 		const QByteArray line = m_plaintextBuffer.left(nLineEnd).trimmed();
 		m_plaintextBuffer.remove(0, nLineEnd + 1);
 		if (!line.isEmpty())
+		{
 			emit messageReceived(QString::fromUtf8(line));
+			if (m_pSocket == nullptr || m_stage != SecureStage)
+				return true;
+		}
+	}
+	// Schannel can return final application data and close_notify together.
+	// Deliver the plaintext first so a terminal protocol response is not
+	// misreported as an unexplained signaling loss.
+	if (bClosed)
+	{
+		KSessionTraceLogger::write(m_bOutgoing
+				? QStringLiteral("controller") : QStringLiteral("controlled"),
+			QStringLiteral("tls"), QStringLiteral("close_notify_received"), -1,
+			QString());
+		m_bOutgoingConnectionPending = false;
+		m_bPeerBusy = false;
+		closeSocket();
+		emit stateChanged(m_pServer != nullptr && m_pServer->isListening()
+			? QStringLiteral("Listening") : QStringLiteral("Disconnected"));
+		emit connectionLost();
 	}
 	return true;
 }
@@ -619,15 +691,15 @@ void KTcpSignalingTransport::rejectPeerData(const QString &strMessage,
 bool KTcpSignalingTransport::isSourceRateLimited(
 	const QString &strSourceAddress)
 {
-	return m_sourceFailureTracker.isRateLimited(strSourceAddress,
-		QDateTime::currentMSecsSinceEpoch());
+	return m_pAdmissionController != nullptr
+		&& m_pAdmissionController->isRateLimited(strSourceAddress);
 }
 
 void KTcpSignalingTransport::recordSourceFailure(
 	const QString &strSourceAddress)
 {
-	m_sourceFailureTracker.recordFailure(strSourceAddress,
-		QDateTime::currentMSecsSinceEpoch());
+	if (m_pAdmissionController != nullptr)
+		m_pAdmissionController->recordPeerFailure(strSourceAddress);
 }
 
 void KTcpSignalingTransport::failOutgoingConnection(

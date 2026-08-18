@@ -3,7 +3,9 @@
 #include "core/security/trusteddevicestore.h"
 
 #include <QtCore/QDateTime>
+#include <QtCore/QHash>
 #include <QtCore/QUuid>
+#include <utility>
 
 KTrustedDeviceService::KTrustedDeviceService(KTrustedDeviceStore *pStore)
 	: m_pStore(pStore)
@@ -21,16 +23,44 @@ bool KTrustedDeviceService::load(QString *pErrorMessage)
 			*pErrorMessage = strError;
 		return false;
 	}
-	bool bRemovedPending = false;
+	bool bRecoveredTransaction = false;
 	for (qsizetype nIndex = devices.size() - 1; nIndex >= 0; --nIndex)
 	{
 		if (devices.at(nIndex).commitState == PendingTrustedDeviceCommitState)
 		{
 			devices.removeAt(nIndex);
-			bRemovedPending = true;
+			bRecoveredTransaction = true;
 		}
 	}
-	if (bRemovedPending && !m_pStore->saveDevices(devices, &strError))
+	QHash<QString, qsizetype> oldestMutualByDevice;
+	for (qsizetype nIndex = 0; nIndex < devices.size(); ++nIndex)
+	{
+		const KTrustedDevice &device = devices.at(nIndex);
+		const auto iterator = oldestMutualByDevice.constFind(device.strDeviceId);
+		if (iterator == oldestMutualByDevice.constEnd())
+		{
+			oldestMutualByDevice.insert(device.strDeviceId, nIndex);
+			continue;
+		}
+		const KTrustedDevice &oldest = devices.at(iterator.value());
+		if (device.nPairedAtMs < oldest.nPairedAtMs
+			|| (device.nPairedAtMs == oldest.nPairedAtMs
+				&& device.strPairingTransactionId
+					< oldest.strPairingTransactionId))
+		{
+			oldestMutualByDevice.insert(device.strDeviceId, nIndex);
+		}
+	}
+	for (qsizetype nIndex = devices.size() - 1; nIndex >= 0; --nIndex)
+	{
+		if (oldestMutualByDevice.value(devices.at(nIndex).strDeviceId)
+			!= nIndex)
+		{
+			devices.removeAt(nIndex);
+			bRecoveredTransaction = true;
+		}
+	}
+	if (bRecoveredTransaction && !m_pStore->saveDevices(devices, &strError))
 	{
 		if (pErrorMessage != nullptr)
 			*pErrorMessage = strError;
@@ -43,15 +73,24 @@ bool KTrustedDeviceService::load(QString *pErrorMessage)
 	return true;
 }
 
+KTrustedDeviceStoreError KTrustedDeviceService::lastLoadError() const
+{
+	return m_pStore->lastLoadError();
+}
+
 const KTrustedDevice *KTrustedDeviceService::find(
 	const QString &strDeviceId) const
 {
+	const KTrustedDevice *pPending = nullptr;
 	for (const KTrustedDevice &device : m_devices)
 	{
-		if (device.strDeviceId == strDeviceId)
+		if (device.strDeviceId != strDeviceId)
+			continue;
+		if (device.commitState == MutualTrustedDeviceCommitState)
 			return &device;
+		pPending = &device;
 	}
-	return nullptr;
+	return pPending;
 }
 
 QString KTrustedDeviceService::mutualCommitId(const QString &strDeviceId,
@@ -93,14 +132,10 @@ bool KTrustedDeviceService::prepare(const QString &strRequestId,
 	m_beforeTransaction = m_devices;
 	m_strTransactionId = strRequestId;
 	m_strTransactionDeviceId = peer.strDeviceId;
-	KTrustedDevice *pDevice = findMutable(peer.strDeviceId);
-	if (pDevice == nullptr)
-	{
-		KTrustedDevice device;
-		device.strDeviceId = peer.strDeviceId;
-		m_devices.append(device);
-		pDevice = &m_devices.last();
-	}
+	KTrustedDevice device;
+	device.strDeviceId = peer.strDeviceId;
+	m_devices.append(device);
+	KTrustedDevice *pDevice = &m_devices.last();
 	const qint64 nNowMs = QDateTime::currentMSecsSinceEpoch();
 	pDevice->spkiSha256 = peer.spkiSha256;
 	pDevice->certificateSha256 = peer.certificateSha256;
@@ -124,17 +159,22 @@ bool KTrustedDeviceService::prepare(const QString &strRequestId,
 }
 
 bool KTrustedDeviceService::commit(const QString &strRequestId,
+	const QString &strDeviceName,
+	const QByteArray &certificateSha256,
 	QString *pErrorMessage)
 {
 	if (!hasTransaction(strRequestId))
 		return false;
-	KTrustedDevice *pDevice = findMutable(m_strTransactionDeviceId);
+	KTrustedDevice *pDevice = findTransactionMutable(strRequestId);
 	if (pDevice == nullptr
 		|| pDevice->commitState != PendingTrustedDeviceCommitState
 		|| pDevice->strPairingTransactionId != strRequestId)
 	{
 		return false;
 	}
+	pDevice->strAdvertisedName = strDeviceName;
+	pDevice->certificateSha256 = certificateSha256;
+	pDevice->nLastAuthenticatedAtMs = QDateTime::currentMSecsSinceEpoch();
 	pDevice->commitState = MutualTrustedDeviceCommitState;
 	if (saveCurrent(pErrorMessage))
 		return true;
@@ -154,7 +194,7 @@ bool KTrustedDeviceService::rollback(const QString &strRequestId,
 		m_devices = failedState;
 		return false;
 	}
-	complete(strRequestId);
+	clearTransaction();
 	return true;
 }
 
@@ -176,13 +216,33 @@ bool KTrustedDeviceService::updateAuthenticated(const QString &strDeviceId,
 	return false;
 }
 
-void KTrustedDeviceService::complete(const QString &strRequestId)
+bool KTrustedDeviceService::complete(const QString &strRequestId,
+	QString *pErrorMessage)
 {
 	if (!hasTransaction(strRequestId))
-		return;
-	m_beforeTransaction.clear();
-	m_strTransactionId.clear();
-	m_strTransactionDeviceId.clear();
+		return true;
+	QVector<KTrustedDevice> completedDevices;
+	completedDevices.reserve(m_devices.size());
+	for (const KTrustedDevice &device : std::as_const(m_devices))
+	{
+		if (device.strDeviceId == m_strTransactionDeviceId
+			&& device.strPairingTransactionId != strRequestId)
+		{
+			continue;
+		}
+		completedDevices.append(device);
+	}
+	const bool bCleanupRequired = completedDevices.size() != m_devices.size();
+	if (bCleanupRequired)
+	{
+		// Completion cleanup is deliberately best-effort. The old Mutual record
+		// remains a durable rollback point until both peers exchanged Committed.
+		// If this save fails, the current session may proceed; startup recovery
+		// will select the older, previously confirmed Mutual record.
+		m_devices = completedDevices;
+	}
+	clearTransaction();
+	return !bCleanupRequired || saveCurrent(pErrorMessage);
 }
 
 bool KTrustedDeviceService::hasTransaction(const QString &strRequestId) const
@@ -194,12 +254,34 @@ bool KTrustedDeviceService::hasTransaction(const QString &strRequestId) const
 KTrustedDevice *KTrustedDeviceService::findMutable(
 	const QString &strDeviceId)
 {
+	KTrustedDevice *pPending = nullptr;
 	for (KTrustedDevice &device : m_devices)
 	{
-		if (device.strDeviceId == strDeviceId)
+		if (device.strDeviceId != strDeviceId)
+			continue;
+		if (device.commitState == MutualTrustedDeviceCommitState)
+			return &device;
+		pPending = &device;
+	}
+	return pPending;
+}
+
+KTrustedDevice *KTrustedDeviceService::findTransactionMutable(
+	const QString &strRequestId)
+{
+	for (KTrustedDevice &device : m_devices)
+	{
+		if (device.strPairingTransactionId == strRequestId)
 			return &device;
 	}
 	return nullptr;
+}
+
+void KTrustedDeviceService::clearTransaction()
+{
+	m_beforeTransaction.clear();
+	m_strTransactionId.clear();
+	m_strTransactionDeviceId.clear();
 }
 
 bool KTrustedDeviceService::saveCurrent(QString *pErrorMessage)

@@ -2,7 +2,6 @@
 #define _WINREMOTECONTROL_TCPSIGNALINGTRANSPORT_H_
 
 #include "adapters/signaling/schanneltlsengine.h"
-#include "core/security/sourcefailuretracker.h"
 #include "core/transport/signalingtransport.h"
 
 #include <QtCore/QByteArray>
@@ -29,6 +28,8 @@ public:
 	KTcpSignalingTransport &operator=(const KTcpSignalingTransport &) = delete;
 
 	bool startServer(quint16 nPort, QString *pErrorMessage) override;
+	quint16 listeningPort() const override;
+	void setAdmissionController(KAdmissionController *pController) override;
 	void connectToHost(const QString &strHost, quint16 nPort) override;
 	void disconnectPeer() override;
 	void stop() override;
@@ -65,7 +66,7 @@ private:
 	};
 
 	void setSocket(QTcpSocket *pSocket);
-	void closeSocket();
+	void closeSocket(bool bSendCloseNotify = false);
 	bool writeRaw(const QByteArray &data, QString *pErrorMessage = nullptr);
 	qsizetype maximumEncryptedBufferBytes() const;
 	bool readAvailableData(QString *pErrorMessage);
@@ -89,7 +90,8 @@ private:
 	QByteArray m_encryptedBuffer;
 	QByteArray m_plaintextBuffer;
 	QByteArray m_serverBusyMessage;
-	KSourceFailureTracker m_sourceFailureTracker;
+	KAdmissionController *m_pAdmissionController = nullptr;
+	KAdmissionController *m_pFallbackAdmissionController = nullptr;
 	QElapsedTimer m_connectElapsedTimer;
 	ConnectionStage m_stage = IdleStage;
 	bool m_bOutgoing = false;

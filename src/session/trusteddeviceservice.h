@@ -2,9 +2,8 @@
 #define _WINREMOTECONTROL_SESSION_TRUSTEDDEVICESERVICE_H_
 
 #include "core/security/trusteddevice.h"
+#include "core/security/trusteddevicestore.h"
 #include "core/transport/tlspeeridentity.h"
-
-class KTrustedDeviceStore;
 
 class KTrustedDeviceService
 {
@@ -12,6 +11,7 @@ public:
 	explicit KTrustedDeviceService(KTrustedDeviceStore *pStore);
 
 	bool load(QString *pErrorMessage);
+	KTrustedDeviceStoreError lastLoadError() const;
 	const KTrustedDevice *find(const QString &strDeviceId) const;
 	QString mutualCommitId(const QString &strDeviceId,
 		const QByteArray &spkiSha256) const;
@@ -23,17 +23,22 @@ public:
 		const QString &strDeviceName,
 		KPermissionScopes permissions,
 		QString *pErrorMessage);
-	bool commit(const QString &strRequestId, QString *pErrorMessage);
+	bool commit(const QString &strRequestId,
+		const QString &strDeviceName,
+		const QByteArray &certificateSha256,
+		QString *pErrorMessage);
 	bool rollback(const QString &strRequestId, QString *pErrorMessage);
 	bool updateAuthenticated(const QString &strDeviceId,
 		const QString &strDeviceName,
 		const QByteArray &certificateSha256,
 		QString *pErrorMessage);
-	void complete(const QString &strRequestId);
+	bool complete(const QString &strRequestId, QString *pErrorMessage);
 	bool hasTransaction(const QString &strRequestId) const;
 
 private:
 	KTrustedDevice *findMutable(const QString &strDeviceId);
+	KTrustedDevice *findTransactionMutable(const QString &strRequestId);
+	void clearTransaction();
 	bool saveCurrent(QString *pErrorMessage);
 
 	KTrustedDeviceStore *m_pStore = nullptr;

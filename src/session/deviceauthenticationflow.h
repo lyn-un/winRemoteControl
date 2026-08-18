@@ -4,10 +4,9 @@
 #include "core/protocol/tlspairingmessage.h"
 #include "core/security/devicecertificate.h"
 #include "core/security/securitystatus.h"
-#include "core/security/sourcefailuretracker.h"
 #include "core/security/trusteddevice.h"
 #include "core/transport/tlspeeridentity.h"
-#include "session/pairingtransaction.h"
+#include "session/pairingcommand.h"
 #include "session/trusteddeviceservice.h"
 
 #include <QtCore/QHash>
@@ -15,6 +14,7 @@
 #include <QtCore/QVector>
 
 class KDeviceIdentityProvider;
+class KAdmissionController;
 class KKeyingMaterialExporter;
 class KTrustedDeviceStore;
 class QTimer;
@@ -42,18 +42,19 @@ public:
 		KTrustedDeviceStore *pTrustedDeviceStore,
 		KKeyingMaterialExporter *pKeyingMaterialExporter,
 		QObject *pParent = nullptr);
+	~KDeviceAuthenticationFlow() override;
 
 	void setApprovalTimeoutSeconds(int nTimeoutSeconds);
+	void setAdmissionController(KAdmissionController *pController);
+	void setPairingCommand(KPairingCommand *pCommand);
 	void setSecurePeerIdentity(const KTlsPeerIdentity &peer);
-	bool beginOutgoing(const QString &strRequestId,
+	KSecurityStatus beginOutgoing(const QString &strRequestId,
 		quint64 nGeneration,
 		const QString &strDeviceName,
-		KPermissionScopes requestedPermissions,
-		QString *pErrorMessage);
-	bool beginIncoming(const QString &strSourceAddress,
+		KPermissionScopes requestedPermissions);
+	KSecurityStatus beginIncoming(const QString &strSourceAddress,
 		quint64 nGeneration,
-		const QString &strDeviceName,
-		QString *pErrorMessage);
+		const QString &strDeviceName);
 	bool handleMessage(const KTlsPairingMessage &message, quint64 nGeneration);
 	void respondPairing(const QString &strRequestId,
 		bool bAccepted,
@@ -87,11 +88,20 @@ private:
 	bool handleCommitted(const KTlsPairingMessage &message);
 	bool loadTrust(QString *pErrorMessage);
 	bool initializePeerContext(QString *pErrorMessage);
+	KSecurityStatus entryFailure(const QString &strReason,
+		KSecurityStage stage,
+		const QString &strTechnicalMessage,
+		const QString &strRequestId,
+		quint64 nGeneration,
+		bool bOutgoing) const;
 	bool inspectPeerTrust(const QString &strPeerCommitId, QString *pReason);
 	void sendHello();
 	void beginPairingOrAutomaticDecision();
 	bool createPairingVerification(QString *pErrorMessage);
 	void sendPairingDecision(bool bAccepted, KPermissionScopes permissions);
+	void sendPairingMessage(const KTlsPairingMessage &message,
+		bool bCache = true);
+	void replayCurrentPairingResponse();
 	void tryPrepare();
 	void tryCommit();
 	void tryComplete();
@@ -105,16 +115,20 @@ private:
 		KSecurityStage stage = UnknownSecurityStage,
 		const QString &strTechnicalMessage = QString());
 	void clear(const QString &strReason, bool bKeepPeerIdentity = true);
+	KPairingTransaction &transaction();
+	const KPairingTransaction &transaction() const;
 
 	KDeviceIdentityProvider *m_pIdentityProvider = nullptr;
 	KKeyingMaterialExporter *m_pKeyingMaterialExporter = nullptr;
 	KTrustedDeviceService m_trustedDeviceService;
-	KPairingTransaction m_transaction;
+	KPairingCommand m_fallbackPairingCommand;
+	KPairingCommand *m_pPairingCommand = &m_fallbackPairingCommand;
 	QTimer *m_pTimer = nullptr;
 	KDeviceCertificate m_localCertificate;
 	KTlsPeerIdentity m_securePeer;
 	KDeviceAuthenticationContext m_context;
-	KSourceFailureTracker m_sourceFailureTracker;
+	KAdmissionController *m_pAdmissionController = nullptr;
+	KAdmissionController *m_pFallbackAdmissionController = nullptr;
 	QString m_strLocalDeviceName;
 	QString m_strSourceAddress;
 	QString m_strVerificationCode;

@@ -388,10 +388,12 @@ namespace
 		KFakeInputInjector *pInputInjector = spInputInjector.get();
 		auto spTransport = std::make_unique<KFakeRemotePeerTransport>();
 		KFakeRemotePeerTransport *pTransport = spTransport.get();
+		auto spSignaling = std::make_unique<KTcpSignalingTransport>();
+		KTcpSignalingTransport *pSignaling = spSignaling.get();
 		KSessionCoordinator service(std::make_unique<KFakeDeviceInfoProvider>(),
 			std::move(spInputInjector),
 			std::move(spTransport),
-			std::make_unique<KTcpSignalingTransport>(),
+			std::move(spSignaling),
 			MakeFakeIdentityProvider(), MakeFakeTrustedDeviceStore());
 		KApplicationSettings settings;
 		settings.approvalMode = AutoAcceptRemoteApprovalMode;
@@ -409,6 +411,8 @@ namespace
 		int nStopCaptureCount = 0;
 		QVector<QPair<bool, quint16>> listeningAvailability;
 		bool bNegotiating = false;
+		int nSessionErrorCount = 0;
+		KSessionError lastSessionError;
 		QObject::connect(&service, &KSessionCoordinator::startCaptureRequested,
 			[&nStartCaptureCount](quint64) { ++nStartCaptureCount; });
 		QObject::connect(&service, &KSessionCoordinator::stopCaptureRequested,
@@ -427,6 +431,12 @@ namespace
 			[&](bool bAvailable, quint16 nPort)
 			{
 				listeningAvailability.append(qMakePair(bAvailable, nPort));
+			});
+		QObject::connect(&service, &KSessionCoordinator::sessionErrorOccurred,
+			[&](const KSessionError &error)
+			{
+				++nSessionErrorCount;
+				lastSessionError = error;
 			});
 
 		const quint16 nPort = reserveLocalPort();
@@ -515,6 +525,10 @@ namespace
 		service.pushVideoFrame(videoFrame);
 		check(pTransport->nVideoFrameCount == 2,
 			QStringLiteral("video sending resumes after connection recovery"));
+		emit pSignaling->signalingError(QStringLiteral("unexpected active close"));
+		check(nSessionErrorCount == 1
+			&& lastSessionError.code == ConnectionFailedSessionErrorCode,
+			QStringLiteral("unexpected active signaling close remains visible"));
 
 		KSessionMessage stopStreaming;
 		stopStreaming.type = StopStreamingSessionMessageType;
@@ -531,6 +545,9 @@ namespace
 		check(listeningAvailability.size() == 3
 			&& listeningAvailability.last() == qMakePair(true, nPort),
 			QStringLiteral("controlled session becomes discoverable again after session end"));
+		emit pSignaling->signalingError(QStringLiteral("expected remote close"));
+		check(nSessionErrorCount == 1,
+			QStringLiteral("expected signaling close after session end reached the UI"));
 
 		service.disconnectSession();
 		check(listeningAvailability.size() == 4
@@ -743,7 +760,13 @@ namespace
 			QStringLiteral("deny policy reports rejection to controller"));
 		check(controllerError.code == ApprovalRejectedSessionErrorCode
 			&& !controllerError.bRetryable,
-			QStringLiteral("deny policy exposes a non-retryable structured error"));
+			QStringLiteral("deny policy exposes a non-retryable structured error: "
+				"domain=%1 code=%2 stage=%3 retryable=%4 technical=%5")
+				.arg(controllerError.domain)
+				.arg(controllerError.code)
+				.arg(controllerError.stage)
+				.arg(controllerError.bRetryable ? 1 : 0)
+				.arg(controllerError.strTechnicalMessage));
 		check(pControllerPeer->nCreateOfferCount == 0,
 			QStringLiteral("deny policy never creates a WebRTC offer"));
 		controller.disconnectSession();

@@ -2,15 +2,18 @@
 #define _WINREMOTECONTROL_SESSION_ACCESSSESSIONFLOW_H_
 
 #include "core/protocol/accessmessage.h"
+#include "core/security/admissioncontroller.h"
 #include "core/settings/applicationsettings.h"
 #include "session/deviceauthenticationflow.h"
 
 #include <QtCore/QObject>
+#include <memory>
 
 class KAccessApprovalController;
 class KSignalingTransport;
 class KDeviceIdentityProvider;
 class KTrustedDeviceStore;
+class KSecuritySessionController;
 
 class KAccessSessionFlow final : public QObject
 {
@@ -97,9 +100,10 @@ private:
 	void handleAuthenticationRejected(const KSecurityStatus &status);
 
 	KSignalingTransport *m_pTransport = nullptr;
+	std::unique_ptr<KAdmissionController> m_upAdmissionController;
 	KDeviceIdentityProvider *m_pIdentityProvider = nullptr;
 	KAccessApprovalController *m_pApprovalController = nullptr;
-	KDeviceAuthenticationFlow *m_pAuthenticationFlow = nullptr;
+	KSecuritySessionController *m_pSecurityController = nullptr;
 	KApplicationSettings m_settings;
 	QString m_strLastHost;
 	quint16 m_nLastPort = 0;

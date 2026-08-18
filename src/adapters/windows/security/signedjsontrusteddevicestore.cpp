@@ -11,6 +11,8 @@
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+#include <QtCore/QHash>
+#include <QtCore/QSet>
 #include <QtCore/QUuid>
 #include <algorithm>
 
@@ -18,6 +20,7 @@ namespace
 {
 	constexpr int kTrustStoreVersion = 3;
 	constexpr int kMaximumTrustedDevices = 256;
+	constexpr int kMaximumTrustedDeviceRecords = kMaximumTrustedDevices + 1;
 
 	QString EncodeBase64Url(const QByteArray &value)
 	{
@@ -37,7 +40,10 @@ namespace
 		std::sort(sorted.begin(), sorted.end(),
 			[](const KTrustedDevice &left, const KTrustedDevice &right)
 			{
-				return left.strDeviceId < right.strDeviceId;
+				if (left.strDeviceId != right.strDeviceId)
+					return left.strDeviceId < right.strDeviceId;
+				return left.strPairingTransactionId
+					< right.strPairingTransactionId;
 			});
 		return sorted;
 	}
@@ -83,6 +89,36 @@ namespace
 				|| device.commitState == MutualTrustedDeviceCommitState)
 			&& !QUuid(device.strPairingTransactionId).isNull();
 	}
+
+	bool IsValidDeviceSet(const QVector<KTrustedDevice> &devices)
+	{
+		QHash<QString, int> mutualCounts;
+		QHash<QString, int> pendingCounts;
+		QHash<QString, QByteArray> deviceSpki;
+		QSet<QString> transactionIds;
+		for (const KTrustedDevice &device : devices)
+		{
+			if (transactionIds.contains(device.strPairingTransactionId))
+				return false;
+			transactionIds.insert(device.strPairingTransactionId);
+			const auto spkiIterator = deviceSpki.constFind(device.strDeviceId);
+			if (spkiIterator != deviceSpki.constEnd()
+				&& spkiIterator.value() != device.spkiSha256)
+			{
+				return false;
+			}
+			deviceSpki.insert(device.strDeviceId, device.spkiSha256);
+			QHash<QString, int> &counts = device.commitState
+				== MutualTrustedDeviceCommitState ? mutualCounts : pendingCounts;
+			const int nCount = counts.value(device.strDeviceId) + 1;
+			counts.insert(device.strDeviceId, nCount);
+			const int nMaximum = device.commitState
+				== MutualTrustedDeviceCommitState ? 2 : 1;
+			if (nCount > nMaximum)
+				return false;
+		}
+		return deviceSpki.size() <= kMaximumTrustedDevices;
+	}
 }
 
 KSignedJsonTrustedDeviceStore::KSignedJsonTrustedDeviceStore(
@@ -100,11 +136,13 @@ void KSignedJsonTrustedDeviceStore::setIdentityProvider(
 QVector<KTrustedDevice> KSignedJsonTrustedDeviceStore::loadDevices(
 	QString *pErrorMessage)
 {
+	m_lastLoadError = NoTrustedDeviceStoreError;
 	QVector<KTrustedDevice> devices;
 	if (!QFile::exists(m_strFilePath))
 		return devices;
 	if (m_pIdentityProvider == nullptr || !m_pIdentityProvider->identity().isValid())
 	{
+		m_lastLoadError = UnavailableTrustedDeviceStoreError;
 		if (pErrorMessage != nullptr)
 			*pErrorMessage = QStringLiteral("Device identity is unavailable");
 		return devices;
@@ -112,6 +150,7 @@ QVector<KTrustedDevice> KSignedJsonTrustedDeviceStore::loadDevices(
 	QFile file(m_strFilePath);
 	if (!file.open(QIODevice::ReadOnly))
 	{
+		m_lastLoadError = UnavailableTrustedDeviceStoreError;
 		if (pErrorMessage != nullptr)
 			*pErrorMessage = QStringLiteral("Unable to open trusted device store");
 		return devices;
@@ -129,20 +168,25 @@ QVector<KTrustedDevice> KSignedJsonTrustedDeviceStore::loadDevices(
 			.arg(m_strFilePath).arg(nVersion);
 		if (!QFile::exists(strBackupPath) && !QFile::copy(m_strFilePath, strBackupPath))
 		{
+			m_lastLoadError = UnavailableTrustedDeviceStoreError;
 			if (pErrorMessage != nullptr)
 				*pErrorMessage = QStringLiteral("Unable to back up legacy trust store");
 			return {};
 		}
 		if (!saveDevices({}, pErrorMessage))
+		{
+			m_lastLoadError = UnavailableTrustedDeviceStoreError;
 			return {};
+		}
 		m_strMigrationNotice = QStringLiteral(
 			"安全配对事务已升级，需要重新配对设备。旧信任库已备份。");
 		return {};
 	}
 	if (parseError.error != QJsonParseError::NoError
 		|| nVersion != kTrustStoreVersion
-		|| array.size() > kMaximumTrustedDevices)
+		|| array.size() > kMaximumTrustedDeviceRecords)
 	{
+		m_lastLoadError = TamperedTrustedDeviceStoreError;
 		if (pErrorMessage != nullptr)
 			*pErrorMessage = QStringLiteral("trust_store_tampered");
 		return QVector<KTrustedDevice>();
@@ -172,22 +216,36 @@ QVector<KTrustedDevice> KSignedJsonTrustedDeviceStore::loadDevices(
 			QStringLiteral("pairingTransactionId")).toString();
 		if (!IsValidDevice(device))
 		{
+			m_lastLoadError = TamperedTrustedDeviceStoreError;
 			if (pErrorMessage != nullptr)
 				*pErrorMessage = QStringLiteral("trust_store_tampered");
 			return QVector<KTrustedDevice>();
 		}
 		devices.append(device);
 	}
+	if (!IsValidDeviceSet(devices))
+	{
+		m_lastLoadError = TamperedTrustedDeviceStoreError;
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("trust_store_tampered");
+		return {};
+	}
 	const QByteArray signature = DecodeBase64Url(root.value(QStringLiteral("signature")).toString());
 	QString strVerificationError;
 	if (!m_pIdentityProvider->verify(m_pIdentityProvider->identity().publicKey,
 		StoreData(devices), signature, &strVerificationError))
 	{
+		m_lastLoadError = TamperedTrustedDeviceStoreError;
 		if (pErrorMessage != nullptr)
 			*pErrorMessage = QStringLiteral("trust_store_tampered: %1").arg(strVerificationError);
 		return QVector<KTrustedDevice>();
 	}
 	return devices;
+}
+
+KTrustedDeviceStoreError KSignedJsonTrustedDeviceStore::lastLoadError() const
+{
+	return m_lastLoadError;
 }
 
 QString KSignedJsonTrustedDeviceStore::takeMigrationNotice()
@@ -207,7 +265,7 @@ bool KSignedJsonTrustedDeviceStore::saveDevices(
 			*pErrorMessage = QStringLiteral("Device identity is unavailable");
 		return false;
 	}
-	if (devices.size() > kMaximumTrustedDevices)
+	if (devices.size() > kMaximumTrustedDeviceRecords)
 	{
 		if (pErrorMessage != nullptr)
 			*pErrorMessage = QStringLiteral("Too many trusted devices");
@@ -221,6 +279,12 @@ bool KSignedJsonTrustedDeviceStore::saveDevices(
 				*pErrorMessage = QStringLiteral("Invalid trusted device record");
 			return false;
 		}
+	}
+	if (!IsValidDeviceSet(devices))
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = QStringLiteral("Conflicting trusted device records");
+		return false;
 	}
 	QByteArray signature;
 	if (!m_pIdentityProvider->sign(StoreData(devices), &signature, pErrorMessage))

@@ -148,6 +148,18 @@ KPairingTransactionState KPairingTransaction::state() const
 	return m_state;
 }
 
+bool KPairingTransaction::isActive() const
+{
+	return m_state != InactivePairingTransactionState
+		&& !isTerminal();
+}
+
+bool KPairingTransaction::isTerminal() const
+{
+	return m_state == CompletedPairingTransactionState
+		|| m_state == FailedPairingTransactionState;
+}
+
 QString KPairingTransaction::requestId() const
 {
 	return m_strRequestId;
