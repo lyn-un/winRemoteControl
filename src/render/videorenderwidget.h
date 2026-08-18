@@ -107,6 +107,9 @@ private:
 	bool m_bHasPendingMouseMove = false;
 	bool m_bImeComposing = false;
 	quint64 m_nLastRenderedInputSeq = 0;
+	quint64 m_nRenderReceivedFrames = 0;
+	quint64 m_nRenderPresentedFrames = 0;
+	quint64 m_nRenderCoalescedFrames = 0;
 	int m_nFrameWidth = 0;
 	int m_nFrameHeight = 0;
 	int m_nRemoteScreenWidth = 0;

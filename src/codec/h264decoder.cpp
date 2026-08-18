@@ -197,9 +197,10 @@ bool KH264Decoder::receiveFrames(quint64 nFrameIndex,
 		decodedFrame.nHeight = m_pFrame->height;
 		decodedFrame.nFrameIndex = nFrameIndex;
 		decodedFrame.nTimestampMs = nTimestampMs;
-		decodedFrame.vecBgraBuffer.resize(static_cast<size_t>(decodedFrame.nWidth) * decodedFrame.nHeight * 4);
+		decodedFrame.spBgraBuffer = std::make_shared<std::vector<unsigned char>>(
+			static_cast<size_t>(decodedFrame.nWidth) * decodedFrame.nHeight * 4);
 
-		unsigned char *pDstData[] = { decodedFrame.vecBgraBuffer.data(), nullptr, nullptr, nullptr };
+		unsigned char *pDstData[] = { decodedFrame.spBgraBuffer->data(), nullptr, nullptr, nullptr };
 		const int nDstStride[] = { decodedFrame.nWidth * 4, 0, 0, 0 };
 		const int nScaleResult = sws_scale(m_pSwsContext,
 			m_pFrame->data,

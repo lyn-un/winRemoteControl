@@ -18,6 +18,7 @@
 #include <cstring>
 #include <iterator>
 #include <utility>
+#include <chrono>
 
 namespace
 {
@@ -48,6 +49,12 @@ namespace
 		"float4 main(float4 position : SV_POSITION, float2 texcoord : TEXCOORD0) : SV_TARGET {"
 		"    return frameTexture.Sample(frameSampler, texcoord);"
 		"}";
+
+	qint64 SteadyNowMs()
+	{
+		return std::chrono::duration_cast<std::chrono::milliseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+	}
 }
 
 KVideoRenderWidget::KVideoRenderWidget(QWidget *pParent)
@@ -75,13 +82,17 @@ KVideoRenderWidget::~KVideoRenderWidget()
 
 void KVideoRenderWidget::enqueueFrame(const KDecodedVideoFrame &frame)
 {
-	if (frame.vecBgraBuffer.empty() || frame.nWidth <= 0 || frame.nHeight <= 0)
+	if (!frame.hasPixels() || frame.nWidth <= 0 || frame.nHeight <= 0)
 		return;
 
 	bool bNeedQueue = false;
 	{
 		std::lock_guard<std::mutex> guard(m_frameMutex);
+		++m_nRenderReceivedFrames;
+		if (m_bHasPendingFrame)
+			++m_nRenderCoalescedFrames;
 		m_latestFrame = frame;
+		m_latestFrame.nRenderEnqueuedAtMs = SteadyNowMs();
 		m_bHasPendingFrame = true;
 		if (!m_bPresentQueued)
 		{
@@ -126,9 +137,10 @@ void KVideoRenderWidget::presentLatestFrame()
 
 void KVideoRenderWidget::presentFrame(const KDecodedVideoFrame &frame)
 {
-	if (frame.vecBgraBuffer.empty() || frame.nWidth <= 0 || frame.nHeight <= 0)
+	if (!frame.hasPixels() || frame.nWidth <= 0 || frame.nHeight <= 0)
 		return;
 
+	const qint64 nPresentBeginAtMs = SteadyNowMs();
 	const bool bTraceFrame = frame.nFrameIndex > 0 && frame.nFrameIndex % kVideoTraceFrameInterval == 0;
 	QElapsedTimer renderTimer;
 	if (bTraceFrame)
@@ -166,11 +178,13 @@ void KVideoRenderWidget::presentFrame(const KDecodedVideoFrame &frame)
 	m_spContext->UpdateSubresource(m_spFrameTexture.Get(),
 		0,
 		&sourceBox,
-		frame.vecBgraBuffer.data(),
+		frame.pixelData(),
 		static_cast<UINT>(frame.nWidth * 4),
 		0);
 
 	render();
+	++m_nRenderPresentedFrames;
+	const qint64 nPresentEndAtMs = SteadyNowMs();
 
 	if (KLatencyTraceLogger::isEnabled()
 		&& frame.nLastInputSeq > 0
@@ -193,14 +207,25 @@ void KVideoRenderWidget::presentFrame(const KDecodedVideoFrame &frame)
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controller"),
 			QStringLiteral("render_end"),
-			QStringLiteral("frame=%1 sourceFrame=%2 width=%3 height=%4 lastInputSeq=%5 inputAgeMs=%6 costMs=%7")
+			QStringLiteral("frame=%1 sourceFrame=%2 width=%3 height=%4 lastInputSeq=%5 inputAgeMs=%6 costMs=%7 callbackToConvertMs=%8 convertToEnqueueMs=%9 enqueueToPresentMs=%10 callbackToPresentMs=%11 renderReceivedTotal=%12 renderPresentedTotal=%13 renderCoalescedTotal=%14")
 				.arg(frame.nFrameIndex)
 				.arg(frame.nSourceFrameIndex)
 				.arg(frame.nWidth)
 				.arg(frame.nHeight)
 				.arg(frame.nLastInputSeq)
 				.arg(frame.nInputAgeMs)
-				.arg(renderTimer.isValid() ? renderTimer.elapsed() : -1));
+				.arg(renderTimer.isValid() ? renderTimer.elapsed() : -1)
+				.arg(frame.nRemoteCallbackAtMs >= 0
+					? frame.nConversionDoneAtMs - frame.nRemoteCallbackAtMs : -1)
+				.arg(frame.nConversionDoneAtMs >= 0
+					? frame.nRenderEnqueuedAtMs - frame.nConversionDoneAtMs : -1)
+				.arg(frame.nRenderEnqueuedAtMs >= 0
+					? nPresentBeginAtMs - frame.nRenderEnqueuedAtMs : -1)
+				.arg(frame.nRemoteCallbackAtMs >= 0
+					? nPresentEndAtMs - frame.nRemoteCallbackAtMs : -1)
+				.arg(m_nRenderReceivedFrames)
+				.arg(m_nRenderPresentedFrames)
+				.arg(m_nRenderCoalescedFrames));
 	}
 }
 
@@ -213,12 +238,28 @@ void KVideoRenderWidget::suspendRemoteInput()
 void KVideoRenderWidget::clearFrame()
 {
 	suspendRemoteInput();
+	quint64 nReceivedFrames = 0;
+	quint64 nPresentedFrames = 0;
+	quint64 nCoalescedFrames = 0;
 	{
 		std::lock_guard<std::mutex> guard(m_frameMutex);
+		nReceivedFrames = m_nRenderReceivedFrames;
+		nPresentedFrames = m_nRenderPresentedFrames;
+		nCoalescedFrames = m_nRenderCoalescedFrames;
 		m_bHasPendingFrame = false;
 		m_bPresentQueued = false;
 		m_latestFrame = KDecodedVideoFrame();
 		m_nLastRenderedInputSeq = 0;
+		m_nRenderReceivedFrames = 0;
+		m_nRenderPresentedFrames = 0;
+		m_nRenderCoalescedFrames = 0;
+	}
+	if (nReceivedFrames > 0 && KLatencyTraceLogger::isEnabled())
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controller"),
+			QStringLiteral("render_frame_coalesce_summary"),
+			QStringLiteral("receivedTotal=%1 presentedTotal=%2 coalescedTotal=%3")
+				.arg(nReceivedFrames).arg(nPresentedFrames).arg(nCoalescedFrames));
 	}
 
 	if (!m_spContext || !m_spSwapChain || !m_spRenderTargetView)

@@ -4,6 +4,7 @@
 #include <QtCore/QMetaType>
 #include <QtCore/QtGlobal>
 
+#include <memory>
 #include <vector>
 
 struct KDecodedVideoFrame
@@ -15,7 +16,20 @@ struct KDecodedVideoFrame
 	qint64 nTimestampMs = 0;
 	quint64 nLastInputSeq = 0;
 	qint64 nInputAgeMs = -1;
-	std::vector<unsigned char> vecBgraBuffer;
+	qint64 nRemoteCallbackAtMs = -1;
+	qint64 nConversionDoneAtMs = -1;
+	qint64 nRenderEnqueuedAtMs = -1;
+	std::shared_ptr<std::vector<unsigned char>> spBgraBuffer;
+
+	bool hasPixels() const
+	{
+		return spBgraBuffer != nullptr && !spBgraBuffer->empty();
+	}
+
+	const unsigned char *pixelData() const
+	{
+		return hasPixels() ? spBgraBuffer->data() : nullptr;
+	}
 };
 
 Q_DECLARE_METATYPE(KDecodedVideoFrame)
