@@ -34,7 +34,7 @@ WebRTC 输入为 I420，编码器内部转换为 NV12。线上保持 H.264 和�
 
 WebRTC H.264 decoder 输出 I420。`KWebRtcRemoteFrameProcessor` 在专用转换线程中将其转换为 Windows D3D 渲染所需的 BGRA，并采用“待处理帧只保留最新一张”的有界槽位：新帧覆盖尚未开始转换的旧帧，GUI 线程不会执行 I420 到 BGRA 的大块转换。转换结果使用共享像素存储跨 Qt 队列传递，避免每帧再次深拷贝约 `width * height * 4` 字节。该策略减少排队延迟，而不是传输错误；会话结束日志会输出 received、processed 和 coalesced 汇总。
 
-`KVideoRenderWidget` 在 GUI/渲染边界显示最新帧，并将画面坐标映射为远端输入坐标。视频帧携带最近输入序号，用于控制端以单调时钟计算输入发送到画面完成渲染的 round trip。
+`KVideoRenderWidget` 在 GUI/渲染边界显示最新帧，并将画面坐标映射为远端输入坐标。线程安全的 `KLatestDecodedFrameQueue` 保证 GUI 忙时最多保留一张待处理帧，旧帧可被覆盖，但最新帧在当前呈现结束后会再次调度。视频帧携带最近输入序号，用于控制端以单调时钟计算输入发送到画面完成渲染的 round trip。
 
 ## 延迟策略与可观测性
 

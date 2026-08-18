@@ -145,6 +145,8 @@ add_library(wrc_core STATIC
 	src/core/media/captureframesink.h
 	src/core/media/capturesource.h
 	src/core/media/capturecontroller.h
+	src/core/media/latestdecodedframequeue.cpp
+	src/core/media/latestdecodedframequeue.h
 	src/core/session/deviceinfoprovider.h
 	src/core/session/sessionerror.cpp
 	src/core/session/sessionerror.h
@@ -1057,6 +1059,16 @@ if(WRC_BUILD_TESTS)
 	)
 	add_test(NAME wrc_input_feedback_tracker_tests
 		COMMAND wrc_input_feedback_tracker_tests)
+
+	add_executable(wrc_latest_decoded_frame_queue_tests
+		tests/unit/latestdecodedframequeuetest.cpp
+	)
+	target_link_libraries(wrc_latest_decoded_frame_queue_tests PRIVATE
+		wrc_core
+		Qt6::Core
+	)
+	add_test(NAME wrc_latest_decoded_frame_queue_tests
+		COMMAND wrc_latest_decoded_frame_queue_tests)
 	set_tests_properties(wrc_session_service_tests PROPERTIES
 		ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Network>"
 	)

@@ -1,7 +1,7 @@
 #ifndef _WINREMOTECONTROL_VIDEORENDERWIDGET_H_
 #define _WINREMOTECONTROL_VIDEORENDERWIDGET_H_
 
-#include "core/media/decodedvideoframe.h"
+#include "core/media/latestdecodedframequeue.h"
 
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QPoint>
@@ -13,8 +13,6 @@
 #include <Windows.h>
 #include <d3d11.h>
 #include <wrl/client.h>
-
-#include <mutex>
 
 class KVideoRenderWidget : public QWidget
 {
@@ -95,21 +93,15 @@ private:
 	static int qtMouseButtonToRemoteButton(Qt::MouseButton button);
 	static QString hresultMessage(const QString &strPrefix, HRESULT hr);
 
-	std::mutex m_frameMutex;
-	KDecodedVideoFrame m_latestFrame;
+	KLatestDecodedFrameQueue m_frameQueue;
 	QElapsedTimer m_mouseMoveThrottleTimer;
 	QTimer m_mouseMoveFlushTimer;
 	QPoint m_pendingMouseMovePoint;
 	QSet<quint32> m_pressedRemoteKeys;
-	bool m_bHasPendingFrame = false;
-	bool m_bPresentQueued = false;
 	bool m_bInitialized = false;
 	bool m_bHasPendingMouseMove = false;
 	bool m_bImeComposing = false;
 	quint64 m_nLastRenderedInputSeq = 0;
-	quint64 m_nRenderReceivedFrames = 0;
-	quint64 m_nRenderPresentedFrames = 0;
-	quint64 m_nRenderCoalescedFrames = 0;
 	int m_nFrameWidth = 0;
 	int m_nFrameHeight = 0;
 	int m_nRemoteScreenWidth = 0;
