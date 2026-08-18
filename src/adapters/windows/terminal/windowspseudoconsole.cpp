@@ -9,6 +9,7 @@
 #include <QtCore/QStandardPaths>
 
 #include <array>
+#include <utility>
 
 namespace
 {
@@ -16,6 +17,7 @@ namespace
 	constexpr qsizetype kMaximumInputQueueMessages = 256;
 	constexpr DWORD kProcessStopWaitMs = 2000;
 	constexpr DWORD kWriteThreadStopWaitMs = 2000;
+	constexpr DWORD kWriteThreadFallbackWaitMs = 2000;
 
 	void CloseNativeHandle(HANDLE *pHandle)
 	{
@@ -28,8 +30,18 @@ namespace
 }
 
 KWindowsPseudoConsole::KWindowsPseudoConsole(QObject *pParent)
-	: KTerminalHost(pParent)
+	: KWindowsPseudoConsole(KNativeWriteFunction(), pParent)
 {
+}
+
+KWindowsPseudoConsole::KWindowsPseudoConsole(
+	KNativeWriteFunction writeFunction,
+	QObject *pParent)
+	: KTerminalHost(pParent)
+	, m_spWriteCallbackGate(std::make_shared<KWriteCallbackGate>())
+	, m_writeFunction(std::move(writeFunction))
+{
+	m_spWriteCallbackGate->pTarget = this;
 }
 
 KWindowsPseudoConsole::~KWindowsPseudoConsole()
@@ -37,6 +49,8 @@ KWindowsPseudoConsole::~KWindowsPseudoConsole()
 	requestStop(m_nGeneration.load());
 	if (m_teardownThread.joinable())
 		m_teardownThread.join();
+	std::lock_guard<std::mutex> gateGuard(m_spWriteCallbackGate->mutex);
+	m_spWriteCallbackGate->pTarget = nullptr;
 }
 
 bool KWindowsPseudoConsole::isSupported(QString *pReason) const
@@ -49,10 +63,20 @@ bool KWindowsPseudoConsole::start(quint64 nGeneration,
 	int nRows,
 	QString *pErrorMessage)
 {
-	if (m_bRunning || m_bStopping)
+	const std::shared_ptr<KWriteState> spPreviousWriteState =
+		m_spWriteState.load();
+	if (m_bRunning || m_bStopping
+		|| (spPreviousWriteState != nullptr && !spPreviousWriteState->bFinished))
 	{
 		if (pErrorMessage != nullptr)
-			*pErrorMessage = QStringLiteral("Terminal is already active");
+		{
+			*pErrorMessage = QStringLiteral(
+				"Terminal is already active (running=%1 stopping=%2 writerFinished=%3)")
+				.arg(m_bRunning.load() ? 1 : 0)
+				.arg(m_bStopping.load() ? 1 : 0)
+				.arg(spPreviousWriteState == nullptr
+					|| spPreviousWriteState->bFinished ? 1 : 0);
+		}
 		return false;
 	}
 	if (!loadFunctions(pErrorMessage))
@@ -229,8 +253,34 @@ bool KWindowsPseudoConsole::start(quint64 nGeneration,
 	m_nGeneration = nGeneration;
 	m_bStopping = false;
 	m_bRunning = true;
+	const std::shared_ptr<KWriteState> spWriteState =
+		std::make_shared<KWriteState>();
+	spWriteState->hInputWrite = m_hInputWrite;
+	m_hInputWrite = nullptr;
+	spWriteState->nGeneration = nGeneration;
+	spWriteState->spCallbackGate = m_spWriteCallbackGate;
+	spWriteState->writeFunction = m_writeFunction;
+	if (!spWriteState->writeFunction)
+	{
+		spWriteState->writeFunction = [spWriteState](const char *pData,
+			qsizetype nBytes, qsizetype *pBytesWritten, quint32 *pErrorCode)
+		{
+			DWORD nWritten = 0;
+			const HANDLE hInputWrite = spWriteState->hInputWrite.load();
+			const BOOL bWritten = hInputWrite != nullptr
+				? ::WriteFile(hInputWrite, pData, static_cast<DWORD>(nBytes),
+					&nWritten, nullptr)
+				: FALSE;
+			*pBytesWritten = static_cast<qsizetype>(nWritten);
+			*pErrorCode = bWritten ? ERROR_SUCCESS
+				: (hInputWrite != nullptr ? ::GetLastError() : ERROR_INVALID_HANDLE);
+			return bWritten != FALSE;
+		};
+	}
+	m_spWriteState.store(spWriteState);
 	m_readThread = std::thread(&KWindowsPseudoConsole::readOutput, this, nGeneration);
-	m_writeThread = std::thread(&KWindowsPseudoConsole::writeInputLoop, this, nGeneration);
+	m_writeThread = std::thread(&KWindowsPseudoConsole::writeInputLoop,
+		spWriteState);
 	m_processThread = std::thread(&KWindowsPseudoConsole::waitForProcess, this, nGeneration);
 	return true;
 }
@@ -242,13 +292,18 @@ bool KWindowsPseudoConsole::writeInput(quint64 nGeneration, const QByteArray &da
 	{
 		return false;
 	}
-	std::lock_guard<std::mutex> guard(m_mutex);
-	if (static_cast<qsizetype>(m_inputQueue.size()) >= kMaximumInputQueueMessages
-		|| m_nQueuedInputBytes + data.size() > kMaximumInputQueueBytes)
+	const std::shared_ptr<KWriteState> spState =
+		m_spWriteState.load();
+	if (spState == nullptr || spState->bStopping || spState->bFinished)
 		return false;
-	m_inputQueue.push_back(data);
-	m_nQueuedInputBytes += data.size();
-	m_inputCondition.notify_one();
+	std::lock_guard<std::mutex> guard(spState->mutex);
+	if (static_cast<qsizetype>(spState->inputQueue.size())
+			>= kMaximumInputQueueMessages
+		|| spState->nQueuedInputBytes + data.size() > kMaximumInputQueueBytes)
+		return false;
+	spState->inputQueue.push_back(data);
+	spState->nQueuedInputBytes += data.size();
+	spState->inputCondition.notify_one();
 	return true;
 }
 
@@ -270,7 +325,13 @@ void KWindowsPseudoConsole::requestStop(quint64 nGeneration)
 {
 	if (!m_bRunning || nGeneration != m_nGeneration.load() || m_bStopping.exchange(true))
 		return;
-	m_inputCondition.notify_all();
+	const std::shared_ptr<KWriteState> spWriteState =
+		m_spWriteState.load();
+	if (spWriteState != nullptr)
+	{
+		spWriteState->bStopping = true;
+		spWriteState->inputCondition.notify_all();
+	}
 	m_teardownThread = std::thread(&KWindowsPseudoConsole::teardown, this, nGeneration);
 }
 
@@ -321,53 +382,63 @@ void KWindowsPseudoConsole::readOutput(quint64 nGeneration)
 	}
 }
 
-void KWindowsPseudoConsole::writeInputLoop(quint64 nGeneration)
+void KWindowsPseudoConsole::writeInputLoop(
+	const std::shared_ptr<KWriteState> &spState)
 {
 	for (;;)
 	{
 		QByteArray data;
 		{
-			std::unique_lock<std::mutex> lock(m_mutex);
-			m_inputCondition.wait(lock, [this]()
-				{ return m_bStopping || !m_inputQueue.empty(); });
-			if (m_bStopping && m_inputQueue.empty())
+			std::unique_lock<std::mutex> lock(spState->mutex);
+			spState->inputCondition.wait(lock, [&spState]()
+				{ return spState->bStopping || !spState->inputQueue.empty(); });
+			if (spState->bStopping && spState->inputQueue.empty())
 				break;
-			data = std::move(m_inputQueue.front());
-			m_inputQueue.pop_front();
-			m_nQueuedInputBytes -= data.size();
+			data = std::move(spState->inputQueue.front());
+			spState->inputQueue.pop_front();
+			spState->nQueuedInputBytes -= data.size();
 		}
-		if (nGeneration != m_nGeneration.load())
-			break;
 		const KTerminalWriteResult result = WriteAllTerminalData(data,
-			[this](const char *pData, qsizetype nBytes, qsizetype *pBytesWritten,
-				quint32 *pErrorCode)
+			spState->writeFunction,
+			[&spState]()
 			{
-				DWORD nWritten = 0;
-				const BOOL bWritten = ::WriteFile(m_hInputWrite, pData,
-					static_cast<DWORD>(nBytes), &nWritten, nullptr);
-				*pBytesWritten = static_cast<qsizetype>(nWritten);
-				*pErrorCode = bWritten ? ERROR_SUCCESS : ::GetLastError();
-				return bWritten != FALSE;
-			},
-			[this, nGeneration]()
-			{
-				return !m_bStopping && nGeneration == m_nGeneration.load();
+				return !spState->bStopping;
 			});
-		if (!result.bSucceeded && !m_bStopping
-			&& nGeneration == m_nGeneration.load())
+		if (!result.bSucceeded && !spState->bStopping)
 		{
-			const quint32 nErrorCode = result.nErrorCode;
-			QMetaObject::invokeMethod(this,
-				[this, nGeneration, nErrorCode]()
-				{
-					emit terminalError(nGeneration, QStringLiteral("write_failed"),
-						windowsError(QStringLiteral("Write ConPTY input failed"),
-							static_cast<DWORD>(nErrorCode)));
-					requestStop(nGeneration);
-				}, Qt::QueuedConnection);
+			postWriteFailure(spState, result.nErrorCode);
 			break;
 		}
 	}
+	spState->bFinished = true;
+}
+
+void KWindowsPseudoConsole::postWriteFailure(
+	const std::shared_ptr<KWriteState> &spState,
+	quint32 nErrorCode)
+{
+	const std::shared_ptr<KWriteCallbackGate> spGate = spState->spCallbackGate;
+	if (spGate == nullptr)
+		return;
+	std::lock_guard<std::mutex> gateGuard(spGate->mutex);
+	KWindowsPseudoConsole *pTarget = spGate->pTarget;
+	if (pTarget == nullptr)
+		return;
+	QMetaObject::invokeMethod(pTarget,
+		[spGate, nGeneration = spState->nGeneration, nErrorCode]()
+		{
+			KWindowsPseudoConsole *pLiveTarget = nullptr;
+			{
+				std::lock_guard<std::mutex> callbackGuard(spGate->mutex);
+				pLiveTarget = spGate->pTarget;
+			}
+			if (pLiveTarget == nullptr)
+				return;
+			emit pLiveTarget->terminalError(nGeneration, QStringLiteral("write_failed"),
+				windowsError(QStringLiteral("Write ConPTY input failed"),
+					static_cast<DWORD>(nErrorCode)));
+			pLiveTarget->requestStop(nGeneration);
+		}, Qt::QueuedConnection);
 }
 
 void KWindowsPseudoConsole::waitForProcess(quint64 nGeneration)
@@ -397,7 +468,13 @@ void KWindowsPseudoConsole::teardown(quint64 nGeneration)
 		::TerminateJobObject(m_hJob, 1);
 	if (nExitCode == STILL_ACTIVE && m_hProcess != nullptr)
 		::TerminateProcess(m_hProcess, 1);
-	m_inputCondition.notify_all();
+	const std::shared_ptr<KWriteState> spWriteState =
+		m_spWriteState.load();
+	if (spWriteState != nullptr)
+	{
+		spWriteState->bStopping = true;
+		spWriteState->inputCondition.notify_all();
+	}
 	if (m_writeThread.joinable())
 	{
 		const HANDLE hWriteThread = m_writeThread.native_handle();
@@ -422,11 +499,31 @@ void KWindowsPseudoConsole::teardown(quint64 nGeneration)
 					.arg(nGeneration));
 			// Cancellation should normally release WriteFile. Closing the pipe is a
 			// bounded last resort, used only after the writer ignored cancellation.
-			CloseNativeHandle(&m_hInputWrite);
+			if (spWriteState != nullptr)
+			{
+				HANDLE hInputWrite = spWriteState->hInputWrite.exchange(nullptr);
+				CloseNativeHandle(&hInputWrite);
+			}
 		}
-		m_writeThread.join();
+		const DWORD nFinalWait = ::WaitForSingleObject(hWriteThread,
+			kWriteThreadFallbackWaitMs);
+		if (nFinalWait == WAIT_OBJECT_0)
+			m_writeThread.join();
+		else
+		{
+			KSessionTraceLogger::write(QStringLiteral("controlled"),
+				QStringLiteral("terminal_write_thread_stuck"),
+				QStringLiteral("lifecycle"), -1,
+				QStringLiteral("generation=%1 waitResult=%2")
+					.arg(nGeneration).arg(nFinalWait));
+			m_writeThread.detach();
+		}
 	}
-	CloseNativeHandle(&m_hInputWrite);
+	if (spWriteState != nullptr)
+	{
+		HANDLE hInputWrite = spWriteState->hInputWrite.exchange(nullptr);
+		CloseNativeHandle(&hInputWrite);
+	}
 	if (m_hProcess != nullptr)
 		::WaitForSingleObject(m_hProcess, kProcessStopWaitMs);
 	if (m_processThread.joinable())
@@ -439,10 +536,11 @@ void KWindowsPseudoConsole::teardown(quint64 nGeneration)
 	if (m_hProcess != nullptr)
 		::GetExitCodeProcess(m_hProcess, &nExitCode);
 	resetHandles();
+	if (spWriteState != nullptr)
 	{
-		std::lock_guard<std::mutex> guard(m_mutex);
-		m_inputQueue.clear();
-		m_nQueuedInputBytes = 0;
+		std::lock_guard<std::mutex> guard(spWriteState->mutex);
+		spWriteState->inputQueue.clear();
+		spWriteState->nQueuedInputBytes = 0;
 	}
 	m_bRunning = false;
 	m_bStopping = false;

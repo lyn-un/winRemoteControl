@@ -6,7 +6,121 @@
 #include <QtCore/QTimer>
 
 #include <iostream>
+#include <condition_variable>
+#include <functional>
+#include <memory>
+#include <mutex>
 #include <thread>
+
+namespace
+{
+	bool WaitUntil(const std::function<bool()> &condition, int nTimeoutMs)
+	{
+		QElapsedTimer timer;
+		timer.start();
+		while (timer.elapsed() < nTimeoutMs)
+		{
+			if (condition())
+				return true;
+			QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+			QThread::msleep(5);
+		}
+		return condition();
+	}
+
+	bool TestStuckWriterIsIsolated()
+	{
+		struct KBlockedWrite
+		{
+			std::mutex mutex;
+			std::condition_variable condition;
+			bool bEntered = false;
+			bool bRelease = false;
+			bool bReturned = false;
+		};
+		auto spBlockedWrite = std::make_shared<KBlockedWrite>();
+		KWindowsPseudoConsole terminal(
+			[spBlockedWrite](const char *, qsizetype nBytes,
+				qsizetype *pWritten, quint32 *pError)
+			{
+				std::unique_lock<std::mutex> lock(spBlockedWrite->mutex);
+				spBlockedWrite->bEntered = true;
+				spBlockedWrite->condition.notify_all();
+				spBlockedWrite->condition.wait(lock,
+					[&]() { return spBlockedWrite->bRelease; });
+				spBlockedWrite->bReturned = true;
+				*pWritten = nBytes;
+				*pError = ERROR_SUCCESS;
+				return true;
+			}, nullptr);
+		QString strError;
+		if (!terminal.start(91, 80, 25, &strError)
+			|| !terminal.writeInput(91, QByteArrayLiteral("blocked")))
+		{
+			std::cerr << "Unable to start injected ConPTY writer\n";
+			return false;
+		}
+		if (!WaitUntil([&]()
+			{
+				std::lock_guard<std::mutex> guard(spBlockedWrite->mutex);
+				return spBlockedWrite->bEntered;
+			}, 2000))
+		{
+			std::cerr << "Injected writer was not entered\n";
+			return false;
+		}
+
+		bool bStopped = false;
+		QObject::connect(&terminal, &KTerminalHost::stopped,
+			[&](quint64 nGeneration)
+			{ if (nGeneration == 91) bStopped = true; });
+		QElapsedTimer stopTimer;
+		stopTimer.start();
+		terminal.requestStop(91);
+		if (!WaitUntil([&]() { return bStopped; }, 6000)
+			|| stopTimer.elapsed() > 5500)
+		{
+			std::cerr << "Stuck writer prevented bounded ConPTY stop\n";
+			return false;
+		}
+		if (terminal.start(92, 80, 25, &strError))
+		{
+			std::cerr << "ConPTY reused state while old writer was still running\n";
+			return false;
+		}
+
+		{
+			std::lock_guard<std::mutex> guard(spBlockedWrite->mutex);
+			spBlockedWrite->bRelease = true;
+		}
+		spBlockedWrite->condition.notify_all();
+		if (!WaitUntil([&]()
+			{
+				std::lock_guard<std::mutex> guard(spBlockedWrite->mutex);
+				return spBlockedWrite->bReturned;
+			}, 2000))
+		{
+			std::cerr << "Injected writer did not return after release\n";
+			return false;
+		}
+		if (!WaitUntil([&]()
+			{
+				strError.clear();
+				return terminal.start(92, 80, 25, &strError);
+			}, 2000))
+		{
+			std::cerr << "ConPTY did not recover after isolated writer exited: "
+				<< strError.toStdString() << '\n';
+			return false;
+		}
+		bool bRestartStopped = false;
+		QObject::connect(&terminal, &KTerminalHost::stopped,
+			[&](quint64 nGeneration)
+			{ if (nGeneration == 92) bRestartStopped = true; });
+		terminal.requestStop(92);
+		return WaitUntil([&]() { return bRestartStopped; }, 5000);
+	}
+}
 
 int main(int argc, char *argv[])
 {
@@ -135,5 +249,7 @@ int main(int argc, char *argv[])
 		std::cerr << "ConPTY concurrent stop did not converge once per generation\n";
 		return 1;
 	}
+	if (!TestStuckWriterIsIsolated())
+		return 1;
 	return 0;
 }
