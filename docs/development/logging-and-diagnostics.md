@@ -9,6 +9,7 @@
 | `--trace` | 同时开启 session trace 和 latency trace |
 | `--session-trace` | 只开启会话、协议和生命周期日志 |
 | `--latency-trace` | 只开启采集、视频、输入反馈等延迟日志 |
+| `--latency-scenario <static\|mouse\|window>` | 启用延迟日志并标记本次基线场景 |
 | `--log-dir <path>` | 指定两类日志目录；相对路径以 exe 目录为基准 |
 | `--help` | 显示命令行帮助 |
 
@@ -18,8 +19,25 @@
 winRemoteControl.exe --trace
 winRemoteControl.exe --session-trace
 winRemoteControl.exe --latency-trace
+winRemoteControl.exe --latency-scenario mouse
 winRemoteControl.exe --trace --log-dir "D:\wrc_logs"
 ```
+
+建立延迟基线时，两台电脑应使用同一场景标签，并为三个场景分别重新启动一次程序：
+
+```cmd
+winRemoteControl.exe --trace --latency-scenario static
+winRemoteControl.exe --trace --latency-scenario mouse
+winRemoteControl.exe --trace --latency-scenario window
+```
+
+每次固定分辨率和帧率：`static` 保持桌面静止，`mouse` 连续移动鼠标，`window` 快速拖动和缩放窗口。控制端会把场景名写入每条延迟日志，可以使用仓库内脚本汇总：
+
+```powershell
+.\tools\summarize-latency-trace.ps1 -Scenario mouse
+```
+
+脚本输出该标签最后一次运行的端到端 P50、P95、最大值、`lowLatencyRender` 样本和两层帧合并比例。
 
 未指定 `--log-dir` 时写入 exe 同级的 `logs` 目录。目录创建或文件打开失败只通过 `qWarning` 报告，不阻止程序启动。
 

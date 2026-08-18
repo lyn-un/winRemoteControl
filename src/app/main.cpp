@@ -10,6 +10,7 @@
 #include "core/protocol/clipboardmessage.h"
 
 #include <QtCore/QCommandLineParser>
+#include <QtCore/QDebug>
 #include <QtCore/QMetaType>
 #include <QtGui/QIcon>
 #include <QtNetwork/QNetworkProxy>
@@ -32,10 +33,18 @@ int main(int nArgc, char *pArgv[])
 	parser.process(app);
 	const KTraceOptions traceOptions = KTraceOptionsParser::options(
 		parser, QCoreApplication::applicationDirPath());
+	if (!traceOptions.strValidationError.isEmpty())
+	{
+		qCritical().noquote() << traceOptions.strValidationError;
+		::CoUninitialize();
+		return 2;
+	}
 	KSessionTraceLogger::configure(
 		traceOptions.bSessionTraceEnabled, traceOptions.strLogDirectory);
 	KLatencyTraceLogger::configure(
-		traceOptions.bLatencyTraceEnabled, traceOptions.strLogDirectory);
+		traceOptions.bLatencyTraceEnabled,
+		traceOptions.strLogDirectory,
+		traceOptions.strLatencyScenario);
 	KLatencyTraceLogger::write(QStringLiteral("app"),
 		QStringLiteral("startup"),
 		QStringLiteral("dir=%1").arg(QCoreApplication::applicationDirPath()));

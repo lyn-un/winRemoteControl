@@ -30,7 +30,7 @@ int main(int nArgumentCount, char **pArguments)
 		return 1;
 	}
 
-	KLatencyTraceLogger::configure(true, temporaryDirectory.path());
+	KLatencyTraceLogger::configure(true, temporaryDirectory.path(), QString());
 	KInputFeedbackTracker tracker;
 
 	KInputMessage keyRelease;

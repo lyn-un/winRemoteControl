@@ -6,6 +6,7 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDebug>
 #include <QtCore/QDir>
+#include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QTemporaryDir>
 
@@ -54,6 +55,8 @@ namespace
 			QStringLiteral("trace logging is disabled by default"));
 		Check(options.strLogDirectory == QDir(strApplicationDirectory).absoluteFilePath(
 			QStringLiteral("logs")), QStringLiteral("default logs directory is beside executable"));
+		Check(options.strLatencyScenario.isEmpty() && options.strValidationError.isEmpty(),
+			QStringLiteral("latency scenario is empty and valid by default"));
 
 		options = ParseOptions(
 			{QStringLiteral("winRemoteControl.exe"), QStringLiteral("--trace")},
@@ -72,6 +75,19 @@ namespace
 			strApplicationDirectory);
 		Check(!options.bSessionTraceEnabled && options.bLatencyTraceEnabled,
 			QStringLiteral("--latency-trace only enables latency logging"));
+
+		options = ParseOptions(
+			{QStringLiteral("winRemoteControl.exe"), QStringLiteral("--latency-scenario"),
+				QStringLiteral("mouse")}, strApplicationDirectory);
+		Check(options.bLatencyTraceEnabled && options.strLatencyScenario == QStringLiteral("mouse")
+			&& options.strValidationError.isEmpty(),
+			QStringLiteral("a latency scenario labels and enables latency logging"));
+
+		options = ParseOptions(
+			{QStringLiteral("winRemoteControl.exe"), QStringLiteral("--latency-scenario"),
+				QStringLiteral("invalid")}, strApplicationDirectory);
+		Check(!options.strValidationError.isEmpty(),
+			QStringLiteral("an unsupported latency scenario is rejected"));
 
 		qputenv("WRC_SESSION_TRACE", "1");
 		qputenv("WRC_LATENCY_TRACE", "0");
@@ -113,7 +129,8 @@ namespace
 			return;
 
 		KSessionTraceLogger::configure(true, temporaryDirectory.path());
-		KLatencyTraceLogger::configure(true, temporaryDirectory.path());
+		KLatencyTraceLogger::configure(
+			true, temporaryDirectory.path(), QStringLiteral("mouse"));
 		KSessionTraceLogger::write(QStringLiteral("controlled"),
 			QStringLiteral("test"), QStringLiteral("configured_directory"));
 		KLatencyTraceLogger::write(QStringLiteral("controller"),
@@ -126,6 +143,12 @@ namespace
 		Check(QFileInfo::exists(QDir(temporaryDirectory.path()).absoluteFilePath(
 			QStringLiteral("latency_trace_controller.log"))),
 			QStringLiteral("latency trace keeps the controller role in its file name"));
+		QFile latencyFile(QDir(temporaryDirectory.path()).absoluteFilePath(
+			QStringLiteral("latency_trace_controller.log")));
+		Check(latencyFile.open(QIODevice::ReadOnly | QIODevice::Text),
+			QStringLiteral("configured latency trace can be read"));
+		Check(QString::fromUtf8(latencyFile.readAll()).contains(QStringLiteral("scenario=mouse")),
+			QStringLiteral("configured latency scenario is written to trace lines"));
 	}
 }
 

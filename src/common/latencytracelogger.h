@@ -6,7 +6,9 @@
 class KLatencyTraceLogger
 {
 public:
-	static void configure(bool bEnabled, const QString &strLogDirectory);
+	static void configure(bool bEnabled,
+		const QString &strLogDirectory,
+		const QString &strScenario);
 	static bool isEnabled();
 	static void write(const QString &strSide,
 		const QString &strStage,

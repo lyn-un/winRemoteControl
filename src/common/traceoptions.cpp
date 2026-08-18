@@ -9,6 +9,7 @@ namespace
 	constexpr char kTraceOptionName[] = "trace";
 	constexpr char kSessionTraceOptionName[] = "session-trace";
 	constexpr char kLatencyTraceOptionName[] = "latency-trace";
+	constexpr char kLatencyScenarioOptionName[] = "latency-scenario";
 	constexpr char kLogDirectoryOptionName[] = "log-dir";
 	constexpr char kSessionTraceEnvironmentName[] = "WRC_SESSION_TRACE";
 	constexpr char kLatencyTraceEnvironmentName[] = "WRC_LATENCY_TRACE";
@@ -17,6 +18,13 @@ namespace
 	{
 		return qEnvironmentVariableIsSet(pName)
 			&& qEnvironmentVariable(pName) != QStringLiteral("0");
+	}
+
+	bool IsSupportedLatencyScenario(const QString &strScenario)
+	{
+		return strScenario == QStringLiteral("static")
+			|| strScenario == QStringLiteral("mouse")
+			|| strScenario == QStringLiteral("window");
 	}
 }
 
@@ -31,6 +39,9 @@ void KTraceOptionsParser::addOptions(QCommandLineParser *pParser)
 		QStringLiteral("Enable session trace logs.")));
 	pParser->addOption(QCommandLineOption(QString::fromLatin1(kLatencyTraceOptionName),
 		QStringLiteral("Enable latency trace logs.")));
+	pParser->addOption(QCommandLineOption(QString::fromLatin1(kLatencyScenarioOptionName),
+		QStringLiteral("Label a latency run as static, mouse, or window."),
+		QStringLiteral("scenario")));
 	pParser->addOption(QCommandLineOption(QString::fromLatin1(kLogDirectoryOptionName),
 		QStringLiteral("Write trace logs to the specified directory."),
 		QStringLiteral("directory")));
@@ -41,11 +52,21 @@ KTraceOptions KTraceOptionsParser::options(const QCommandLineParser &parser,
 {
 	const bool bEnableAll = parser.isSet(QString::fromLatin1(kTraceOptionName));
 	KTraceOptions options;
+	options.strLatencyScenario = parser.value(
+		QString::fromLatin1(kLatencyScenarioOptionName)).trimmed().toLower();
+	if (!options.strLatencyScenario.isEmpty()
+		&& !IsSupportedLatencyScenario(options.strLatencyScenario))
+	{
+		options.strValidationError = QStringLiteral(
+			"Invalid latency scenario '%1'. Expected static, mouse, or window.")
+			.arg(options.strLatencyScenario);
+	}
 	options.bSessionTraceEnabled = bEnableAll
 		|| parser.isSet(QString::fromLatin1(kSessionTraceOptionName))
 		|| IsEnvironmentEnabled(kSessionTraceEnvironmentName);
 	options.bLatencyTraceEnabled = bEnableAll
 		|| parser.isSet(QString::fromLatin1(kLatencyTraceOptionName))
+		|| !options.strLatencyScenario.isEmpty()
 		|| IsEnvironmentEnabled(kLatencyTraceEnvironmentName);
 
 	const QString strRequestedDirectory = parser.value(

@@ -58,7 +58,9 @@ namespace
 			return m_bEnabled && !m_bStopping;
 		}
 
-		void configure(bool bEnabled, const QString &strLogDirectory)
+		void configure(bool bEnabled,
+			const QString &strLogDirectory,
+			const QString &strScenario)
 		{
 			QMutexLocker locker(&m_mutex);
 			if (m_bInitialized)
@@ -69,6 +71,7 @@ namespace
 			m_bConfigured = true;
 			m_bConfiguredEnabled = bEnabled;
 			m_strLogDirectory = QDir::cleanPath(strLogDirectory);
+			m_strScenario = strScenario;
 		}
 
 		void enqueue(const QString &strSide, const QString &strStage, const QString &strExtra)
@@ -99,6 +102,8 @@ namespace
 				.arg(nThreadId)
 				.arg(strSide)
 				.arg(strStage);
+			if (!m_strScenario.isEmpty())
+				strLine += QStringLiteral(" scenario=%1").arg(m_strScenario);
 			if (!strExtra.isEmpty())
 				strLine += QLatin1Char(' ') + strExtra;
 
@@ -234,6 +239,7 @@ namespace
 		QQueue<QString> m_pendingLines;
 		QString m_strProcessSide;
 		QString m_strLogDirectory;
+		QString m_strScenario;
 		quint64 m_nDroppedLines = 0;
 		bool m_bConfigured = false;
 		bool m_bConfiguredEnabled = false;
@@ -249,9 +255,11 @@ namespace
 	}
 }
 
-void KLatencyTraceLogger::configure(bool bEnabled, const QString &strLogDirectory)
+void KLatencyTraceLogger::configure(bool bEnabled,
+	const QString &strLogDirectory,
+	const QString &strScenario)
 {
-	latencyTraceWorker().configure(bEnabled, strLogDirectory);
+	latencyTraceWorker().configure(bEnabled, strLogDirectory, strScenario);
 }
 
 bool KLatencyTraceLogger::isEnabled()
