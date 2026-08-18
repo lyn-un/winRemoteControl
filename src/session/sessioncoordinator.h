@@ -15,7 +15,6 @@
 #include "core/security/trusteddevice.h"
 #include "core/transport/remotepeertransport.h"
 #include "session/sessioncontroller.h"
-#include "session/deviceauthenticationflow.h"
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
@@ -225,7 +224,7 @@ private:
 	QString m_strPendingHost;
 	quint16 m_nPendingPort = 0;
 	KSessionRole m_pendingRole = ControllerSessionRole;
-	KDeviceAuthenticationContext m_authenticationContext;
+	KPermissionScopes m_effectivePermissions;
 };
 
 #endif // _WINREMOTECONTROL_SESSIONCOORDINATOR_H_

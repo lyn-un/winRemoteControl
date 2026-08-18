@@ -37,7 +37,7 @@ stateDiagram-v2
 
 ## 接入审批与能力协商
 
-1. TCP 固定版本前导后由 Schannel 完成 TLS 1.2/1.3 双向证书握手；`KAdmissionController` 先执行统一来源限制，`KSecuritySessionController` 再启动认证。未知设备使用 TLS Exporter 生成六位配对码，由两端进行 Numeric Comparison。确认后以 `requestId + generation` 创建配对事务，依次完成 Pending、Ready、Committed；双方提交完成前不会发布认证成功。完整 SHA-256 SPKI 只用于安全详情和后续证书固定。
+1. TCP 固定版本前导后由 Schannel 完成 TLS 1.2/1.3 双向证书握手；`KAdmissionController` 先执行统一来源限制，`KSecuritySessionController` 再启动认证并管理 requestId Command、阶段超时和通道丢失清理。未知设备使用 TLS Exporter 生成六位配对码，由两端进行 Numeric Comparison。确认后以 `requestId + generation` 创建配对事务，依次完成 Pending、Ready、Committed；双方提交完成前不会发布认证成功。完整 SHA-256 SPKI 只用于安全详情和后续证书固定。安全失败通过 `KSecuritySessionErrorMapper` 转换，Coordinator 不比较技术字符串。
 2. 身份认证成功后才发送 `accessRequest`。`autoAccept` 只适用于未撤销且请求未超过权限上限的可信设备。
 3. 被控端允许后控制端创建 SDP Offer；SDP/ICE 只通过已认证且加密的 TLS 通道传输。
 4. Session DataChannel 打开后双方交换 `KSessionCapabilities`。

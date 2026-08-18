@@ -281,6 +281,8 @@ add_library(wrc_authentication_application STATIC
 	src/session/pairingtransaction.h
 	src/session/securitysessioncontroller.cpp
 	src/session/securitysessioncontroller.h
+	src/session/securitysessionerrormapper.cpp
+	src/session/securitysessionerrormapper.h
 	src/session/trusteddeviceservice.cpp
 	src/session/trusteddeviceservice.h
 )

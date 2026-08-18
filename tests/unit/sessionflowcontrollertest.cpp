@@ -1,6 +1,8 @@
 #include "session/accesssessionflow.h"
 #include "session/capabilitysessionflow.h"
 #include "session/mediasessioncontroller.h"
+#include "session/securitysessioncontroller.h"
+#include "session/securitysessionerrormapper.h"
 #include "fakesecurity.h"
 
 #include "core/transport/signalingtransport.h"
@@ -218,6 +220,60 @@ void TestMediaFlow()
 	Check(nStartCount == 1 && nStopCount == 1,
 		"media flow start and stop are idempotent");
 }
+
+void TestSecurityErrorMapping()
+{
+	KSecurityStatus status = KSecurityStatus::fromProtocolReason(
+		QStringLiteral("pairing_rate_limited"), PairingHelloSecurityStage,
+		QStringLiteral("limited"));
+	status.strRequestId = QStringLiteral("17698aa1-9108-405c-a0eb-dc1b78777ad4");
+	status.nGeneration = 19;
+	const KSessionError rateLimited = KSecuritySessionErrorMapper::map(status);
+	Check(rateLimited.domain == SecuritySessionErrorDomain
+		&& rateLimited.code == PairingRateLimitedSessionErrorCode
+		&& rateLimited.stage == ApprovalSessionErrorStage
+		&& rateLimited.bRetryable,
+		"security status maps without string classification in coordinator");
+
+	status = KSecurityStatus::fromProtocolReason(
+		QStringLiteral("trust_store_tampered"), TrustLoadSecurityStage,
+		QStringLiteral("signature mismatch"));
+	const KSessionError trustLoad = KSecuritySessionErrorMapper::map(status);
+	Check(trustLoad.code == TrustStoreTamperedSessionErrorCode
+		&& trustLoad.stage == StartupSessionErrorStage
+		&& !trustLoad.bRetryable,
+		"trust-store failure preserves code, stage, and retryability");
+
+	status = KSecurityStatus();
+	status.code = UnknownSecurityErrorCode;
+	status.stage = UnknownSecurityStage;
+	const KSessionError unknown = KSecuritySessionErrorMapper::map(status);
+	Check(unknown.code == UnknownSessionErrorCode
+		&& unknown.stage == UnknownSessionErrorStage,
+		"unknown security status remains explicit");
+}
+
+void TestSecurityFlowCancelsWhenTransportIsLost()
+{
+	KFakeSignalingTransport transport;
+	KFakeDeviceIdentityProvider localIdentity;
+	KFakeDeviceIdentityProvider remoteIdentity;
+	KFakeTrustedDeviceStore store;
+	store.setIdentityProvider(&localIdentity);
+	KSecuritySessionController controller(&transport, &localIdentity, &store);
+	emit transport.secureChannelEstablished(FakePeerIdentity(remoteIdentity));
+	const KSecurityStatus started = controller.beginOutgoing(
+		QStringLiteral("17698aa1-9108-405c-a0eb-dc1b78777ad4"),
+		31,
+		QStringLiteral("controller"),
+		KPermissionScopes(ViewScreenPermissionScope));
+	Check(!started.isValid() && controller.isActive(),
+		"security flow is active after outgoing authentication starts");
+	emit transport.connectionLost();
+	Check(!controller.isActive() && !controller.isAuthenticated()
+		&& controller.context().strRequestId.isEmpty(),
+		"transport loss cancels and clears the active security transaction");
+}
 }
 
 int main(int argc, char *argv[])
@@ -228,5 +284,7 @@ int main(int argc, char *argv[])
 	TestAccessFlowRejectsApprovalBeforeAuthentication();
 	TestAccessFlowSharesAdmissionWindow();
 	TestMediaFlow();
+	TestSecurityErrorMapping();
+	TestSecurityFlowCancelsWhenTransportIsLost();
 	return g_nFailureCount == 0 ? 0 : 1;
 }

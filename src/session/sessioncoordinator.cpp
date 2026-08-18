@@ -6,6 +6,7 @@
 #include "session/peerlifecyclecontroller.h"
 #include "session/recoverycontroller.h"
 #include "session/sessioncommanddispatcher.h"
+#include "session/securitysessionerrormapper.h"
 #include "session/shutdowncoordinator.h"
 #include "common/latencytracelogger.h"
 #include "common/sessiontracelogger.h"
@@ -57,63 +58,6 @@ namespace
 		return QStringLiteral("stage=%1 technical=%2")
 			.arg(KPeerInitializationResult::stageName(result.stage),
 				result.strTechnicalMessage);
-	}
-
-	static KSessionErrorCode sessionErrorCode(const KSecurityStatus &status)
-	{
-		switch (status.code)
-		{
-		case IdentityUnavailableSecurityErrorCode:
-			return IdentityUnavailableSessionErrorCode;
-		case AuthenticationTimeoutSecurityErrorCode:
-			return AuthenticationTimeoutSessionErrorCode;
-		case CertificateInvalidSecurityErrorCode:
-			return CertificateInvalidSessionErrorCode;
-		case PairingRejectedSecurityErrorCode:
-			return PairingRejectedSessionErrorCode;
-		case PairingRateLimitedSecurityErrorCode:
-			return PairingRateLimitedSessionErrorCode;
-		case DeviceKeyChangedSecurityErrorCode:
-			return DeviceKeyChangedSessionErrorCode;
-		case DeviceRevokedSecurityErrorCode:
-			return DeviceRevokedSessionErrorCode;
-		case PermissionDeniedSecurityErrorCode:
-			return PermissionDeniedSessionErrorCode;
-		case TrustStoreTamperedSecurityErrorCode:
-			return TrustStoreTamperedSessionErrorCode;
-		case ChannelBindingUnavailableSecurityErrorCode:
-			return ChannelBindingUnavailableSessionErrorCode;
-		case ProtocolIncompatibleSecurityErrorCode:
-			return IncompatibleProtocolSessionErrorCode;
-		case CancelledSecurityErrorCode:
-			return ApprovalRejectedSessionErrorCode;
-		default:
-			return UnknownSessionErrorCode;
-		}
-	}
-
-	static KSessionErrorStage sessionErrorStage(const KSecurityStatus &status)
-	{
-		switch (status.stage)
-		{
-		case ConnectSecurityStage:
-		case PrefaceSecurityStage:
-		case TlsHandshakeSecurityStage:
-			return ConnectingSessionErrorStage;
-		case TrustLoadSecurityStage:
-		case TrustRollbackSecurityStage:
-			return StartupSessionErrorStage;
-		case PermissionCheckSecurityStage:
-			return NegotiationSessionErrorStage;
-		case PairingHelloSecurityStage:
-		case UserApprovalSecurityStage:
-		case PrepareSecurityStage:
-		case CommitSecurityStage:
-			return ApprovalSessionErrorStage;
-		case UnknownSecurityStage:
-		default:
-			return UnknownSessionErrorStage;
-		}
 	}
 
 }
@@ -250,7 +194,7 @@ KSessionCoordinator::KSessionCoordinator(
 		{
 			if (!m_sessionStateMachine.completeIdentityAuthentication())
 				return;
-			m_authenticationContext = context;
+			m_effectivePermissions = context.effectivePermissions;
 			KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 				QStringLiteral("device_authentication"),
 				QStringLiteral("authenticated"), -1,
@@ -340,7 +284,7 @@ bool KSessionCoordinator::matchesCurrentEndpoint(
 
 QString KSessionCoordinator::authenticatedDeviceId() const
 {
-	return m_authenticationContext.strRemoteDeviceId;
+	return m_pAccessSessionFlow->authenticationContext().strRemoteDeviceId;
 }
 
 void KSessionCoordinator::setTerminalCapabilitiesAvailable(
@@ -1269,7 +1213,7 @@ void KSessionCoordinator::finishStopping(quint64 nGeneration,
 	const bool bRecovering = m_bStopRecovering;
 	const KSessionRole role = m_stopRole;
 	const QString strReason = m_strStopReason;
-	m_authenticationContext = KDeviceAuthenticationContext();
+	m_effectivePermissions = KPermissionScopes();
 	m_bStopTeardownStarted = false;
 	if (bFinishedAfterTimeout)
 	{
@@ -1712,8 +1656,7 @@ void KSessionCoordinator::completeCapabilityNegotiation(
 {
 	if (!m_pCapabilitySessionFlow->isComplete() || !m_bSessionChannelOpen)
 		return;
-	KPermissionScopes effectivePermissions =
-		m_authenticationContext.effectivePermissions;
+	KPermissionScopes effectivePermissions = m_effectivePermissions;
 	if (!capabilities.bClipboardText)
 		effectivePermissions.setFlag(ClipboardPermissionScope, false);
 	if (!capabilities.channels.contains(QStringLiteral("terminal")))
@@ -1723,7 +1666,7 @@ void KSessionCoordinator::completeCapabilityNegotiation(
 	{
 		effectivePermissions.setFlag(InputControlPermissionScope, false);
 	}
-	m_authenticationContext.effectivePermissions = effectivePermissions;
+	m_effectivePermissions = effectivePermissions;
 	m_pMediaSessionController->setCapabilities(capabilities);
 	m_bTerminalChannelStatePublished = m_bTerminalChannelOpen
 		&& capabilities.channels.contains(QStringLiteral("terminal"));
@@ -2211,15 +2154,9 @@ void KSessionCoordinator::handleIncomingSecurityRejected(
 	{
 		return;
 	}
-	reportSessionError(SecuritySessionErrorDomain, sessionErrorCode(status),
-		sessionErrorStage(status), status.bRetryable,
-		QStringLiteral("requestId=%1 generation=%2 securityDomain=%3 "
-			"securityStage=%4 reason=%5 technical=%6")
-			.arg(status.strRequestId)
-			.arg(status.nGeneration)
-			.arg(KSecurityStatus::domainName(status.domain),
-				KSecurityStatus::stageName(status.stage),
-				status.strProtocolReason, status.strTechnicalMessage));
+	const KSessionError error = KSecuritySessionErrorMapper::map(status);
+	reportSessionError(error.domain, error.code, error.stage,
+		error.bRetryable, error.strTechnicalMessage);
 	m_sessionStateMachine.rejectConnection();
 	m_pAccessSessionFlow->disconnectPeer();
 	updateListeningAvailability(true, m_nListeningPort);
@@ -2238,15 +2175,9 @@ void KSessionCoordinator::handleOutgoingSecurityRejected(
 	}
 	finishSession(ConnectFailedSessionEndReason, status.strProtocolReason,
 		false, false, false);
-	reportSessionError(SecuritySessionErrorDomain, sessionErrorCode(status),
-		sessionErrorStage(status), status.bRetryable,
-		QStringLiteral("requestId=%1 generation=%2 securityDomain=%3 "
-			"securityStage=%4 reason=%5 technical=%6")
-			.arg(status.strRequestId)
-			.arg(status.nGeneration)
-			.arg(KSecurityStatus::domainName(status.domain),
-				KSecurityStatus::stageName(status.stage),
-				status.strProtocolReason, status.strTechnicalMessage));
+	const KSessionError error = KSecuritySessionErrorMapper::map(status);
+	reportSessionError(error.domain, error.code, error.stage,
+		error.bRetryable, error.strTechnicalMessage);
 }
 
 void KSessionCoordinator::updateListeningAvailability(bool bAvailable, quint16 nPort)
@@ -2376,7 +2307,7 @@ KSessionCommandTransmitResult KSessionCoordinator::sendDeviceInfoMessage()
 
 bool KSessionCoordinator::hasPermission(KPermissionScope permission) const
 {
-	return m_authenticationContext.effectivePermissions.testFlag(permission);
+	return m_effectivePermissions.testFlag(permission);
 }
 
 void KSessionCoordinator::publishPermissionDenied(

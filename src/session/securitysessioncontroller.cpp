@@ -16,6 +16,13 @@ KSecuritySessionController::KSecuritySessionController(
 	m_pAuthenticationFlow->setPairingCommand(&m_pairingCommand);
 	connect(m_pTransport, &KSignalingTransport::secureChannelEstablished,
 		m_pAuthenticationFlow, &KDeviceAuthenticationFlow::setSecurePeerIdentity);
+	connect(m_pTransport, &KSignalingTransport::connectionLost,
+		this, [this]()
+		{
+			m_pAuthenticationFlow->cancel(
+				QStringLiteral("connection_lost"), false, false);
+			m_pAuthenticationFlow->setSecurePeerIdentity(KTlsPeerIdentity());
+		});
 	connect(m_pAuthenticationFlow, &KDeviceAuthenticationFlow::messageReady,
 		this, [this](const KTlsPairingMessage &message)
 		{ m_pTransport->sendMessage(KTlsPairingMessageCodec::encode(message)); });

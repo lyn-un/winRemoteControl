@@ -33,7 +33,7 @@ flowchart TB
 - `KApplicationComposition` 创建并持有进程级服务和适配器，负责应用关闭的异步收尾。
 - `KSessionCoordinator` 保留跨模块编排和主状态迁移；Peer 初始化/回滚、Access 传输与审批、安全认证、能力交换、媒体采集、可靠 Session 命令、恢复与关闭分别委托给小型 Controller。
 - `KAdmissionController` 是 Transport 与 Authentication 共用的来源准入策略，统一 TLS/Pairing 失败窗口、冷却和有界来源表；本机身份或存储故障不会惩罚远端地址。
-- `KSecuritySessionController` 封装安全认证入口、配对消息路由、取消和状态转发；`KAccessSessionFlow` 管理监听、主动连接、最近端点、Access requestId、审批计时与接受/拒绝策略，以及 Access/SDP 信令的传输边界。`KPeerLifecycleController` 隔离 WebRTC generation、初始化回滚及异步关闭完成；`KCapabilitySessionFlow` 管理三秒能力交换与协商结果；`KMediaSessionController` 管理流配置约束和幂等 Capture 启停。
+- `KSecuritySessionController` 封装安全认证入口、requestId 级配对 Command、阶段超时、通道丢失清理和状态转发；`KSecuritySessionErrorMapper` 负责将结构化安全错误映射到 Session，Coordinator 不再复制认证上下文或按字符串猜测错误。`KAccessSessionFlow` 管理监听、主动连接、最近端点、Access requestId、审批计时与接受/拒绝策略，以及 Access/SDP 信令的传输边界。`KPeerLifecycleController` 隔离 WebRTC generation、初始化回滚及异步关闭完成；`KCapabilitySessionFlow` 管理三秒能力交换与协商结果；`KMediaSessionController` 管理流配置约束和幂等 Capture 启停。
 - `KSessionStateMachine` 只表达合法状态转换和权限判断，不执行外部 I/O。
 - `KRemotePeerTransport` 是核心层面向远端 Peer 的端口；`KWebRtcPeer` 是其 WebRTC 实现。
 - `KCaptureService` 管理采集线程、generation 和 FrameSink；DXGI 采集源不依赖 WebRTC。
