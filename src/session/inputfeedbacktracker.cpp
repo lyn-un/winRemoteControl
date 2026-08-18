@@ -93,18 +93,20 @@ void KInputFeedbackTracker::handleRendered(quint64 nSeq)
 	m_roundTripSamples.append(nRoundTripMs);
 	++m_nRoundTripSampleCount;
 	if (m_nRoundTripSampleCount % kInputRoundTripStatsInterval == 0)
-		logRoundTripStats();
+		logRoundTripStats(QStringLiteral("input_roundtrip_stats"));
 }
 
 void KInputFeedbackTracker::reset()
 {
+	if (KLatencyTraceLogger::isEnabled() && !m_roundTripSamples.isEmpty())
+		logRoundTripStats(QStringLiteral("input_roundtrip_summary"));
 	m_sentTraces.clear();
 	m_roundTripSamples.clear();
 	m_nRoundTripSampleCount = 0;
 	m_roundTripTimer.invalidate();
 }
 
-void KInputFeedbackTracker::logRoundTripStats()
+void KInputFeedbackTracker::logRoundTripStats(const QString &strEventName)
 {
 	if (m_roundTripSamples.isEmpty())
 		return;
@@ -119,7 +121,7 @@ void KInputFeedbackTracker::logRoundTripStats()
 	const qsizetype nP95Index = (sortedSamples.size() * 95 + 99) / 100 - 1;
 	const qint64 nAverageMs = (nTotalMs + sortedSamples.size() / 2) / sortedSamples.size();
 	KLatencyTraceLogger::write(QStringLiteral("controller"),
-		QStringLiteral("input_roundtrip_stats"),
+		strEventName,
 		QStringLiteral("scope=exclude_key_release samples=%1 totalSamples=%2 avgMs=%3 p50Ms=%4 p95Ms=%5 maxMs=%6")
 			.arg(sortedSamples.size())
 			.arg(m_nRoundTripSampleCount)

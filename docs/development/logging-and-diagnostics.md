@@ -54,7 +54,7 @@ winRemoteControl.exe
 | 初始化 | WebRTC initialization stage、rollback start/finished/timeout |
 | 会话 | `session_recovery_start/success/failed`、`session_end`、`signaling_closed_after_session_end`、shutdown pending components |
 | 视频 | capture、`initial_frame_retry`、`h264_encode_no_output`、decode/render、frame coalesced summary；`render_end` 的 `lowLatencyRender` 用于确认 WebRTC 实际渲染模式，`callbackToConvertMs`、`convertToEnqueueMs`、`enqueueToPresentMs`、`callbackToPresentMs` 用于定位控制端阶段 |
-| 输入 | `input_send/recv`、`inject_begin/end`、`input_roundtrip`、`input_roundtrip_stats` |
+| 输入 | `input_send/recv`、`inject_begin/end`、`input_roundtrip`、每 30 个样本的 `input_roundtrip_stats`、会话结束的 `input_roundtrip_summary` |
 | 剪贴板 | channel、send/receive/apply/drop；只记录 UUID、大小、序号和原因 |
 | 终端 | `terminal_open_requested`、`terminal_approval_pending`、`terminal_started`、`terminal_exited`、`terminal_host_error`、writer cancellation/isolation、`terminal_relay_launch/connected/input/focus/closed` |
 

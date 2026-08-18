@@ -29,7 +29,7 @@ private:
 		bool bKeyPressed = false;
 	};
 
-	void logRoundTripStats();
+	void logRoundTripStats(const QString &strEventName);
 
 	quint64 m_nRoundTripSampleCount = 0;
 	QElapsedTimer m_moveTraceTimer;

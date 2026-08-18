@@ -1044,6 +1044,19 @@ if(WRC_BUILD_TESTS)
 	)
 	add_test(NAME wrc_session_flow_controller_tests
 		COMMAND wrc_session_flow_controller_tests)
+
+	add_executable(wrc_input_feedback_tracker_tests
+		tests/unit/inputfeedbacktrackertest.cpp
+		src/session/inputfeedbacktracker.cpp
+		src/session/inputfeedbacktracker.h
+	)
+	target_link_libraries(wrc_input_feedback_tracker_tests PRIVATE
+		wrc_protocol
+		wrc_diagnostics
+		Qt6::Core
+	)
+	add_test(NAME wrc_input_feedback_tracker_tests
+		COMMAND wrc_input_feedback_tracker_tests)
 	set_tests_properties(wrc_session_service_tests PROPERTIES
 		ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Network>"
 	)
