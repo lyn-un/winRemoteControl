@@ -148,6 +148,9 @@ add_library(wrc_core STATIC
 	src/core/media/capturecontroller.h
 	src/core/media/latestdecodedframequeue.cpp
 	src/core/media/latestdecodedframequeue.h
+	src/core/privacy/displaypoweradapter.h
+	src/core/privacy/privacyoverlayadapter.h
+	src/core/privacy/workstationlockadapter.h
 	src/core/session/deviceinfoprovider.h
 	src/core/session/sessionerror.cpp
 	src/core/session/sessionerror.h
@@ -354,6 +357,10 @@ add_library(wrc_session_application STATIC
 	src/session/sessionerrorpresenter.h
 	src/session/shutdowncoordinator.cpp
 	src/session/shutdowncoordinator.h
+	src/privacy/privacymodeservice.cpp
+	src/privacy/privacymodeservice.h
+	src/privacy/postsessionactionservice.cpp
+	src/privacy/postsessionactionservice.h
 )
 
 target_include_directories(wrc_session_application PUBLIC
@@ -1112,6 +1119,15 @@ if(WRC_BUILD_TESTS)
 	)
 	add_test(NAME wrc_recovery_controller_tests
 		COMMAND wrc_recovery_controller_tests)
+
+	add_executable(wrc_privacy_service_tests
+		tests/unit/privacyservicetest.cpp
+	)
+	target_link_libraries(wrc_privacy_service_tests PRIVATE
+		wrc_session_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_privacy_service_tests COMMAND wrc_privacy_service_tests)
 
 	add_executable(wrc_lan_discovery_tests
 		tests/unit/landiscoveryservicetest.cpp

@@ -45,4 +45,27 @@ struct KPostSessionActionStatus
 	quint64 nGeneration = 0;
 };
 
+struct KPrivacyOperationResult
+{
+	bool bSucceeded = false;
+	QString strErrorCode;
+	QString strTechnicalMessage;
+
+	static KPrivacyOperationResult success()
+	{
+		KPrivacyOperationResult result;
+		result.bSucceeded = true;
+		return result;
+	}
+
+	static KPrivacyOperationResult failure(const QString &strErrorCode,
+		const QString &strTechnicalMessage)
+	{
+		KPrivacyOperationResult result;
+		result.strErrorCode = strErrorCode;
+		result.strTechnicalMessage = strTechnicalMessage;
+		return result;
+	}
+};
+
 #endif // _WINREMOTECONTROL_CORE_PRIVACY_PRIVACYTYPES_H_
