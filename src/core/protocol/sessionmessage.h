@@ -2,6 +2,7 @@
 #define _WINREMOTECONTROL_CORE_PROTOCOL_SESSIONMESSAGE_H_
 
 #include "core/media/streamconfig.h"
+#include "core/privacy/privacytypes.h"
 #include "core/protocol/protocolconstraints.h"
 
 #include <QtCore/QString>
@@ -21,6 +22,10 @@ enum KSessionMessageType
 	StreamConfigSessionMessageType,
 	CapabilitiesSessionMessageType,
 	CapabilityRejectedSessionMessageType,
+	SetPrivacyModeSessionMessageType,
+	PrivacyModeStateSessionMessageType,
+	SetPostSessionActionSessionMessageType,
+	PostSessionActionStateSessionMessageType,
 	CommandResultSessionMessageType
 };
 
@@ -48,6 +53,8 @@ struct KSessionCapabilities
 	bool bUnicodeText = true;
 	bool bMouseButtons = true;
 	bool bMouseWheel = true;
+	QStringList supportedPrivacyModes;
+	bool bPostSessionLock = false;
 	QVector<KMonitorCapability> monitorList;
 };
 
@@ -67,6 +74,8 @@ struct KNegotiatedCapabilities
 	bool bUnicodeText = false;
 	bool bMouseButtons = false;
 	bool bMouseWheel = false;
+	QStringList supportedPrivacyModes;
+	bool bPostSessionLock = false;
 };
 
 struct KRemoteDeviceInfo
@@ -89,6 +98,10 @@ struct KSessionMessage
 	KRemoteDeviceInfo deviceInfo;
 	KStreamConfig streamConfig;
 	KSessionCapabilities capabilities;
+	KPrivacyMode privacyMode = DisabledPrivacyMode;
+	KPrivacyModeStatus privacyModeStatus;
+	KPostSessionAction postSessionAction = NoPostSessionAction;
+	KPostSessionActionStatus postSessionActionStatus;
 };
 
 class KSessionMessageCodec

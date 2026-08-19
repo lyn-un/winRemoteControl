@@ -69,6 +69,20 @@ KCapabilityNegotiationResult KCapabilityNegotiator::negotiate(
 	negotiated.bUnicodeText = localCapabilities.bUnicodeText && remoteCapabilities.bUnicodeText;
 	negotiated.bMouseButtons = localCapabilities.bMouseButtons && remoteCapabilities.bMouseButtons;
 	negotiated.bMouseWheel = localCapabilities.bMouseWheel && remoteCapabilities.bMouseWheel;
+	for (const QString &strMode : localCapabilities.supportedPrivacyModes)
+	{
+		if ((strMode == QStringLiteral("disabled")
+				|| strMode == QStringLiteral("privacyoverlay")
+				|| strMode == QStringLiteral("displayoff"))
+			&& remoteCapabilities.supportedPrivacyModes.contains(strMode))
+		{
+			negotiated.supportedPrivacyModes.append(strMode);
+		}
+	}
+	if (!negotiated.supportedPrivacyModes.contains(QStringLiteral("disabled")))
+		negotiated.supportedPrivacyModes.prepend(QStringLiteral("disabled"));
+	negotiated.bPostSessionLock = localCapabilities.bPostSessionLock
+		&& remoteCapabilities.bPostSessionLock;
 	result.status = CapabilityNegotiationSucceeded;
 	return result;
 }

@@ -195,13 +195,26 @@ namespace
 			QStringLiteral("input-realtime"), QStringLiteral("clipboard")
 		};
 		local.bInputRealtime = true;
+		local.supportedPrivacyModes = {
+			QStringLiteral("disabled"), QStringLiteral("privacyoverlay"),
+			QStringLiteral("futuremode")
+		};
+		local.bPostSessionLock = true;
 		KSessionCapabilities remote = local;
 		remote.nMaximumWidth = 1280;
+		remote.supportedPrivacyModes = {
+			QStringLiteral("disabled"), QStringLiteral("privacyoverlay"),
+			QStringLiteral("displayoff"), QStringLiteral("futuremode")
+		};
 		const KCapabilityNegotiationResult compatible =
 			KCapabilityNegotiator::negotiate(local, remote);
 		Check(compatible.succeeded()
 			&& compatible.capabilities.nMaximumWidth == 1280
-			&& compatible.capabilities.bInputRealtime,
+			&& compatible.capabilities.bInputRealtime
+			&& compatible.capabilities.bPostSessionLock
+			&& compatible.capabilities.supportedPrivacyModes
+				== QStringList({ QStringLiteral("disabled"),
+					QStringLiteral("privacyoverlay") }),
 			QStringLiteral("capability negotiator returns the bounded intersection"));
 
 		remote.supportedCodecs = { QStringLiteral("vp9") };

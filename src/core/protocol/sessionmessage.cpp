@@ -28,6 +28,10 @@ namespace
 	constexpr char kCapabilities[] = "capabilities";
 	constexpr char kCapabilityRejected[] = "capabilityRejected";
 	constexpr char kCommandResult[] = "commandResult";
+	constexpr char kSetPrivacyMode[] = "setPrivacyMode";
+	constexpr char kPrivacyModeState[] = "privacyModeState";
+	constexpr char kSetPostSessionAction[] = "setPostSessionAction";
+	constexpr char kPostSessionActionState[] = "postSessionActionState";
 	constexpr char kSuccess[] = "success";
 	constexpr char kErrorCode[] = "errorCode";
 	constexpr char kProtocolMinVersion[] = "protocolMinVersion";
@@ -44,6 +48,14 @@ namespace
 	constexpr char kUnicodeText[] = "unicodeText";
 	constexpr char kMouseButtons[] = "mouseButtons";
 	constexpr char kMouseWheel[] = "mouseWheel";
+	constexpr char kSupportedPrivacyModes[] = "supportedPrivacyModes";
+	constexpr char kPostSessionLock[] = "postSessionLock";
+	constexpr char kPrivacyMode[] = "privacyMode";
+	constexpr char kRequestedMode[] = "requestedMode";
+	constexpr char kEffectiveMode[] = "effectiveMode";
+	constexpr char kPrivacyState[] = "privacyState";
+	constexpr char kPostSessionAction[] = "postSessionAction";
+	constexpr char kGeneration[] = "generation";
 	constexpr char kMonitorList[] = "monitorList";
 	constexpr char kId[] = "id";
 	constexpr char kPrimary[] = "primary";
@@ -150,6 +162,93 @@ namespace
 		*pValue = value.toBool();
 		return true;
 	}
+
+	bool readOptionalStringArray(const QJsonObject &object,
+		const char *pName,
+		QStringList *pValues)
+	{
+		const QJsonValue value = object.value(QString::fromLatin1(pName));
+		if (value.isUndefined())
+		{
+			pValues->clear();
+			return true;
+		}
+		return readStringArray(object, pName, pValues);
+	}
+
+	QString privacyModeName(KPrivacyMode mode)
+	{
+		if (mode == DisabledPrivacyMode)
+			return QStringLiteral("disabled");
+		if (mode == PrivacyOverlayPrivacyMode)
+			return QStringLiteral("privacyoverlay");
+		if (mode == DisplayOffPrivacyMode)
+			return QStringLiteral("displayoff");
+		return QStringLiteral("unknown");
+	}
+
+	KPrivacyMode privacyModeFromName(const QString &strName)
+	{
+		const QString strNormalized = strName.toLower();
+		if (strNormalized == QStringLiteral("disabled"))
+			return DisabledPrivacyMode;
+		if (strNormalized == QStringLiteral("privacyoverlay"))
+			return PrivacyOverlayPrivacyMode;
+		if (strNormalized == QStringLiteral("displayoff"))
+			return DisplayOffPrivacyMode;
+		return UnknownPrivacyMode;
+	}
+
+	QString privacyStateName(KPrivacyModeState state)
+	{
+		if (state == InactivePrivacyModeState)
+			return QStringLiteral("inactive");
+		if (state == ApplyingPrivacyModeState)
+			return QStringLiteral("applying");
+		if (state == ActivePrivacyModeState)
+			return QStringLiteral("active");
+		if (state == RestoringPrivacyModeState)
+			return QStringLiteral("restoring");
+		if (state == FailedPrivacyModeState)
+			return QStringLiteral("failed");
+		return QStringLiteral("failed");
+	}
+
+	bool privacyStateFromName(const QString &strName, KPrivacyModeState *pState)
+	{
+		if (strName == QStringLiteral("inactive"))
+			*pState = InactivePrivacyModeState;
+		else if (strName == QStringLiteral("applying"))
+			*pState = ApplyingPrivacyModeState;
+		else if (strName == QStringLiteral("active"))
+			*pState = ActivePrivacyModeState;
+		else if (strName == QStringLiteral("restoring"))
+			*pState = RestoringPrivacyModeState;
+		else if (strName == QStringLiteral("failed"))
+			*pState = FailedPrivacyModeState;
+		else
+			return false;
+		return true;
+	}
+
+	QString postSessionActionName(KPostSessionAction action)
+	{
+		if (action == NoPostSessionAction)
+			return QStringLiteral("none");
+		if (action == LockWorkstationPostSessionAction)
+			return QStringLiteral("lockworkstation");
+		return QStringLiteral("unknown");
+	}
+
+	KPostSessionAction postSessionActionFromName(const QString &strName)
+	{
+		const QString strNormalized = strName.toLower();
+		if (strNormalized == QStringLiteral("none"))
+			return NoPostSessionAction;
+		if (strNormalized == QStringLiteral("lockworkstation"))
+			return LockWorkstationPostSessionAction;
+		return UnknownPostSessionAction;
+	}
 }
 
 QString KSessionMessageCodec::encode(const KSessionMessage &message)
@@ -195,6 +294,9 @@ QString KSessionMessageCodec::encode(const KSessionMessage &message)
 		object.insert(QString::fromLatin1(kUnicodeText), capabilities.bUnicodeText);
 		object.insert(QString::fromLatin1(kMouseButtons), capabilities.bMouseButtons);
 		object.insert(QString::fromLatin1(kMouseWheel), capabilities.bMouseWheel);
+		object.insert(QString::fromLatin1(kSupportedPrivacyModes),
+			stringArray(capabilities.supportedPrivacyModes));
+		object.insert(QString::fromLatin1(kPostSessionLock), capabilities.bPostSessionLock);
 		QJsonArray monitors;
 		for (const KMonitorCapability &monitor : capabilities.monitorList)
 		{
@@ -206,6 +308,34 @@ QString KSessionMessageCodec::encode(const KSessionMessage &message)
 			monitors.append(monitorObject);
 		}
 		object.insert(QString::fromLatin1(kMonitorList), monitors);
+	}
+	else if (message.type == SetPrivacyModeSessionMessageType)
+	{
+		object.insert(QString::fromLatin1(kPrivacyMode), privacyModeName(message.privacyMode));
+	}
+	else if (message.type == PrivacyModeStateSessionMessageType)
+	{
+		const KPrivacyModeStatus &status = message.privacyModeStatus;
+		object.insert(QString::fromLatin1(kRequestedMode), privacyModeName(status.requestedMode));
+		object.insert(QString::fromLatin1(kEffectiveMode), privacyModeName(status.effectiveMode));
+		object.insert(QString::fromLatin1(kPrivacyState), privacyStateName(status.state));
+		object.insert(QString::fromLatin1(kGeneration), QString::number(status.nGeneration));
+		if (!status.strErrorCode.isEmpty())
+			object.insert(QString::fromLatin1(kErrorCode), status.strErrorCode);
+	}
+	else if (message.type == SetPostSessionActionSessionMessageType)
+	{
+		object.insert(QString::fromLatin1(kPostSessionAction),
+			postSessionActionName(message.postSessionAction));
+	}
+	else if (message.type == PostSessionActionStateSessionMessageType)
+	{
+		const KPostSessionActionStatus &status = message.postSessionActionStatus;
+		object.insert(QString::fromLatin1(kPostSessionAction),
+			postSessionActionName(status.action));
+		object.insert(QString::fromLatin1(kGeneration), QString::number(status.nGeneration));
+		if (!status.strErrorCode.isEmpty())
+			object.insert(QString::fromLatin1(kErrorCode), status.strErrorCode);
 	}
 	else if (message.type == CommandResultSessionMessageType)
 	{
@@ -260,6 +390,14 @@ bool KSessionMessageCodec::decode(const KProtocolEnvelope &envelope,
 		message.type = CapabilitiesSessionMessageType;
 	else if (strType == QString::fromLatin1(kCapabilityRejected))
 		message.type = CapabilityRejectedSessionMessageType;
+	else if (strType == QString::fromLatin1(kSetPrivacyMode))
+		message.type = SetPrivacyModeSessionMessageType;
+	else if (strType == QString::fromLatin1(kPrivacyModeState))
+		message.type = PrivacyModeStateSessionMessageType;
+	else if (strType == QString::fromLatin1(kSetPostSessionAction))
+		message.type = SetPostSessionActionSessionMessageType;
+	else if (strType == QString::fromLatin1(kPostSessionActionState))
+		message.type = PostSessionActionStateSessionMessageType;
 	else if (strType == QString::fromLatin1(kCommandResult))
 		message.type = CommandResultSessionMessageType;
 	else
@@ -352,6 +490,9 @@ bool KSessionMessageCodec::decode(const KProtocolEnvelope &envelope,
 			|| !readRequiredBool(object, kUnicodeText, &capabilities.bUnicodeText)
 			|| !readRequiredBool(object, kMouseButtons, &capabilities.bMouseButtons)
 			|| !readRequiredBool(object, kMouseWheel, &capabilities.bMouseWheel)
+			|| !readOptionalStringArray(object, kSupportedPrivacyModes,
+				&capabilities.supportedPrivacyModes)
+			|| !readOptionalBool(object, kPostSessionLock, &capabilities.bPostSessionLock)
 			|| !monitorsValue.isArray() || monitorsValue.toArray().size() > 16)
 		{
 			return failDecode(QStringLiteral("Invalid session capabilities"), pErrorMessage);
@@ -386,6 +527,73 @@ bool KSessionMessageCodec::decode(const KProtocolEnvelope &envelope,
 			return failDecode(QStringLiteral("Invalid capability rejection"), pErrorMessage);
 		}
 		message.strReason = reasonValue.toString();
+	}
+	else if (message.type == SetPrivacyModeSessionMessageType)
+	{
+		const QJsonValue modeValue = object.value(QString::fromLatin1(kPrivacyMode));
+		if (!modeValue.isString() || modeValue.toString().isEmpty()
+			|| modeValue.toString().size() > 32)
+		{
+			return failDecode(QStringLiteral("Invalid privacy mode command"), pErrorMessage);
+		}
+		message.privacyMode = privacyModeFromName(modeValue.toString());
+	}
+	else if (message.type == PrivacyModeStateSessionMessageType)
+	{
+		const QJsonValue requestedValue = object.value(QString::fromLatin1(kRequestedMode));
+		const QJsonValue effectiveValue = object.value(QString::fromLatin1(kEffectiveMode));
+		const QJsonValue stateValue = object.value(QString::fromLatin1(kPrivacyState));
+		const QJsonValue generationValue = object.value(QString::fromLatin1(kGeneration));
+		bool bGenerationOk = false;
+		const quint64 nGeneration = generationValue.toString().toULongLong(&bGenerationOk);
+		if (!requestedValue.isString() || !effectiveValue.isString()
+			|| !stateValue.isString() || !generationValue.isString() || !bGenerationOk
+			|| requestedValue.toString().size() > 32
+			|| effectiveValue.toString().size() > 32
+			|| !privacyStateFromName(stateValue.toString(), &message.privacyModeStatus.state))
+		{
+			return failDecode(QStringLiteral("Invalid privacy mode state"), pErrorMessage);
+		}
+		message.privacyModeStatus.requestedMode = privacyModeFromName(requestedValue.toString());
+		message.privacyModeStatus.effectiveMode = privacyModeFromName(effectiveValue.toString());
+		if (message.privacyModeStatus.requestedMode == UnknownPrivacyMode
+			|| message.privacyModeStatus.effectiveMode == UnknownPrivacyMode)
+		{
+			return failDecode(QStringLiteral("Unknown privacy mode state"), pErrorMessage);
+		}
+		message.privacyModeStatus.nGeneration = nGeneration;
+		message.privacyModeStatus.strRequestId = envelope.strRequestId;
+		message.privacyModeStatus.strErrorCode = object.value(
+			QString::fromLatin1(kErrorCode)).toString();
+	}
+	else if (message.type == SetPostSessionActionSessionMessageType)
+	{
+		const QJsonValue actionValue = object.value(QString::fromLatin1(kPostSessionAction));
+		if (!actionValue.isString() || actionValue.toString().isEmpty()
+			|| actionValue.toString().size() > 32)
+		{
+			return failDecode(QStringLiteral("Invalid post session action command"), pErrorMessage);
+		}
+		message.postSessionAction = postSessionActionFromName(actionValue.toString());
+	}
+	else if (message.type == PostSessionActionStateSessionMessageType)
+	{
+		const QJsonValue actionValue = object.value(QString::fromLatin1(kPostSessionAction));
+		const QJsonValue generationValue = object.value(QString::fromLatin1(kGeneration));
+		bool bGenerationOk = false;
+		const quint64 nGeneration = generationValue.toString().toULongLong(&bGenerationOk);
+		if (!actionValue.isString() || actionValue.toString().size() > 32
+			|| !generationValue.isString() || !bGenerationOk)
+		{
+			return failDecode(QStringLiteral("Invalid post session action state"), pErrorMessage);
+		}
+		message.postSessionActionStatus.action = postSessionActionFromName(actionValue.toString());
+		if (message.postSessionActionStatus.action == UnknownPostSessionAction)
+			return failDecode(QStringLiteral("Unknown post session action state"), pErrorMessage);
+		message.postSessionActionStatus.nGeneration = nGeneration;
+		message.postSessionActionStatus.strRequestId = envelope.strRequestId;
+		message.postSessionActionStatus.strErrorCode = object.value(
+			QString::fromLatin1(kErrorCode)).toString();
 	}
 	else if (message.type == CommandResultSessionMessageType)
 	{
@@ -432,6 +640,14 @@ QString KSessionMessageCodec::typeName(KSessionMessageType type)
 		return QString::fromLatin1(kCapabilities);
 	if (type == CapabilityRejectedSessionMessageType)
 		return QString::fromLatin1(kCapabilityRejected);
+	if (type == SetPrivacyModeSessionMessageType)
+		return QString::fromLatin1(kSetPrivacyMode);
+	if (type == PrivacyModeStateSessionMessageType)
+		return QString::fromLatin1(kPrivacyModeState);
+	if (type == SetPostSessionActionSessionMessageType)
+		return QString::fromLatin1(kSetPostSessionAction);
+	if (type == PostSessionActionStateSessionMessageType)
+		return QString::fromLatin1(kPostSessionActionState);
 	if (type == CommandResultSessionMessageType)
 		return QString::fromLatin1(kCommandResult);
 	return QStringLiteral("invalid");
@@ -443,5 +659,7 @@ bool KSessionMessageCodec::isCommand(KSessionMessageType type)
 		|| type == StartStreamingSessionMessageType
 		|| type == StopStreamingSessionMessageType
 		|| type == EndSessionMessageType
-		|| type == StreamConfigSessionMessageType;
+		|| type == StreamConfigSessionMessageType
+		|| type == SetPrivacyModeSessionMessageType
+		|| type == SetPostSessionActionSessionMessageType;
 }

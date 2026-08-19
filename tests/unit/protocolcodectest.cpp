@@ -207,6 +207,52 @@ namespace
 		}
 	}
 
+	void testPrivacyControlRoundTrip()
+	{
+		const QString strRequestId = QStringLiteral(
+			"32345678-1234-1234-1234-1234567890ab");
+		KSessionMessage modeCommand;
+		modeCommand.type = SetPrivacyModeSessionMessageType;
+		modeCommand.strRequestId = strRequestId;
+		modeCommand.privacyMode = PrivacyOverlayPrivacyMode;
+		KSessionMessage decoded;
+		check(KSessionMessageCodec::decode(KSessionMessageCodec::encode(modeCommand),
+				&decoded, nullptr)
+			&& decoded.type == SetPrivacyModeSessionMessageType
+			&& decoded.privacyMode == PrivacyOverlayPrivacyMode,
+			QStringLiteral("privacy mode command round-trips"));
+
+		KSessionMessage modeState;
+		modeState.type = PrivacyModeStateSessionMessageType;
+		modeState.strRequestId = strRequestId;
+		modeState.privacyModeStatus.requestedMode = PrivacyOverlayPrivacyMode;
+		modeState.privacyModeStatus.effectiveMode = PrivacyOverlayPrivacyMode;
+		modeState.privacyModeStatus.state = ActivePrivacyModeState;
+		modeState.privacyModeStatus.nGeneration = 42;
+		check(KSessionMessageCodec::decode(KSessionMessageCodec::encode(modeState),
+				&decoded, nullptr)
+			&& decoded.privacyModeStatus.effectiveMode == PrivacyOverlayPrivacyMode
+			&& decoded.privacyModeStatus.state == ActivePrivacyModeState
+			&& decoded.privacyModeStatus.nGeneration == 42,
+			QStringLiteral("privacy mode state round-trips"));
+
+		KSessionMessage actionCommand;
+		actionCommand.type = SetPostSessionActionSessionMessageType;
+		actionCommand.strRequestId = strRequestId;
+		actionCommand.postSessionAction = LockWorkstationPostSessionAction;
+		check(KSessionMessageCodec::decode(KSessionMessageCodec::encode(actionCommand),
+				&decoded, nullptr)
+			&& decoded.postSessionAction == LockWorkstationPostSessionAction,
+			QStringLiteral("post session action command round-trips"));
+
+		check(KSessionMessageCodec::decode(
+			QStringLiteral("{\"version\":1,\"type\":\"setPrivacyMode\","
+				"\"requestId\":\"32345678-1234-1234-1234-1234567890ab\","
+				"\"privacyMode\":\"futuremode\"}"), &decoded, nullptr)
+			&& decoded.privacyMode == UnknownPrivacyMode,
+			QStringLiteral("unknown privacy command reaches the command handler"));
+	}
+
 	void testDeviceInfoRoundTrip()
 	{
 		KSessionMessage source;
@@ -628,6 +674,10 @@ namespace
 			QStringLiteral("input-realtime"), QStringLiteral("clipboard")
 		};
 		source.capabilities.bInputRealtime = true;
+		source.capabilities.supportedPrivacyModes = {
+			QStringLiteral("disabled"), QStringLiteral("privacyoverlay")
+		};
+		source.capabilities.bPostSessionLock = true;
 		KMonitorCapability monitor;
 		monitor.strId = QStringLiteral("default");
 		monitor.nWidth = 1920;
@@ -640,6 +690,9 @@ namespace
 				&decoded, nullptr)
 			&& decoded.type == CapabilitiesSessionMessageType
 			&& decoded.capabilities.supportedCodecs.contains(QStringLiteral("h264"))
+			&& decoded.capabilities.supportedPrivacyModes.contains(
+				QStringLiteral("privacyoverlay"))
+			&& decoded.capabilities.bPostSessionLock
 			&& decoded.capabilities.monitorList.size() == 1,
 			QStringLiteral("session capabilities round-trip"));
 
@@ -788,6 +841,7 @@ int main(int nArgc, char *pArgv[])
 	testExtendedInputRoundTrip();
 	testLegacyInputWireCompatibility();
 	testSessionControlRoundTrip();
+	testPrivacyControlRoundTrip();
 	testDeviceInfoRoundTrip();
 	testEndSessionAndStreamConfigRoundTrip();
 	testInvalidSessionMessages();

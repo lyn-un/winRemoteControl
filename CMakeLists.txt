@@ -67,6 +67,7 @@ target_sources(wrc_foundation INTERFACE
 	src/core/media/networkstats.h
 	src/core/media/streamconfig.h
 	src/core/media/videoframe.h
+	src/core/privacy/privacytypes.h
 	src/core/settings/applicationsettings.h
 )
 
