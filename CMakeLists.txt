@@ -316,6 +316,34 @@ add_library(wrc_windows_adapters STATIC
 	src/adapters/windows/input/windowsinputinjector.h
 )
 
+add_library(wrc_windows_privacy_adapter STATIC
+	src/adapters/windows/privacy/windowsdisplaypoweradapter.cpp
+	src/adapters/windows/privacy/windowsdisplaypoweradapter.h
+	src/adapters/windows/privacy/windowsprivacyoverlayadapter.cpp
+	src/adapters/windows/privacy/windowsprivacyoverlayadapter.h
+	src/adapters/windows/privacy/windowsworkstationlockadapter.cpp
+	src/adapters/windows/privacy/windowsworkstationlockadapter.h
+)
+
+target_compile_definitions(wrc_windows_privacy_adapter PRIVATE
+	UNICODE
+	_UNICODE
+	WIN32_LEAN_AND_MEAN
+	NOMINMAX
+)
+
+target_include_directories(wrc_windows_privacy_adapter PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_windows_privacy_adapter PUBLIC
+	wrc_core
+	Qt6::Core
+	Qt6::Gui
+	Qt6::Widgets
+	user32
+)
+
 target_compile_definitions(wrc_windows_adapters PRIVATE
 	UNICODE
 	_UNICODE
@@ -802,6 +830,7 @@ target_link_libraries(winRemoteControl PRIVATE
 	wrc_udp_discovery_adapter
 	wrc_webrtc_adapter
 	wrc_windows_adapters
+	wrc_windows_privacy_adapter
 	wrc_windows_security_adapter
 	wrc_windows_terminal_adapter
 	wrc_windows_terminal_frontend_adapter
@@ -1128,6 +1157,16 @@ if(WRC_BUILD_TESTS)
 		Qt6::Core
 	)
 	add_test(NAME wrc_privacy_service_tests COMMAND wrc_privacy_service_tests)
+
+	add_executable(wrc_windows_privacy_adapter_tests
+		tests/unit/windowsprivacyadaptertest.cpp
+	)
+	target_link_libraries(wrc_windows_privacy_adapter_tests PRIVATE
+		wrc_windows_privacy_adapter
+		Qt6::Core
+	)
+	add_test(NAME wrc_windows_privacy_adapter_tests
+		COMMAND wrc_windows_privacy_adapter_tests)
 
 	add_executable(wrc_lan_discovery_tests
 		tests/unit/landiscoveryservicetest.cpp
