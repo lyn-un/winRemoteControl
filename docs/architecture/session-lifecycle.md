@@ -54,6 +54,8 @@ stateDiagram-v2
 
 Capture 和 Peer 使用请求式异步停止。`Stopping` 会等待两者按当前 `generation` 完成，再进入 `Idle` 或恢复 `Listening`。重复停止、旧 generation 和迟到回调不会重复结束会话。
 
+被控端启用隐私屏时，最终断开的安全顺序固定为：禁止新命令、恢复遮罩或显示器、释放键鼠、异步停止 Capture 与 Peer、完成一次性 teardown，最后才消费会话结束动作。只有确实进入过 `Streaming` 且已选择 `LockWorkstation` 的 generation 会调用一次 `LockWorkStation()`；`Reconnecting`、审批失败和从未推流的连接不会锁屏。短暂恢复期间保留当前隐私模式，最终恢复失败才走上述断开流程。
+
 本地或远端已进入正常结束流程后，随后到达的 TCP close 属于预期关闭，只记录 `signaling_closed_after_session_end`，不再向 UI 发布连接失败。认证、协商、Streaming 或 Reconnecting 阶段的意外关闭仍按结构化连接错误处理；判断依赖状态与 generation，不比较系统错误字符串。
 
 停止超过 3 秒进入 `ShutdownTimedOut`：连接入口被禁用，旧资源被隔离且不得复用。迟到完成仍会被接收，只有确认资源释放后才恢复可用状态。析构采用有限等待，不调用 `QThread::terminate()`。

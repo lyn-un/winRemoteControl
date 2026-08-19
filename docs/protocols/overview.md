@@ -41,8 +41,11 @@ Session DataChannel 打开后交换 `KSessionCapabilities`，包括：
 - 最大宽度、高度、FPS 与码率。
 - 剪贴板、实时输入、键盘、Unicode、鼠标按钮与滚轮能力。
 - 显示器元数据；当前只描述，不提供显示器切换。
+- 防窥模式 `supportedPrivacyModes` 与会话结束锁屏 `postSessionLock`。
 
 必需交集为 H.264、`video`、`session` 和 `input`。`clipboard` 与 `input-realtime` 属于可选能力，不支持时不会阻止基础远控。
+
+隐私控制使用 `setPrivacyMode`、`privacyModeState`、`setPostSessionAction` 和 `postSessionActionState`。命令复用 Session Command 的 UUID、1 秒超时、一次重试和结果缓存；状态事件始终携带远端真实 `effectiveMode`。旧客户端缺少能力字段时按仅支持 `disabled`、不支持结束锁屏处理。生产构建默认不发布 `displayoff`，因此控制端不会显示该入口。
 
 ## DataChannel
 
