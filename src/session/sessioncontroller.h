@@ -49,6 +49,8 @@ public slots:
 	virtual bool sendTerminalData(const QByteArray &data) = 0;
 	virtual bool isTerminalBackpressured() const = 0;
 	virtual void sendStreamConfig(const KStreamConfig &config) = 0;
+	virtual void requestPrivacyMode(KPrivacyMode mode) = 0;
+	virtual void requestPostSessionAction(KPostSessionAction action) = 0;
 	virtual void handleCaptureFailure() = 0;
 	virtual void applyApplicationSettings(const KApplicationSettings &settings) = 0;
 	virtual void respondIncomingAccessRequest(const QString &strRequestId, bool bAccepted) = 0;
@@ -87,6 +89,14 @@ signals:
 	void terminalLowWatermarkReached();
 	void sessionChannelChanged(bool bOpen);
 	void sessionCapabilitiesChanged(const KNegotiatedCapabilities &capabilities);
+	void privacyModeStatusChanged(const KPrivacyModeStatus &status);
+	void postSessionActionStatusChanged(const KPostSessionActionStatus &status);
+	void privacyModeCommandCompleted(const QString &strRequestId,
+		bool bSuccess,
+		const QString &strErrorCode);
+	void postSessionActionCommandCompleted(const QString &strRequestId,
+		bool bSuccess,
+		const QString &strErrorCode);
 	void inputTraceUpdated(quint64 nSeq, qint64 nInjectedMs);
 	void inputFeedbackFrameRequested();
 	void incomingAccessObserved(const QString &strDeviceName, const QString &strSourceAddress);

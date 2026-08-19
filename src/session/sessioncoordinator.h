@@ -35,6 +35,8 @@ class KSignalingTransport;
 class KShutdownCoordinator;
 class KDeviceIdentityProvider;
 class KTrustedDeviceStore;
+class KPrivacyModeService;
+class KPostSessionActionService;
 class QTimer;
 
 class KSessionCoordinator : public KSessionController
@@ -56,6 +58,9 @@ public:
 	QString authenticatedDeviceId() const;
 	void setTerminalCapabilitiesAvailable(bool bControllerAvailable,
 		bool bControlledAvailable);
+	void configurePrivacyServices(
+		std::unique_ptr<KPrivacyModeService> spPrivacyModeService,
+		std::unique_ptr<KPostSessionActionService> spPostSessionActionService);
 
 	KSessionCoordinator(const KSessionCoordinator &) = delete;
 	KSessionCoordinator &operator=(const KSessionCoordinator &) = delete;
@@ -77,6 +82,8 @@ public slots:
 	bool sendTerminalData(const QByteArray &data) override;
 	bool isTerminalBackpressured() const override;
 	void sendStreamConfig(const KStreamConfig &config) override;
+	void requestPrivacyMode(KPrivacyMode mode) override;
+	void requestPostSessionAction(KPostSessionAction action) override;
 	void handleCaptureFailure() override;
 	void applyApplicationSettings(const KApplicationSettings &settings) override;
 	void respondIncomingAccessRequest(const QString &strRequestId, bool bAccepted) override;
@@ -150,6 +157,12 @@ private:
 	KProtocolHandlerResult handleStreamConfigMessage(const KSessionMessage &message);
 	KProtocolHandlerResult handleCapabilitiesMessage(const KSessionMessage &message);
 	KProtocolHandlerResult handleCapabilityRejectedMessage(const KSessionMessage &message);
+	KProtocolHandlerResult handleSetPrivacyModeMessage(const KSessionMessage &message);
+	KProtocolHandlerResult handlePrivacyModeStateMessage(const KSessionMessage &message);
+	KProtocolHandlerResult handleSetPostSessionActionMessage(const KSessionMessage &message);
+	KProtocolHandlerResult handlePostSessionActionStateMessage(const KSessionMessage &message);
+	void publishPrivacyModeStatus(const KPrivacyModeStatus &status);
+	void publishPostSessionActionStatus(const KPostSessionActionStatus &status);
 	void handleCapabilityTimeout();
 	void completeCapabilityNegotiation(const KNegotiatedCapabilities &capabilities);
 	KSessionCapabilities localCapabilities() const;
@@ -205,6 +218,8 @@ private:
 	std::unique_ptr<KSignalingTransport> m_spSignalingTransport;
 	std::unique_ptr<KDeviceIdentityProvider> m_spIdentityProvider;
 	std::unique_ptr<KTrustedDeviceStore> m_spTrustedDeviceStore;
+	std::unique_ptr<KPrivacyModeService> m_spPrivacyModeService;
+	std::unique_ptr<KPostSessionActionService> m_spPostSessionActionService;
 	KSignalingTransport *m_pSignaling = nullptr;
 	KInputInjector *m_pInputInjector = nullptr;
 	KAccessSessionFlow *m_pAccessSessionFlow = nullptr;

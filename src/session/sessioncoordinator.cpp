@@ -20,6 +20,8 @@
 #include "core/security/trusteddevicestore.h"
 #include "core/transport/signalingtransport.h"
 #include "input/inputinjector.h"
+#include "privacy/postsessionactionservice.h"
+#include "privacy/privacymodeservice.h"
 
 #include <QtCore/QTimer>
 #include <utility>
@@ -295,6 +297,22 @@ void KSessionCoordinator::setTerminalCapabilitiesAvailable(
 	m_bControlledTerminalCapabilityAvailable = bControlledAvailable;
 }
 
+void KSessionCoordinator::configurePrivacyServices(
+	std::unique_ptr<KPrivacyModeService> spPrivacyModeService,
+	std::unique_ptr<KPostSessionActionService> spPostSessionActionService)
+{
+	Q_ASSERT(spPrivacyModeService != nullptr);
+	Q_ASSERT(spPostSessionActionService != nullptr);
+	Q_ASSERT(m_spPrivacyModeService == nullptr);
+	Q_ASSERT(m_spPostSessionActionService == nullptr);
+	m_spPrivacyModeService = std::move(spPrivacyModeService);
+	m_spPostSessionActionService = std::move(spPostSessionActionService);
+	connect(m_spPrivacyModeService.get(), &KPrivacyModeService::statusChanged,
+		this, &KSessionCoordinator::publishPrivacyModeStatus);
+	connect(m_spPostSessionActionService.get(), &KPostSessionActionService::statusChanged,
+		this, &KSessionCoordinator::publishPostSessionActionStatus);
+}
+
 void KSessionCoordinator::initializeProtocolRoutes()
 {
 	const KProtocolRouter::Guard identityHandshake =
@@ -403,6 +421,14 @@ void KSessionCoordinator::initializeSessionHandlers()
 		[this](const KSessionMessage &message) { return handleCapabilitiesMessage(message); });
 	m_pSessionCommandDispatcher->registerHandler(CapabilityRejectedSessionMessageType,
 		[this](const KSessionMessage &message) { return handleCapabilityRejectedMessage(message); });
+	m_pSessionCommandDispatcher->registerHandler(SetPrivacyModeSessionMessageType,
+		[this](const KSessionMessage &message) { return handleSetPrivacyModeMessage(message); });
+	m_pSessionCommandDispatcher->registerHandler(PrivacyModeStateSessionMessageType,
+		[this](const KSessionMessage &message) { return handlePrivacyModeStateMessage(message); });
+	m_pSessionCommandDispatcher->registerHandler(SetPostSessionActionSessionMessageType,
+		[this](const KSessionMessage &message) { return handleSetPostSessionActionMessage(message); });
+	m_pSessionCommandDispatcher->registerHandler(PostSessionActionStateSessionMessageType,
+		[this](const KSessionMessage &message) { return handlePostSessionActionStateMessage(message); });
 }
 
 void KSessionCoordinator::publishSessionState()
@@ -820,6 +846,8 @@ void KSessionCoordinator::startStreaming()
 
 	m_pMediaSessionController->startCapture(m_sessionStateMachine.generation());
 	m_sessionStateMachine.beginStreaming();
+	if (m_spPostSessionActionService != nullptr)
+		m_spPostSessionActionService->markStreaming(m_sessionStateMachine.generation());
 	publishSessionState();
 }
 
@@ -983,6 +1011,16 @@ void KSessionCoordinator::handleSessionCommandCompleted(KSessionMessageType type
 		continueStoppingTeardown();
 		return;
 	}
+	if (type == SetPrivacyModeSessionMessageType)
+	{
+		emit privacyModeCommandCompleted(strRequestId, bSuccess, strErrorCode);
+		return;
+	}
+	if (type == SetPostSessionActionSessionMessageType)
+	{
+		emit postSessionActionCommandCompleted(strRequestId, bSuccess, strErrorCode);
+		return;
+	}
 	if (!bSuccess && !m_sessionStateMachine.isStopping())
 	{
 		KSessionErrorCode errorCode = InvalidStateSessionErrorCode;
@@ -1020,6 +1058,17 @@ void KSessionCoordinator::handleSessionCommandTimeout(KSessionMessageType type,
 		continueStoppingTeardown();
 		return;
 	}
+	if (type == SetPrivacyModeSessionMessageType)
+	{
+		emit privacyModeCommandCompleted(strRequestId, false, QStringLiteral("command_timeout"));
+		return;
+	}
+	if (type == SetPostSessionActionSessionMessageType)
+	{
+		emit postSessionActionCommandCompleted(strRequestId, false,
+			QStringLiteral("command_timeout"));
+		return;
+	}
 	reportSessionError(ProtocolSessionErrorDomain,
 		CommandTimeoutSessionErrorCode, ConnectedSessionErrorStage,
 		false, QStringLiteral("Session command timed out: %1")
@@ -1037,6 +1086,67 @@ void KSessionCoordinator::sendStreamConfig(const KStreamConfig &config)
 	message.type = StreamConfigSessionMessageType;
 	message.streamConfig = m_pMediaSessionController->constrainedConfig(config);
 	sendSessionMessage(message);
+}
+
+void KSessionCoordinator::requestPrivacyMode(KPrivacyMode mode)
+{
+	const KSessionState state = m_sessionStateMachine.state();
+	if (m_sessionStateMachine.role() != ControllerSessionRole
+		|| (state != StreamingSessionState && state != ReconnectingSessionState)
+		|| !m_pCapabilitySessionFlow->isComplete())
+	{
+		emit privacyModeCommandCompleted(QString(), false,
+			QStringLiteral("invalid_session_state"));
+		return;
+	}
+	QString strMode;
+	if (mode == DisabledPrivacyMode)
+		strMode = QStringLiteral("disabled");
+	else if (mode == PrivacyOverlayPrivacyMode)
+		strMode = QStringLiteral("privacyoverlay");
+	else if (mode == DisplayOffPrivacyMode)
+		strMode = QStringLiteral("displayoff");
+	if (strMode.isEmpty()
+		|| !m_pCapabilitySessionFlow->negotiatedCapabilities()
+			.supportedPrivacyModes.contains(strMode))
+	{
+		emit privacyModeCommandCompleted(QString(), false,
+			QStringLiteral("unsupported_mode"));
+		return;
+	}
+	KSessionMessage message;
+	message.type = SetPrivacyModeSessionMessageType;
+	message.privacyMode = mode;
+	const QString strRequestId = sendSessionMessage(message);
+	if (strRequestId.isEmpty())
+		emit privacyModeCommandCompleted(QString(), false, QStringLiteral("send_failed"));
+}
+
+void KSessionCoordinator::requestPostSessionAction(KPostSessionAction action)
+{
+	const KSessionState state = m_sessionStateMachine.state();
+	if (m_sessionStateMachine.role() != ControllerSessionRole
+		|| (state != StreamingSessionState && state != ReconnectingSessionState)
+		|| !m_pCapabilitySessionFlow->isComplete())
+	{
+		emit postSessionActionCommandCompleted(QString(), false,
+			QStringLiteral("invalid_session_state"));
+		return;
+	}
+	if (action == UnknownPostSessionAction
+		|| (action == LockWorkstationPostSessionAction
+			&& !m_pCapabilitySessionFlow->negotiatedCapabilities().bPostSessionLock))
+	{
+		emit postSessionActionCommandCompleted(QString(), false,
+			QStringLiteral("unsupported_action"));
+		return;
+	}
+	KSessionMessage message;
+	message.type = SetPostSessionActionSessionMessageType;
+	message.postSessionAction = action;
+	const QString strRequestId = sendSessionMessage(message);
+	if (strRequestId.isEmpty())
+		emit postSessionActionCommandCompleted(QString(), false, QStringLiteral("send_failed"));
 }
 
 void KSessionCoordinator::handleCaptureFailure()
@@ -1088,6 +1198,8 @@ void KSessionCoordinator::finishSession(KSessionEndReason reason,
 	m_strStopReason = strReason;
 	m_nStoppingGeneration = nGeneration;
 	m_bStopTeardownStarted = false;
+	if (role == ControlledSessionRole && m_spPrivacyModeService != nullptr)
+		m_spPrivacyModeService->reset(nGeneration);
 	m_pInputInjector->releaseAllInputs();
 	resetInputTraceState();
 
@@ -1221,6 +1333,20 @@ void KSessionCoordinator::finishStopping(quint64 nGeneration,
 			QStringLiteral("session_shutdown_late_complete"),
 			QStringLiteral("completed"), -1,
 			QStringLiteral("generation=%1").arg(nGeneration));
+	}
+	if (role == ControlledSessionRole && m_spPostSessionActionService != nullptr)
+	{
+		const KPrivacyOperationResult actionResult =
+			m_spPostSessionActionService->consumeAfterTeardown(nGeneration);
+		if (!actionResult.bSucceeded
+			&& actionResult.strErrorCode != QStringLiteral("stale_generation"))
+		{
+			KSessionTraceLogger::write(QStringLiteral("controlled"),
+				QStringLiteral("post_session_action"), QStringLiteral("failed"), -1,
+				QStringLiteral("generation=%1 errorCode=%2 technical=%3")
+					.arg(nGeneration)
+					.arg(actionResult.strErrorCode, actionResult.strTechnicalMessage));
+		}
 	}
 
 	bool bListening = false;
@@ -1680,6 +1806,23 @@ void KSessionCoordinator::completeCapabilityNegotiation(
 		&& hasPermission(ClipboardPermissionScope)
 		&& capabilities.bClipboardText);
 	emit terminalChannelChanged(m_bTerminalChannelStatePublished);
+	const quint64 nGeneration = m_sessionStateMachine.generation();
+	if (m_sessionStateMachine.role() == ControlledSessionRole)
+	{
+		if (m_spPrivacyModeService != nullptr)
+			m_spPrivacyModeService->beginSession(nGeneration);
+		if (m_spPostSessionActionService != nullptr)
+			m_spPostSessionActionService->beginSession(nGeneration);
+	}
+	else
+	{
+		KPrivacyModeStatus privacyStatus;
+		privacyStatus.nGeneration = nGeneration;
+		emit privacyModeStatusChanged(privacyStatus);
+		KPostSessionActionStatus actionStatus;
+		actionStatus.nGeneration = nGeneration;
+		emit postSessionActionStatusChanged(actionStatus);
+	}
 	if (m_sessionStateMachine.role() == ControllerSessionRole)
 	{
 		if (m_bDeviceInfoRequested)
@@ -1711,6 +1854,25 @@ KSessionCapabilities KSessionCoordinator::localCapabilities() const
 		QStringLiteral("video"), QStringLiteral("session"), QStringLiteral("input"),
 		QStringLiteral("input-realtime"), QStringLiteral("clipboard")
 	};
+	capabilities.supportedPrivacyModes = { QStringLiteral("disabled") };
+	if (hasPermission(ViewScreenPermissionScope)
+		&& hasPermission(InputControlPermissionScope))
+	{
+		if (m_sessionStateMachine.role() == ControllerSessionRole)
+		{
+			capabilities.supportedPrivacyModes.append(QStringLiteral("privacyoverlay"));
+			capabilities.supportedPrivacyModes.append(QStringLiteral("displayoff"));
+		}
+		else if (m_spPrivacyModeService != nullptr)
+		{
+			capabilities.supportedPrivacyModes =
+				m_spPrivacyModeService->supportedModes(false);
+		}
+	}
+	capabilities.bPostSessionLock = hasPermission(InputControlPermissionScope)
+		&& (m_sessionStateMachine.role() == ControllerSessionRole
+			|| (m_spPostSessionActionService != nullptr
+				&& m_spPostSessionActionService->isSupported()));
 	const bool bTerminalAvailable = m_sessionStateMachine.role() == ControllerSessionRole
 		? m_bControllerTerminalCapabilityAvailable
 		: m_bControlledTerminalCapabilityAvailable;
@@ -1786,6 +1948,156 @@ KProtocolHandlerResult KSessionCoordinator::handleCapabilityRejectedMessage(
 		IncompatibleProtocolSessionErrorCode, NegotiationSessionErrorStage,
 		false, message.strReason);
 	return KProtocolHandlerResult::success();
+}
+
+KProtocolHandlerResult KSessionCoordinator::handleSetPrivacyModeMessage(
+	const KSessionMessage &message)
+{
+	const KSessionState state = m_sessionStateMachine.state();
+	if (m_sessionStateMachine.role() != ControlledSessionRole
+		|| (state != StreamingSessionState && state != ReconnectingSessionState)
+		|| m_spPrivacyModeService == nullptr)
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerInvalidState,
+			QStringLiteral("invalid_session_state"),
+			QStringLiteral("Privacy mode cannot be changed in the current state"));
+	}
+	if (!hasPermission(ViewScreenPermissionScope)
+		|| !hasPermission(InputControlPermissionScope))
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerPermissionDenied,
+			QStringLiteral("permission_denied"),
+			QStringLiteral("Privacy mode requires view and input permissions"));
+	}
+	QString strMode;
+	if (message.privacyMode == DisabledPrivacyMode)
+		strMode = QStringLiteral("disabled");
+	else if (message.privacyMode == PrivacyOverlayPrivacyMode)
+		strMode = QStringLiteral("privacyoverlay");
+	else if (message.privacyMode == DisplayOffPrivacyMode)
+		strMode = QStringLiteral("displayoff");
+	if (strMode.isEmpty()
+		|| !m_pCapabilitySessionFlow->negotiatedCapabilities()
+			.supportedPrivacyModes.contains(strMode))
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerExecutionFailed,
+			QStringLiteral("unsupported_mode"),
+			QStringLiteral("The requested privacy mode was not negotiated"));
+	}
+	const KPrivacyOperationResult result = m_spPrivacyModeService->setMode(
+		message.privacyMode, message.strRequestId, m_sessionStateMachine.generation());
+	if (!result.bSucceeded)
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerExecutionFailed,
+			result.strErrorCode, result.strTechnicalMessage);
+	}
+	return KProtocolHandlerResult::success();
+}
+
+KProtocolHandlerResult KSessionCoordinator::handlePrivacyModeStateMessage(
+	const KSessionMessage &message)
+{
+	const KSessionState state = m_sessionStateMachine.state();
+	if (m_sessionStateMachine.role() != ControllerSessionRole
+		|| (state != ConnectedSessionState
+			&& state != StreamingSessionState
+			&& state != ReconnectingSessionState))
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerInvalidState,
+			QStringLiteral("invalid_session_state"),
+			QStringLiteral("Privacy state arrived outside an active controller session"));
+	}
+	KPrivacyModeStatus status = message.privacyModeStatus;
+	status.nGeneration = m_sessionStateMachine.generation();
+	emit privacyModeStatusChanged(status);
+	return KProtocolHandlerResult::success();
+}
+
+KProtocolHandlerResult KSessionCoordinator::handleSetPostSessionActionMessage(
+	const KSessionMessage &message)
+{
+	const KSessionState state = m_sessionStateMachine.state();
+	if (m_sessionStateMachine.role() != ControlledSessionRole
+		|| (state != StreamingSessionState && state != ReconnectingSessionState)
+		|| m_spPostSessionActionService == nullptr)
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerInvalidState,
+			QStringLiteral("invalid_session_state"),
+			QStringLiteral("Post-session action cannot be changed now"));
+	}
+	if (!hasPermission(InputControlPermissionScope))
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerPermissionDenied,
+			QStringLiteral("permission_denied"),
+			QStringLiteral("Post-session lock requires input permission"));
+	}
+	if (message.postSessionAction == UnknownPostSessionAction
+		|| (message.postSessionAction == LockWorkstationPostSessionAction
+			&& !m_pCapabilitySessionFlow->negotiatedCapabilities().bPostSessionLock))
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerExecutionFailed,
+			QStringLiteral("unsupported_action"),
+			QStringLiteral("The requested post-session action was not negotiated"));
+	}
+	const KPrivacyOperationResult result = m_spPostSessionActionService->setAction(
+		message.postSessionAction, message.strRequestId,
+		m_sessionStateMachine.generation());
+	if (!result.bSucceeded)
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerExecutionFailed,
+			result.strErrorCode, result.strTechnicalMessage);
+	}
+	return KProtocolHandlerResult::success();
+}
+
+KProtocolHandlerResult KSessionCoordinator::handlePostSessionActionStateMessage(
+	const KSessionMessage &message)
+{
+	const KSessionState state = m_sessionStateMachine.state();
+	if (m_sessionStateMachine.role() != ControllerSessionRole
+		|| (state != ConnectedSessionState
+			&& state != StreamingSessionState
+			&& state != ReconnectingSessionState))
+	{
+		return KProtocolHandlerResult::failure(ProtocolHandlerInvalidState,
+			QStringLiteral("invalid_session_state"),
+			QStringLiteral("Post-session state arrived outside an active session"));
+	}
+	KPostSessionActionStatus status = message.postSessionActionStatus;
+	status.nGeneration = m_sessionStateMachine.generation();
+	emit postSessionActionStatusChanged(status);
+	return KProtocolHandlerResult::success();
+}
+
+void KSessionCoordinator::publishPrivacyModeStatus(const KPrivacyModeStatus &status)
+{
+	emit privacyModeStatusChanged(status);
+	if (m_sessionStateMachine.role() != ControlledSessionRole
+		|| !m_bSessionChannelOpen || !m_pCapabilitySessionFlow->isComplete())
+	{
+		return;
+	}
+	KSessionMessage message;
+	message.type = PrivacyModeStateSessionMessageType;
+	message.strRequestId = status.strRequestId;
+	message.privacyModeStatus = status;
+	sendSessionMessage(message);
+}
+
+void KSessionCoordinator::publishPostSessionActionStatus(
+	const KPostSessionActionStatus &status)
+{
+	emit postSessionActionStatusChanged(status);
+	if (m_sessionStateMachine.role() != ControlledSessionRole
+		|| !m_bSessionChannelOpen || !m_pCapabilitySessionFlow->isComplete())
+	{
+		return;
+	}
+	KSessionMessage message;
+	message.type = PostSessionActionStateSessionMessageType;
+	message.strRequestId = status.strRequestId;
+	message.postSessionActionStatus = status;
+	sendSessionMessage(message);
 }
 
 void KSessionCoordinator::handleCapabilityTimeout()
@@ -1894,6 +2206,8 @@ KProtocolHandlerResult KSessionCoordinator::handleStartStreamingMessage(
 		QStringLiteral("emit"), QStringLiteral("startCaptureRequested"));
 	m_pMediaSessionController->startCapture(m_sessionStateMachine.generation());
 	m_sessionStateMachine.beginStreaming();
+	if (m_spPostSessionActionService != nullptr)
+		m_spPostSessionActionService->markStreaming(m_sessionStateMachine.generation());
 	publishSessionState();
 	return KProtocolHandlerResult::success();
 }

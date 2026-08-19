@@ -84,6 +84,8 @@ namespace
 		void pushVideoFrame(const KVideoFrame &) override {}
 		void sendInputMessage(const KInputMessage &) override {}
 		void sendStreamConfig(const KStreamConfig &) override {}
+		void requestPrivacyMode(KPrivacyMode) override {}
+		void requestPostSessionAction(KPostSessionAction) override {}
 		void handleCaptureFailure() override {}
 		void applyApplicationSettings(const KApplicationSettings &) override {}
 		void respondIncomingAccessRequest(const QString &, bool) override {}

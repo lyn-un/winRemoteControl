@@ -162,6 +162,8 @@ namespace
 		}
 		bool isTerminalBackpressured() const override { return bBackpressured; }
 		void sendStreamConfig(const KStreamConfig &) override {}
+		void requestPrivacyMode(KPrivacyMode) override {}
+		void requestPostSessionAction(KPostSessionAction) override {}
 		void handleCaptureFailure() override {}
 		void applyApplicationSettings(const KApplicationSettings &) override {}
 		void respondIncomingAccessRequest(const QString &, bool) override {}

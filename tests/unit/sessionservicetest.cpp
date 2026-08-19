@@ -5,6 +5,8 @@
 #include "core/session/deviceinfoprovider.h"
 #include "core/transport/remotepeertransport.h"
 #include "session/sessioncoordinator.h"
+#include "privacy/postsessionactionservice.h"
+#include "privacy/privacymodeservice.h"
 #include "fakesecurity.h"
 
 #include <QtCore/QCoreApplication>
@@ -132,6 +134,62 @@ namespace
 		int nInjectCount = 0;
 		int nReleaseKeysCount = 0;
 		int nReleaseInputsCount = 0;
+	};
+
+	class KFakePrivacyOverlayAdapter final : public IKPrivacyOverlayAdapter
+	{
+	public:
+		bool isSupported() const override { return true; }
+		KPrivacyOperationResult apply() override
+		{
+			++nApplyCount;
+			return KPrivacyOperationResult::success();
+		}
+		KPrivacyOperationResult restore() override
+		{
+			++nRestoreCount;
+			return KPrivacyOperationResult::success();
+		}
+		void setEmergencyRestoreHandler(EmergencyRestoreHandler handler) override
+		{
+			emergencyHandler = std::move(handler);
+		}
+
+		int nApplyCount = 0;
+		int nRestoreCount = 0;
+		EmergencyRestoreHandler emergencyHandler;
+	};
+
+	class KFakeDisplayPowerAdapter final : public IKDisplayPowerAdapter
+	{
+	public:
+		bool isSupported() const override { return true; }
+		KPrivacyOperationResult turnOff() override
+		{
+			++nTurnOffCount;
+			return KPrivacyOperationResult::success();
+		}
+		KPrivacyOperationResult restore() override
+		{
+			++nRestoreCount;
+			return KPrivacyOperationResult::success();
+		}
+
+		int nTurnOffCount = 0;
+		int nRestoreCount = 0;
+	};
+
+	class KFakeWorkstationLockAdapter final : public IKWorkstationLockAdapter
+	{
+	public:
+		bool isSupported() const override { return true; }
+		KPrivacyOperationResult lock() override
+		{
+			++nLockCount;
+			return KPrivacyOperationResult::success();
+		}
+
+		int nLockCount = 0;
 	};
 
 	class KFakeRemotePeerTransport final : public KRemotePeerTransport
@@ -277,6 +335,11 @@ namespace
 				QStringLiteral("input-realtime"), QStringLiteral("clipboard")
 			};
 			message.capabilities.bInputRealtime = true;
+			message.capabilities.supportedPrivacyModes = {
+				QStringLiteral("disabled"), QStringLiteral("privacyoverlay"),
+				QStringLiteral("displayoff")
+			};
+			message.capabilities.bPostSessionLock = true;
 			deliverSessionMessage(message);
 		}
 
@@ -395,6 +458,14 @@ namespace
 			std::move(spTransport),
 			std::move(spSignaling),
 			MakeFakeIdentityProvider(), MakeFakeTrustedDeviceStore());
+		auto spOverlay = std::make_unique<KFakePrivacyOverlayAdapter>();
+		KFakePrivacyOverlayAdapter *pOverlay = spOverlay.get();
+		auto spDisplay = std::make_unique<KFakeDisplayPowerAdapter>();
+		auto spLock = std::make_unique<KFakeWorkstationLockAdapter>();
+		KFakeWorkstationLockAdapter *pLock = spLock.get();
+		service.configurePrivacyServices(
+			std::make_unique<KPrivacyModeService>(std::move(spOverlay), std::move(spDisplay)),
+			std::make_unique<KPostSessionActionService>(std::move(spLock)));
 		KApplicationSettings settings;
 		settings.approvalMode = AutoAcceptRemoteApprovalMode;
 		service.applyApplicationSettings(settings);
@@ -496,6 +567,19 @@ namespace
 		check(nStartCaptureCount == 1,
 			QStringLiteral("start-stream message requests capture"));
 
+		KSessionMessage privacyCommand;
+		privacyCommand.type = SetPrivacyModeSessionMessageType;
+		privacyCommand.privacyMode = PrivacyOverlayPrivacyMode;
+		pTransport->deliverSessionMessage(privacyCommand);
+		check(pOverlay->nApplyCount == 1,
+			QStringLiteral("negotiated privacy command applies the controlled overlay"));
+		KSessionMessage lockCommand;
+		lockCommand.type = SetPostSessionActionSessionMessageType;
+		lockCommand.postSessionAction = LockWorkstationPostSessionAction;
+		pTransport->deliverSessionMessage(lockCommand);
+		check(pLock->nLockCount == 0,
+			QStringLiteral("post-session lock waits for final teardown"));
+
 		KInputMessage keyMessage;
 		keyMessage.type = KeyInputMessageType;
 		keyMessage.nSequence = 42;
@@ -542,6 +626,10 @@ namespace
 		endSession.type = EndSessionMessageType;
 		endSession.strReason = QStringLiteral("test_end");
 		pTransport->deliverSessionMessage(endSession);
+		check(pOverlay->nRestoreCount > 0,
+			QStringLiteral("final disconnect restores the privacy overlay"));
+		check(pLock->nLockCount == 1,
+			QStringLiteral("streamed session locks the workstation once after teardown"));
 		check(listeningAvailability.size() == 3
 			&& listeningAvailability.last() == qMakePair(true, nPort),
 			QStringLiteral("controlled session becomes discoverable again after session end"));

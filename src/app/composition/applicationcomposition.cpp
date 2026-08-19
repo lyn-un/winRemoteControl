@@ -2,6 +2,9 @@
 
 #include "adapters/windows/device/windowsdeviceinfoprovider.h"
 #include "adapters/windows/input/windowsinputinjector.h"
+#include "adapters/windows/privacy/windowsdisplaypoweradapter.h"
+#include "adapters/windows/privacy/windowsprivacyoverlayadapter.h"
+#include "adapters/windows/privacy/windowsworkstationlockadapter.h"
 #include "adapters/windows/security/signedjsontrusteddevicestore.h"
 #include "adapters/windows/security/windowsdeviceidentityprovider.h"
 #include "adapters/clipboard/qtclipboardadapter.h"
@@ -24,6 +27,8 @@
 #include "settings/applicationsettingsservice.h"
 #include "clipboard/clipboardsyncservice.h"
 #include "terminal/terminalsessionservice.h"
+#include "privacy/postsessionactionservice.h"
+#include "privacy/privacymodeservice.h"
 #include "ui_bridge/webviewwidget.h"
 #include "ui_bridge/devicediscoveryviewmodel.h"
 #include "common/sessiontracelogger.h"
@@ -120,6 +125,12 @@ KApplicationComposition::KApplicationComposition(QObject *pParent)
 		this))
 	, m_pShutdownDeadlineTimer(new QTimer(this))
 {
+	m_pSessionService->configurePrivacyServices(
+		std::make_unique<KPrivacyModeService>(
+			std::make_unique<KWindowsPrivacyOverlayAdapter>(),
+			std::make_unique<KWindowsDisplayPowerAdapter>()),
+		std::make_unique<KPostSessionActionService>(
+			std::make_unique<KWindowsWorkstationLockAdapter>()));
 	m_pSessionService->setTerminalCapabilitiesAvailable(
 		m_pTerminalSessionService->isFrontendSupported(),
 		m_pTerminalSessionService->isHostSupported());
