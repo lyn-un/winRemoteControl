@@ -12,8 +12,23 @@ KProtocolHandlerResult KProtocolHandlerResult::success()
 KProtocolHandlerResult KProtocolHandlerResult::failure(KProtocolHandlerStatus status,
 	const QString &strTechnicalMessage)
 {
+	QString strErrorCode = QStringLiteral("execution_failed");
+	if (status == ProtocolHandlerInvalidState)
+		strErrorCode = QStringLiteral("invalid_state");
+	else if (status == ProtocolHandlerPermissionDenied)
+		strErrorCode = QStringLiteral("permission_denied");
+	else if (status == ProtocolHandlerDecodeFailed)
+		strErrorCode = QStringLiteral("decode_failed");
+	return failure(status, strErrorCode, strTechnicalMessage);
+}
+
+KProtocolHandlerResult KProtocolHandlerResult::failure(KProtocolHandlerStatus status,
+	const QString &strErrorCode,
+	const QString &strTechnicalMessage)
+{
 	KProtocolHandlerResult result;
 	result.status = status;
+	result.strErrorCode = strErrorCode;
 	result.strTechnicalMessage = strTechnicalMessage;
 	return result;
 }

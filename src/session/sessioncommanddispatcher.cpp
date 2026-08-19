@@ -208,12 +208,8 @@ KSessionMessage KSessionCommandDispatcher::createCommandResult(
 	result.bSuccess = handlerResult.status == ProtocolHandlerSucceeded;
 	if (result.bSuccess)
 		return result;
-	if (handlerResult.status == ProtocolHandlerInvalidState)
-		result.strErrorCode = QStringLiteral("invalid_state");
-	else if (handlerResult.status == ProtocolHandlerPermissionDenied)
-		result.strErrorCode = QStringLiteral("permission_denied");
-	else
-		result.strErrorCode = QStringLiteral("execution_failed");
+	result.strErrorCode = handlerResult.strErrorCode.isEmpty()
+		? QStringLiteral("execution_failed") : handlerResult.strErrorCode;
 	return result;
 }
 

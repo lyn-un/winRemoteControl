@@ -37,10 +37,14 @@ enum KProtocolHandlerStatus
 struct KProtocolHandlerResult
 {
 	KProtocolHandlerStatus status = ProtocolHandlerExecutionFailed;
+	QString strErrorCode;
 	QString strTechnicalMessage;
 
 	static KProtocolHandlerResult success();
 	static KProtocolHandlerResult failure(KProtocolHandlerStatus status,
+		const QString &strTechnicalMessage);
+	static KProtocolHandlerResult failure(KProtocolHandlerStatus status,
+		const QString &strErrorCode,
 		const QString &strTechnicalMessage);
 };
 

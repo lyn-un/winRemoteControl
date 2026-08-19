@@ -143,5 +143,29 @@ int main(int nArgc, char *pArgv[])
 	Check(failedSender.send(failedCommand, 13).isEmpty() && bSendFailureReported,
 		"an initial transport failure is reported explicitly");
 
+	KSessionCommandDispatcher stableErrorDispatcher;
+	QList<KSessionMessage> stableErrorMessages;
+	stableErrorDispatcher.setTransmitFunction(
+		[&stableErrorMessages](const KSessionMessage &message)
+		{
+			stableErrorMessages.append(message);
+			return KSessionCommandTransmitResult { true, QString() };
+		});
+	stableErrorDispatcher.registerHandler(SetPrivacyModeSessionMessageType,
+		[](const KSessionMessage &)
+		{
+			return KProtocolHandlerResult::failure(ProtocolHandlerExecutionFailed,
+				QStringLiteral("unsupported_mode"),
+				QStringLiteral("The requested privacy mode is unavailable"));
+		});
+	KSessionMessage unsupportedCommand;
+	unsupportedCommand.type = SetPrivacyModeSessionMessageType;
+	unsupportedCommand.strRequestId = QStringLiteral(
+		"22345678-1234-1234-1234-1234567890ab");
+	stableErrorDispatcher.handleIncoming(unsupportedCommand, 14);
+	Check(stableErrorMessages.size() == 1
+		&& stableErrorMessages.first().strErrorCode == QStringLiteral("unsupported_mode"),
+		"command results preserve stable handler error codes");
+
 	return g_nFailureCount == 0 ? 0 : 1;
 }
