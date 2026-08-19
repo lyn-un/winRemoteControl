@@ -5,9 +5,12 @@
 
 #include <QtCore/QtMath>
 #include <QtGui/QCloseEvent>
+#include <QtGui/QCursor>
 #include <QtGui/QGuiApplication>
+#include <QtGui/QActionGroup>
 #include <QtGui/QScreen>
 #include <QtWidgets/QMenu>
+#include <QtWidgets/QToolTip>
 
 #include <Windows.h>
 #include <windowsx.h>
@@ -86,6 +89,7 @@ void KRemoteDesktopWindow::handleFrameReady(int nWidth,
 
 void KRemoteDesktopWindow::handleSessionStateChanged(KSessionState state)
 {
+	m_sessionState = state;
 	const bool bAvailable = state == ConnectedSessionState || state == StreamingSessionState;
 	m_bSessionAvailable = bAvailable;
 	if (!m_bSessionAvailable)
@@ -100,6 +104,47 @@ void KRemoteDesktopWindow::handleSessionStateChanged(KSessionState state)
 		m_pVideoRenderWidget->show();
 		m_pVideoRenderWidget->raise();
 	}
+}
+
+void KRemoteDesktopWindow::handleSessionCapabilitiesChanged(
+	const KNegotiatedCapabilities &capabilities)
+{
+	m_capabilities = capabilities;
+}
+
+void KRemoteDesktopWindow::handlePrivacyModeStatusChanged(
+	const KPrivacyModeStatus &status)
+{
+	m_privacyModeStatus = status;
+	m_bPrivacyCommandPending = status.state == ApplyingPrivacyModeState
+		|| status.state == RestoringPrivacyModeState;
+}
+
+void KRemoteDesktopWindow::handlePostSessionActionStatusChanged(
+	const KPostSessionActionStatus &status)
+{
+	m_postSessionActionStatus = status;
+	m_bPostSessionActionCommandPending = false;
+}
+
+void KRemoteDesktopWindow::handlePrivacyModeCommandCompleted(const QString &,
+	bool bSuccess,
+	const QString &strErrorCode)
+{
+	if (bSuccess)
+		return;
+	m_bPrivacyCommandPending = false;
+	showSecurityCommandError(strErrorCode);
+}
+
+void KRemoteDesktopWindow::handlePostSessionActionCommandCompleted(const QString &,
+	bool bSuccess,
+	const QString &strErrorCode)
+{
+	if (bSuccess)
+		return;
+	m_bPostSessionActionCommandPending = false;
+	showSecurityCommandError(strErrorCode);
 }
 
 void KRemoteDesktopWindow::loadFrontend(const QString &strFrontendPath)
@@ -196,7 +241,94 @@ void KRemoteDesktopWindow::showControlCenterMenu(const QPoint &pos)
 			applyStreamConfig(kSmoothWidth, kSmoothHeight, kSmoothFps, kSmoothBitrateKbps);
 		});
 
+	const bool bSecurityAvailable = m_sessionState == StreamingSessionState
+		|| m_sessionState == ReconnectingSessionState;
+	QMenu *pSecurityMenu = menu.addMenu(QStringLiteral("安全"));
+	pSecurityMenu->setEnabled(bSecurityAvailable);
+
+	QAction *pLockAction = pSecurityMenu->addAction(
+		QStringLiteral("远程结束后，被控端自动锁屏"));
+	pLockAction->setCheckable(true);
+	pLockAction->setChecked(m_postSessionActionStatus.action
+		== LockWorkstationPostSessionAction);
+	pLockAction->setEnabled(m_capabilities.bPostSessionLock
+		&& !m_bPostSessionActionCommandPending);
+	connect(pLockAction, &QAction::triggered, this,
+		[this](bool bChecked)
+		{
+			m_bPostSessionActionCommandPending = true;
+			emit postSessionActionRequested(bChecked
+				? LockWorkstationPostSessionAction : NoPostSessionAction);
+		});
+
+	QMenu *pPrivacyMenu = pSecurityMenu->addMenu(QStringLiteral("被控端防窥模式"));
+	const bool bOverlaySupported = m_capabilities.supportedPrivacyModes.contains(
+		QStringLiteral("privacyoverlay"));
+	const bool bDisplayOffSupported = m_capabilities.supportedPrivacyModes.contains(
+		QStringLiteral("displayoff"));
+	pPrivacyMenu->setEnabled((bOverlaySupported || bDisplayOffSupported)
+		&& !m_bPrivacyCommandPending);
+	QActionGroup *pPrivacyGroup = new QActionGroup(pPrivacyMenu);
+	pPrivacyGroup->setExclusive(true);
+	QAction *pDisabledAction = pPrivacyMenu->addAction(QStringLiteral("不启用"));
+	pDisabledAction->setCheckable(true);
+	pDisabledAction->setChecked(m_privacyModeStatus.effectiveMode == DisabledPrivacyMode);
+	pPrivacyGroup->addAction(pDisabledAction);
+	connect(pDisabledAction, &QAction::triggered, this,
+		[this]()
+		{
+			m_bPrivacyCommandPending = true;
+			emit privacyModeRequested(DisabledPrivacyMode);
+		});
+	if (bOverlaySupported)
+	{
+		QAction *pOverlayAction = pPrivacyMenu->addAction(QStringLiteral("启用隐私屏"));
+		pOverlayAction->setCheckable(true);
+		pOverlayAction->setChecked(m_privacyModeStatus.effectiveMode
+			== PrivacyOverlayPrivacyMode);
+		pPrivacyGroup->addAction(pOverlayAction);
+		connect(pOverlayAction, &QAction::triggered, this,
+			[this]()
+			{
+				m_bPrivacyCommandPending = true;
+				emit privacyModeRequested(PrivacyOverlayPrivacyMode);
+			});
+	}
+	if (bDisplayOffSupported)
+	{
+		QAction *pDisplayOffAction = pPrivacyMenu->addAction(QStringLiteral("关闭显示器"));
+		pDisplayOffAction->setCheckable(true);
+		pDisplayOffAction->setChecked(m_privacyModeStatus.effectiveMode
+			== DisplayOffPrivacyMode);
+		pPrivacyGroup->addAction(pDisplayOffAction);
+		connect(pDisplayOffAction, &QAction::triggered, this,
+			[this]()
+			{
+				m_bPrivacyCommandPending = true;
+				emit privacyModeRequested(DisplayOffPrivacyMode);
+			});
+	}
+
 	menu.exec(m_pWebViewWidget->mapToGlobal(pos));
+}
+
+void KRemoteDesktopWindow::showSecurityCommandError(const QString &strErrorCode)
+{
+	QString strMessage = QStringLiteral("安全设置未生效");
+	if (strErrorCode == QStringLiteral("unsupported_mode")
+		|| strErrorCode == QStringLiteral("unsupported_action"))
+	{
+		strMessage = QStringLiteral("对方不支持此安全设置");
+	}
+	else if (strErrorCode == QStringLiteral("permission_denied"))
+	{
+		strMessage = QStringLiteral("当前会话没有执行此操作的权限");
+	}
+	else if (strErrorCode == QStringLiteral("restore_failed"))
+	{
+		strMessage = QStringLiteral("被控端未能恢复显示，请在被控端检查");
+	}
+	QToolTip::showText(QCursor::pos(), strMessage, this);
 }
 
 void KRemoteDesktopWindow::applyStreamConfig(int nWidth, int nHeight, int nFps, int nBitrateKbps)

@@ -242,6 +242,20 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		pWebViewWidget, &KWebViewWidget::sendSessionChannelChanged);
 	connect(m_pSessionService, &KSessionCoordinator::sessionCapabilitiesChanged,
 		pWebViewWidget, &KWebViewWidget::sendSessionCapabilitiesChanged);
+	connect(m_pSessionService, &KSessionCoordinator::sessionCapabilitiesChanged,
+		pWindow, &KRemoteDesktopWindow::handleSessionCapabilitiesChanged);
+	connect(m_pSessionService, &KSessionCoordinator::privacyModeStatusChanged,
+		pWindow, &KRemoteDesktopWindow::handlePrivacyModeStatusChanged);
+	connect(m_pSessionService, &KSessionCoordinator::postSessionActionStatusChanged,
+		pWindow, &KRemoteDesktopWindow::handlePostSessionActionStatusChanged);
+	connect(m_pSessionService, &KSessionCoordinator::privacyModeCommandCompleted,
+		pWindow, &KRemoteDesktopWindow::handlePrivacyModeCommandCompleted);
+	connect(m_pSessionService, &KSessionCoordinator::postSessionActionCommandCompleted,
+		pWindow, &KRemoteDesktopWindow::handlePostSessionActionCommandCompleted);
+	connect(pWindow, &KRemoteDesktopWindow::privacyModeRequested,
+		m_pSessionService, &KSessionCoordinator::requestPrivacyMode);
+	connect(pWindow, &KRemoteDesktopWindow::postSessionActionRequested,
+		m_pSessionService, &KSessionCoordinator::requestPostSessionAction);
 	connect(m_pSessionViewModel, &KSessionViewModel::remoteDeviceInfoChanged,
 		pWebViewWidget, &KWebViewWidget::sendDeviceInfoChanged);
 	connect(m_pDiscoveryViewModel, &KDeviceDiscoveryViewModel::lanDevicesChanged,

@@ -2,6 +2,8 @@
 #define _WINREMOTECONTROL_REMOTEDESKTOPWINDOW_H_
 
 #include "core/media/streamconfig.h"
+#include "core/privacy/privacytypes.h"
+#include "core/protocol/sessionmessage.h"
 #include "core/session/sessionstatemachine.h"
 
 #include <QtCore/QPoint>
@@ -30,10 +32,21 @@ public slots:
 	void setRemoteScreenSize(int nWidth, int nHeight);
 	void handleFrameReady(int nWidth, int nHeight, quint64 nFrameIndex, qint64 nTimestampMs);
 	void handleSessionStateChanged(KSessionState state);
+	void handleSessionCapabilitiesChanged(const KNegotiatedCapabilities &capabilities);
+	void handlePrivacyModeStatusChanged(const KPrivacyModeStatus &status);
+	void handlePostSessionActionStatusChanged(const KPostSessionActionStatus &status);
+	void handlePrivacyModeCommandCompleted(const QString &strRequestId,
+		bool bSuccess,
+		const QString &strErrorCode);
+	void handlePostSessionActionCommandCompleted(const QString &strRequestId,
+		bool bSuccess,
+		const QString &strErrorCode);
 
 signals:
 	void desktopCloseRequested();
 	void streamConfigRequested(const KStreamConfig &config);
+	void privacyModeRequested(KPrivacyMode mode);
+	void postSessionActionRequested(KPostSessionAction action);
 
 protected:
 	void closeEvent(QCloseEvent *pEvent) override;
@@ -43,6 +56,7 @@ private:
 	void initConnections();
 	void updatePreviewRect(const QRect &rect);
 	void showControlCenterMenu(const QPoint &pos);
+	void showSecurityCommandError(const QString &strErrorCode);
 	void applyStreamConfig(int nWidth, int nHeight, int nFps, int nBitrateKbps);
 	void minimizeWindow();
 	void toggleMaximizeWindow();
@@ -53,8 +67,14 @@ private:
 	bool m_bClosing = false;
 	bool m_bInitialSizeAdjusted = false;
 	bool m_bSessionAvailable = true;
+	bool m_bPrivacyCommandPending = false;
+	bool m_bPostSessionActionCommandPending = false;
+	KSessionState m_sessionState = IdleSessionState;
 	QRect m_previewRect;
 	KStreamConfig m_streamConfig;
+	KNegotiatedCapabilities m_capabilities;
+	KPrivacyModeStatus m_privacyModeStatus;
+	KPostSessionActionStatus m_postSessionActionStatus;
 	KWebViewWidget *m_pWebViewWidget = nullptr;
 	KVideoRenderWidget *m_pVideoRenderWidget = nullptr;
 };
