@@ -1866,7 +1866,7 @@ KSessionCapabilities KSessionCoordinator::localCapabilities() const
 		else if (m_spPrivacyModeService != nullptr)
 		{
 			capabilities.supportedPrivacyModes =
-				m_spPrivacyModeService->supportedModes(false);
+				m_spPrivacyModeService->supportedModes();
 		}
 	}
 	capabilities.bPostSessionLock = hasPermission(InputControlPermissionScope)

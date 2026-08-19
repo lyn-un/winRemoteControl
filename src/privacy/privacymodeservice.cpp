@@ -1,14 +1,32 @@
 #include "privacy/privacymodeservice.h"
 
+#include "common/sessiontracelogger.h"
+
 #include <QtCore/QMetaObject>
+
+namespace
+{
+	QString PrivacyModeName(KPrivacyMode mode)
+	{
+		switch (mode)
+		{
+		case DisabledPrivacyMode: return QStringLiteral("disabled");
+		case PrivacyOverlayPrivacyMode: return QStringLiteral("privacyoverlay");
+		case DisplayOffPrivacyMode: return QStringLiteral("displayoff");
+		default: return QStringLiteral("unknown");
+		}
+	}
+}
 
 KPrivacyModeService::KPrivacyModeService(
 	std::unique_ptr<IKPrivacyOverlayAdapter> spOverlayAdapter,
 	std::unique_ptr<IKDisplayPowerAdapter> spDisplayPowerAdapter,
+	KPrivacyRolloutPolicy rolloutPolicy,
 	QObject *pParent)
 	: QObject(pParent)
 	, m_spOverlayAdapter(std::move(spOverlayAdapter))
 	, m_spDisplayPowerAdapter(std::move(spDisplayPowerAdapter))
+	, m_rolloutPolicy(rolloutPolicy)
 {
 	Q_ASSERT(m_spOverlayAdapter != nullptr);
 	Q_ASSERT(m_spDisplayPowerAdapter != nullptr);
@@ -33,15 +51,18 @@ void KPrivacyModeService::beginSession(quint64 nGeneration)
 	m_spDisplayPowerAdapter->restore();
 	m_status = KPrivacyModeStatus();
 	m_status.nGeneration = nGeneration;
+	KSessionTraceLogger::write(QStringLiteral("controlled"),
+		QStringLiteral("privacy_mode_state"), QStringLiteral("initialized"), -1,
+		QStringLiteral("generation=%1 effective=disabled").arg(nGeneration));
 	publishStatus();
 }
 
-QStringList KPrivacyModeService::supportedModes(bool bAdvertiseDisplayOff) const
+QStringList KPrivacyModeService::supportedModes() const
 {
 	QStringList modes { QStringLiteral("disabled") };
 	if (m_spOverlayAdapter->isSupported())
 		modes.append(QStringLiteral("privacyoverlay"));
-	if (bAdvertiseDisplayOff && m_spDisplayPowerAdapter->isSupported())
+	if (m_rolloutPolicy.bAdvertiseDisplayOff && m_spDisplayPowerAdapter->isSupported())
 		modes.append(QStringLiteral("displayoff"));
 	return modes;
 }
@@ -50,6 +71,10 @@ KPrivacyOperationResult KPrivacyModeService::setMode(KPrivacyMode mode,
 	const QString &strRequestId,
 	quint64 nGeneration)
 {
+	KSessionTraceLogger::write(QStringLiteral("controlled"),
+		QStringLiteral("privacy_mode_command"), QStringLiteral("requested"), -1,
+		QStringLiteral("generation=%1 requestId=%2 mode=%3")
+			.arg(nGeneration).arg(strRequestId, PrivacyModeName(mode)));
 	if (nGeneration == 0 || nGeneration != m_status.nGeneration)
 	{
 		return KPrivacyOperationResult::failure(QStringLiteral("stale_generation"),
@@ -101,16 +126,28 @@ KPrivacyOperationResult KPrivacyModeService::setMode(KPrivacyMode mode,
 		m_status.state = FailedPrivacyModeState;
 		m_status.strErrorCode = applyResult.strErrorCode;
 		publishStatus();
+		KSessionTraceLogger::write(QStringLiteral("controlled"),
+			QStringLiteral("privacy_mode_command"), QStringLiteral("failed"), -1,
+			QStringLiteral("generation=%1 requestId=%2 errorCode=%3")
+				.arg(nGeneration).arg(strRequestId, applyResult.strErrorCode));
 		return applyResult;
 	}
 	m_status.effectiveMode = mode;
 	m_status.state = ActivePrivacyModeState;
 	publishStatus();
+	KSessionTraceLogger::write(QStringLiteral("controlled"),
+		QStringLiteral("privacy_mode_command"), QStringLiteral("applied"), -1,
+		QStringLiteral("generation=%1 requestId=%2 effective=%3")
+			.arg(nGeneration).arg(strRequestId, PrivacyModeName(mode)));
 	return KPrivacyOperationResult::success();
 }
 
 KPrivacyOperationResult KPrivacyModeService::reset(quint64 nGeneration)
 {
+	KSessionTraceLogger::write(QStringLiteral("controlled"),
+		QStringLiteral("privacy_mode_restore"), QStringLiteral("begin"), -1,
+		QStringLiteral("generation=%1 effective=%2")
+			.arg(nGeneration).arg(PrivacyModeName(m_status.effectiveMode)));
 	if (nGeneration != 0 && nGeneration != m_status.nGeneration)
 	{
 		return KPrivacyOperationResult::failure(QStringLiteral("stale_generation"),
@@ -135,6 +172,9 @@ KPrivacyOperationResult KPrivacyModeService::reset(quint64 nGeneration)
 	m_status.state = InactivePrivacyModeState;
 	m_status.strErrorCode.clear();
 	publishStatus();
+	KSessionTraceLogger::write(QStringLiteral("controlled"),
+		QStringLiteral("privacy_mode_restore"), QStringLiteral("success"), -1,
+		QStringLiteral("generation=%1").arg(nGeneration));
 	return KPrivacyOperationResult::success();
 }
 
@@ -171,6 +211,9 @@ void KPrivacyModeService::handleEmergencyRestore()
 	if (m_status.effectiveMode != PrivacyOverlayPrivacyMode)
 		return;
 	const quint64 nGeneration = m_status.nGeneration;
+	KSessionTraceLogger::write(QStringLiteral("controlled"),
+		QStringLiteral("privacy_mode_restore"), QStringLiteral("local_emergency"), -1,
+		QStringLiteral("generation=%1").arg(nGeneration));
 	m_status.strRequestId.clear();
 	reset(nGeneration);
 	emit emergencyRestoreTriggered(nGeneration);

@@ -100,10 +100,18 @@ namespace
 		KFakeDisplayPowerAdapter *pDisplay = spDisplay.get();
 		KPrivacyModeService service(std::move(spOverlay), std::move(spDisplay));
 		service.beginSession(7);
-		Check(service.supportedModes(false)
+		Check(service.supportedModes()
 			== QStringList({ QStringLiteral("disabled"),
 				QStringLiteral("privacyoverlay") }),
 			"display-off rollout remains hidden by default");
+		auto spEnabledOverlay = std::make_unique<KFakeOverlayAdapter>();
+		auto spEnabledDisplay = std::make_unique<KFakeDisplayPowerAdapter>();
+		KPrivacyRolloutPolicy enabledPolicy;
+		enabledPolicy.bAdvertiseDisplayOff = true;
+		KPrivacyModeService enabledService(std::move(spEnabledOverlay),
+			std::move(spEnabledDisplay), enabledPolicy);
+		Check(enabledService.supportedModes().contains(QStringLiteral("displayoff")),
+			"tests can explicitly enable the display-off rollout policy");
 		Check(service.setMode(PrivacyOverlayPrivacyMode, QStringLiteral("one"), 7).bSucceeded
 			&& service.status().effectiveMode == PrivacyOverlayPrivacyMode
 			&& pOverlay->nApplyCount == 1,

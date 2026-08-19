@@ -243,70 +243,79 @@ void KRemoteDesktopWindow::showControlCenterMenu(const QPoint &pos)
 
 	const bool bSecurityAvailable = m_sessionState == StreamingSessionState
 		|| m_sessionState == ReconnectingSessionState;
-	QMenu *pSecurityMenu = menu.addMenu(QStringLiteral("安全"));
-	pSecurityMenu->setEnabled(bSecurityAvailable);
-
-	QAction *pLockAction = pSecurityMenu->addAction(
-		QStringLiteral("远程结束后，被控端自动锁屏"));
-	pLockAction->setCheckable(true);
-	pLockAction->setChecked(m_postSessionActionStatus.action
-		== LockWorkstationPostSessionAction);
-	pLockAction->setEnabled(m_capabilities.bPostSessionLock
-		&& !m_bPostSessionActionCommandPending);
-	connect(pLockAction, &QAction::triggered, this,
-		[this](bool bChecked)
-		{
-			m_bPostSessionActionCommandPending = true;
-			emit postSessionActionRequested(bChecked
-				? LockWorkstationPostSessionAction : NoPostSessionAction);
-		});
-
-	QMenu *pPrivacyMenu = pSecurityMenu->addMenu(QStringLiteral("被控端防窥模式"));
 	const bool bOverlaySupported = m_capabilities.supportedPrivacyModes.contains(
 		QStringLiteral("privacyoverlay"));
 	const bool bDisplayOffSupported = m_capabilities.supportedPrivacyModes.contains(
 		QStringLiteral("displayoff"));
-	pPrivacyMenu->setEnabled((bOverlaySupported || bDisplayOffSupported)
-		&& !m_bPrivacyCommandPending);
-	QActionGroup *pPrivacyGroup = new QActionGroup(pPrivacyMenu);
-	pPrivacyGroup->setExclusive(true);
-	QAction *pDisabledAction = pPrivacyMenu->addAction(QStringLiteral("不启用"));
-	pDisabledAction->setCheckable(true);
-	pDisabledAction->setChecked(m_privacyModeStatus.effectiveMode == DisabledPrivacyMode);
-	pPrivacyGroup->addAction(pDisabledAction);
-	connect(pDisabledAction, &QAction::triggered, this,
-		[this]()
+	if (m_capabilities.bPostSessionLock || bOverlaySupported || bDisplayOffSupported)
+	{
+		QMenu *pSecurityMenu = menu.addMenu(QStringLiteral("安全"));
+		pSecurityMenu->setEnabled(bSecurityAvailable);
+		if (m_capabilities.bPostSessionLock)
 		{
-			m_bPrivacyCommandPending = true;
-			emit privacyModeRequested(DisabledPrivacyMode);
-		});
-	if (bOverlaySupported)
-	{
-		QAction *pOverlayAction = pPrivacyMenu->addAction(QStringLiteral("启用隐私屏"));
-		pOverlayAction->setCheckable(true);
-		pOverlayAction->setChecked(m_privacyModeStatus.effectiveMode
-			== PrivacyOverlayPrivacyMode);
-		pPrivacyGroup->addAction(pOverlayAction);
-		connect(pOverlayAction, &QAction::triggered, this,
-			[this]()
+			QAction *pLockAction = pSecurityMenu->addAction(
+				QStringLiteral("远程结束后，被控端自动锁屏"));
+			pLockAction->setCheckable(true);
+			pLockAction->setChecked(m_postSessionActionStatus.action
+				== LockWorkstationPostSessionAction);
+			pLockAction->setEnabled(!m_bPostSessionActionCommandPending);
+			connect(pLockAction, &QAction::triggered, this,
+				[this](bool bChecked)
+				{
+					m_bPostSessionActionCommandPending = true;
+					emit postSessionActionRequested(bChecked
+						? LockWorkstationPostSessionAction : NoPostSessionAction);
+				});
+		}
+
+		if (bOverlaySupported || bDisplayOffSupported)
+		{
+			QMenu *pPrivacyMenu = pSecurityMenu->addMenu(QStringLiteral("被控端防窥模式"));
+			pPrivacyMenu->setEnabled(!m_bPrivacyCommandPending);
+			QActionGroup *pPrivacyGroup = new QActionGroup(pPrivacyMenu);
+			pPrivacyGroup->setExclusive(true);
+			QAction *pDisabledAction = pPrivacyMenu->addAction(QStringLiteral("不启用"));
+			pDisabledAction->setCheckable(true);
+			pDisabledAction->setChecked(m_privacyModeStatus.effectiveMode
+				== DisabledPrivacyMode);
+			pPrivacyGroup->addAction(pDisabledAction);
+			connect(pDisabledAction, &QAction::triggered, this,
+				[this]()
+				{
+					m_bPrivacyCommandPending = true;
+					emit privacyModeRequested(DisabledPrivacyMode);
+				});
+			if (bOverlaySupported)
 			{
-				m_bPrivacyCommandPending = true;
-				emit privacyModeRequested(PrivacyOverlayPrivacyMode);
-			});
-	}
-	if (bDisplayOffSupported)
-	{
-		QAction *pDisplayOffAction = pPrivacyMenu->addAction(QStringLiteral("关闭显示器"));
-		pDisplayOffAction->setCheckable(true);
-		pDisplayOffAction->setChecked(m_privacyModeStatus.effectiveMode
-			== DisplayOffPrivacyMode);
-		pPrivacyGroup->addAction(pDisplayOffAction);
-		connect(pDisplayOffAction, &QAction::triggered, this,
-			[this]()
+				QAction *pOverlayAction = pPrivacyMenu->addAction(
+					QStringLiteral("启用隐私屏"));
+				pOverlayAction->setCheckable(true);
+				pOverlayAction->setChecked(m_privacyModeStatus.effectiveMode
+					== PrivacyOverlayPrivacyMode);
+				pPrivacyGroup->addAction(pOverlayAction);
+				connect(pOverlayAction, &QAction::triggered, this,
+					[this]()
+					{
+						m_bPrivacyCommandPending = true;
+						emit privacyModeRequested(PrivacyOverlayPrivacyMode);
+					});
+			}
+			if (bDisplayOffSupported)
 			{
-				m_bPrivacyCommandPending = true;
-				emit privacyModeRequested(DisplayOffPrivacyMode);
-			});
+				QAction *pDisplayOffAction = pPrivacyMenu->addAction(
+					QStringLiteral("关闭显示器（实验性）"));
+				pDisplayOffAction->setCheckable(true);
+				pDisplayOffAction->setChecked(m_privacyModeStatus.effectiveMode
+					== DisplayOffPrivacyMode);
+				pPrivacyGroup->addAction(pDisplayOffAction);
+				connect(pDisplayOffAction, &QAction::triggered, this,
+					[this]()
+					{
+						m_bPrivacyCommandPending = true;
+						emit privacyModeRequested(DisplayOffPrivacyMode);
+					});
+			}
+		}
 	}
 
 	menu.exec(m_pWebViewWidget->mapToGlobal(pos));

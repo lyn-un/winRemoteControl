@@ -1,5 +1,7 @@
 #include "privacy/postsessionactionservice.h"
 
+#include "common/sessiontracelogger.h"
+
 KPostSessionActionService::KPostSessionActionService(
 	std::unique_ptr<IKWorkstationLockAdapter> spLockAdapter,
 	QObject *pParent)
@@ -15,13 +17,21 @@ void KPostSessionActionService::beginSession(quint64 nGeneration)
 	m_status.nGeneration = nGeneration;
 	m_bEnteredStreaming = false;
 	m_bConsumed = false;
+	KSessionTraceLogger::write(QStringLiteral("controlled"),
+		QStringLiteral("post_session_action"), QStringLiteral("initialized"), -1,
+		QStringLiteral("generation=%1 action=none").arg(nGeneration));
 	emit statusChanged(m_status);
 }
 
 void KPostSessionActionService::markStreaming(quint64 nGeneration)
 {
 	if (nGeneration == m_status.nGeneration && !m_bConsumed)
+	{
 		m_bEnteredStreaming = true;
+		KSessionTraceLogger::write(QStringLiteral("controlled"),
+			QStringLiteral("post_session_action"), QStringLiteral("streaming_seen"), -1,
+			QStringLiteral("generation=%1").arg(nGeneration));
+	}
 }
 
 KPrivacyOperationResult KPostSessionActionService::setAction(
@@ -43,6 +53,12 @@ KPrivacyOperationResult KPostSessionActionService::setAction(
 	m_status.action = action;
 	m_status.strRequestId = strRequestId;
 	m_status.strErrorCode.clear();
+	KSessionTraceLogger::write(QStringLiteral("controlled"),
+		QStringLiteral("post_session_action"), QStringLiteral("armed"), -1,
+		QStringLiteral("generation=%1 requestId=%2 action=%3")
+			.arg(nGeneration).arg(strRequestId,
+				action == LockWorkstationPostSessionAction
+					? QStringLiteral("lock_workstation") : QStringLiteral("none")));
 	emit statusChanged(m_status);
 	return KPrivacyOperationResult::success();
 }
@@ -61,12 +77,22 @@ KPrivacyOperationResult KPostSessionActionService::consumeAfterTeardown(
 	m_status.strRequestId.clear();
 	if (action != LockWorkstationPostSessionAction || !m_bEnteredStreaming)
 	{
+		KSessionTraceLogger::write(QStringLiteral("controlled"),
+			QStringLiteral("post_session_action"), QStringLiteral("skipped"), -1,
+			QStringLiteral("generation=%1 reason=%2")
+				.arg(nGeneration).arg(action != LockWorkstationPostSessionAction
+					? QStringLiteral("not_armed") : QStringLiteral("never_streamed")));
 		emit statusChanged(m_status);
 		return KPrivacyOperationResult::success();
 	}
 	const KPrivacyOperationResult result = m_spLockAdapter->lock();
 	if (!result.bSucceeded)
 		m_status.strErrorCode = result.strErrorCode;
+	KSessionTraceLogger::write(QStringLiteral("controlled"),
+		QStringLiteral("post_session_action"),
+		result.bSucceeded ? QStringLiteral("executed") : QStringLiteral("failed"), -1,
+		QStringLiteral("generation=%1 action=lock_workstation errorCode=%2")
+			.arg(nGeneration).arg(result.strErrorCode));
 	emit statusChanged(m_status);
 	return result;
 }

@@ -9,6 +9,11 @@
 
 #include <memory>
 
+struct KPrivacyRolloutPolicy
+{
+	bool bAdvertiseDisplayOff = false;
+};
+
 class KPrivacyModeService : public QObject
 {
 	Q_OBJECT
@@ -17,6 +22,7 @@ public:
 	explicit KPrivacyModeService(
 		std::unique_ptr<IKPrivacyOverlayAdapter> spOverlayAdapter,
 		std::unique_ptr<IKDisplayPowerAdapter> spDisplayPowerAdapter,
+		KPrivacyRolloutPolicy rolloutPolicy = {},
 		QObject *pParent = nullptr);
 	~KPrivacyModeService() override;
 
@@ -24,7 +30,7 @@ public:
 	KPrivacyModeService &operator=(const KPrivacyModeService &) = delete;
 
 	void beginSession(quint64 nGeneration);
-	QStringList supportedModes(bool bAdvertiseDisplayOff) const;
+	QStringList supportedModes() const;
 	KPrivacyOperationResult setMode(KPrivacyMode mode,
 		const QString &strRequestId,
 		quint64 nGeneration);
@@ -43,6 +49,7 @@ private:
 
 	std::unique_ptr<IKPrivacyOverlayAdapter> m_spOverlayAdapter;
 	std::unique_ptr<IKDisplayPowerAdapter> m_spDisplayPowerAdapter;
+	KPrivacyRolloutPolicy m_rolloutPolicy;
 	KPrivacyModeStatus m_status;
 };
 
