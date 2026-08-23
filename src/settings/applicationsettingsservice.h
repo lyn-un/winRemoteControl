@@ -30,10 +30,12 @@ public slots:
 		const QString &strApprovalMode,
 		int nApprovalTimeoutSeconds,
 		int nDefaultListenPort);
+	void updateTheme(const QString &strThemeId);
 
 signals:
 	void settingsChanged(const KApplicationSettings &settings);
 	void settingsError(const QString &strError);
+	void themeError(const QString &strError);
 
 private:
 	std::unique_ptr<KApplicationSettingsStore> m_spStore;

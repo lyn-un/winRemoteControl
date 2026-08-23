@@ -37,7 +37,9 @@ public:
 	KWebViewWidget(const KWebViewWidget &) = delete;
 	KWebViewWidget &operator=(const KWebViewWidget &) = delete;
 
-	void loadLocalFile(const QString &strFilePath, const QString &strViewMode = QStringLiteral("dashboard"));
+	void loadLocalFile(const QString &strFilePath,
+		const QString &strViewMode,
+		const QString &strThemeId);
 
 public slots:
 	void sendStatusChanged(const QString &strStatus);
@@ -59,6 +61,7 @@ public slots:
 	void sendRecentDeviceError(const QString &strError);
 	void sendApplicationSettingsChanged(const KApplicationSettings &settings);
 	void sendApplicationSettingsError(const QString &strError);
+	void sendApplicationThemeError(const QString &strError);
 	void sendIncomingAccessRequest(const QString &strRequestId,
 		const QString &strDeviceName,
 		const QString &strSourceAddress,
@@ -127,6 +130,7 @@ signals:
 		const QString &strApprovalMode,
 		int nApprovalTimeoutSeconds,
 		int nDefaultListenPort);
+	void updateApplicationThemeRequested(const QString &strThemeId);
 	void respondIncomingAccessRequestRequested(const QString &strRequestId, bool bAccepted);
 	void respondPairingRequestRequested(const QString &strRequestId,
 		bool bAccepted,

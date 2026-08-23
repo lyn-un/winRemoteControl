@@ -26,7 +26,7 @@ public:
 
 	KWebViewWidget *webViewWidget() const;
 	KVideoRenderWidget *videoRenderWidget() const;
-	void loadFrontend(const QString &strFrontendPath);
+	void loadFrontend(const QString &strFrontendPath, const QString &strThemeId);
 
 public slots:
 	void setRemoteScreenSize(int nWidth, int nHeight);

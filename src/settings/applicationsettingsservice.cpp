@@ -61,6 +61,7 @@ void KApplicationSettingsService::updateSettings(bool bRemoteAccessEnabled,
 	candidate.approvalMode = approvalMode;
 	candidate.nApprovalTimeoutSeconds = nApprovalTimeoutSeconds;
 	candidate.nDefaultListenPort = static_cast<quint16>(nDefaultListenPort);
+	candidate.strThemeId = m_settings.strThemeId;
 
 	QString strError;
 	if (!m_spStore->saveSettings(candidate, &strError))
@@ -79,5 +80,31 @@ void KApplicationSettingsService::updateSettings(bool bRemoteAccessEnabled,
 			.arg(RemoteApprovalModeName(m_settings.approvalMode))
 			.arg(m_settings.nApprovalTimeoutSeconds)
 			.arg(m_settings.nDefaultListenPort));
+	emit settingsChanged(m_settings);
+}
+
+void KApplicationSettingsService::updateTheme(const QString &strThemeId)
+{
+	if (!IsApplicationThemeIdValid(strThemeId))
+	{
+		emit themeError(QStringLiteral("主题设置参数无效"));
+		return;
+	}
+
+	KApplicationSettings candidate = m_settings;
+	candidate.strThemeId = strThemeId;
+	QString strError;
+	if (!m_spStore->saveSettings(candidate, &strError))
+	{
+		emit themeError(strError);
+		return;
+	}
+
+	m_settings = candidate;
+	KSessionTraceLogger::write(QStringLiteral("local"),
+		QStringLiteral("settings"),
+		QStringLiteral("theme_updated"),
+		-1,
+		QStringLiteral("themeId=%1").arg(m_settings.strThemeId));
 	emit settingsChanged(m_settings);
 }

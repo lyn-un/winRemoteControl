@@ -163,9 +163,12 @@ void KRemoteDesktopWindow::handlePostSessionActionCommandCompleted(const QString
 	showSecurityCommandError(strErrorCode);
 }
 
-void KRemoteDesktopWindow::loadFrontend(const QString &strFrontendPath)
+void KRemoteDesktopWindow::loadFrontend(
+	const QString &strFrontendPath,
+	const QString &strThemeId)
 {
-	m_pWebViewWidget->loadLocalFile(strFrontendPath, QStringLiteral("desktop"));
+	m_pWebViewWidget->loadLocalFile(
+		strFrontendPath, QStringLiteral("desktop"), strThemeId);
 }
 
 void KRemoteDesktopWindow::closeEvent(QCloseEvent *pEvent)

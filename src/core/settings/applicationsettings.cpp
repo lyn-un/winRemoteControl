@@ -24,6 +24,18 @@ bool RemoteApprovalModeFromName(const QString &strName, KRemoteApprovalMode *pMo
 	return true;
 }
 
+QString DefaultApplicationThemeId()
+{
+	return QStringLiteral("nordic-mist");
+}
+
+bool IsApplicationThemeIdValid(const QString &strThemeId)
+{
+	return strThemeId == QStringLiteral("daylight")
+		|| strThemeId == QStringLiteral("midnight")
+		|| strThemeId == DefaultApplicationThemeId();
+}
+
 KApplicationSettings SanitizeApplicationSettings(const KApplicationSettings &settings)
 {
 	KApplicationSettings sanitized = settings;
@@ -37,5 +49,7 @@ KApplicationSettings SanitizeApplicationSettings(const KApplicationSettings &set
 		sanitized.nApprovalTimeoutSeconds = 30;
 	if (sanitized.nDefaultListenPort == 0)
 		sanitized.nDefaultListenPort = 39000;
+	if (!IsApplicationThemeIdValid(sanitized.strThemeId))
+		sanitized.strThemeId = DefaultApplicationThemeId();
 	return sanitized;
 }

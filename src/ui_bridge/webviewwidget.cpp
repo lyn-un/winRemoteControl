@@ -7,6 +7,8 @@
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
+#include <QtCore/QUrl>
+#include <QtCore/QUrlQuery>
 
 #include <wrl/event.h>
 
@@ -23,11 +25,18 @@ KWebViewWidget::~KWebViewWidget()
 		m_spController->Close();
 }
 
-void KWebViewWidget::loadLocalFile(const QString &strFilePath, const QString &strViewMode)
+void KWebViewWidget::loadLocalFile(const QString &strFilePath,
+	const QString &strViewMode,
+	const QString &strThemeId)
 {
 	const QFileInfo fileInfo(strFilePath);
 	m_strFrontendFolder = fileInfo.absolutePath();
-	m_strPendingUrl = QStringLiteral("https://winremotecontrol.local/index.html?view=%1").arg(strViewMode);
+	QUrl url(QStringLiteral("https://winremotecontrol.local/index.html"));
+	QUrlQuery query;
+	query.addQueryItem(QStringLiteral("view"), strViewMode);
+	query.addQueryItem(QStringLiteral("theme"), strThemeId);
+	url.setQuery(query);
+	m_strPendingUrl = url.toString();
 	navigateIfReady();
 }
 
@@ -196,6 +205,7 @@ void KWebViewWidget::sendApplicationSettingsChanged(const KApplicationSettings &
 	object.insert(QStringLiteral("approvalMode"), RemoteApprovalModeName(settings.approvalMode));
 	object.insert(QStringLiteral("approvalTimeoutSeconds"), settings.nApprovalTimeoutSeconds);
 	object.insert(QStringLiteral("defaultListenPort"), settings.nDefaultListenPort);
+	object.insert(QStringLiteral("themeId"), settings.strThemeId);
 	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
 }
 
@@ -203,6 +213,14 @@ void KWebViewWidget::sendApplicationSettingsError(const QString &strError)
 {
 	QJsonObject object;
 	object.insert(QStringLiteral("type"), QStringLiteral("applicationSettingsError"));
+	object.insert(QStringLiteral("message"), strError);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendApplicationThemeError(const QString &strError)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("applicationThemeError"));
 	object.insert(QStringLiteral("message"), strError);
 	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
 }
@@ -624,6 +642,11 @@ void KWebViewWidget::handleWebMessage(const QString &strMessage)
 			object.value(QStringLiteral("approvalMode")).toString(),
 			object.value(QStringLiteral("approvalTimeoutSeconds")).toInt(30),
 			object.value(QStringLiteral("defaultListenPort")).toInt(39000));
+	}
+	else if (strCommand == QStringLiteral("updateApplicationTheme"))
+	{
+		emit updateApplicationThemeRequested(
+			document.object().value(QStringLiteral("themeId")).toString());
 	}
 	else if (strCommand == QStringLiteral("respondIncomingAccessRequest"))
 	{

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { sendCommand, sendPreviewRect } from "../bridge/nativeBridge";
 import DesktopWindowControls from "../components/DesktopWindowControls";
 import { useNativeState } from "../state/useNativeState";
+import { useTheme } from "../theme/useTheme";
 
 function Icon({ name }) {
   const paths = {
@@ -12,6 +13,7 @@ function Icon({ name }) {
     trash: <><path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6" /></>,
     arrow: <><path d="M5 12h14M14 7l5 5-5 5" /></>,
     signal: <><path d="M5 15a10 10 0 0 1 14 0M8 18a6 6 0 0 1 8 0" /><circle cx="12" cy="21" r="1" /></>,
+    appearance: <><path d="M12 3a9 9 0 1 0 0 18h1.3a1.7 1.7 0 0 0 .3-3.37 1.35 1.35 0 0 1 .25-2.67H17A4 4 0 0 0 21 11c0-4.42-4.03-8-9-8Z" /><circle cx="7.5" cy="11" r="1" /><circle cx="10" cy="7" r="1" /><circle cx="15" cy="7.5" r="1" /></>,
     settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.09A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.14.37.35.7.6 1 .3.28.68.42 1.1.4h.09v4h-.09A1.7 1.7 0 0 0 19.4 15Z" /></>,
     shield: <><path d="M12 3 5 6v5c0 4.6 2.8 8.2 7 10 4.2-1.8 7-5.4 7-10V6l-7-3Z" /><path d="m9 12 2 2 4-4" /></>,
 		terminal: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></>,
@@ -206,6 +208,8 @@ function AssistPage({ state, numericPort, setRole, connectManual, busy }) {
 
 function SettingsPage({ state }) {
   const settings = state.applicationSettings;
+  const theme = useTheme();
+  const themeCardRefs = useRef([]);
   const [activeSection, setActiveSection] = useState("security");
   const [confirmation, setConfirmation] = useState("");
   useEffect(() => {
@@ -249,6 +253,7 @@ function SettingsPage({ state }) {
     { id: "security", icon: "shield", title: "连接与安全", detail: "远程接入和审批策略" },
     { id: "trusted", icon: "monitor", title: "可信设备", detail: "配对身份与权限上限" },
     { id: "network", icon: "signal", title: "网络与传输", detail: "监听端口与连接方式" },
+    { id: "appearance", icon: "appearance", title: "外观设置", detail: "主题与界面显示" },
   ];
   const active = sections.find((section) => section.id === activeSection) || sections[0];
   const confirmationCopy = confirmation === "disableRemoteAccess"
@@ -274,6 +279,19 @@ function SettingsPage({ state }) {
     else if (confirmation === "autoAccept")
       update({ approvalMode: "autoAccept" });
     setConfirmation("");
+  };
+
+  const handleThemeKeyDown = (event, index) => {
+    const lastIndex = theme.themes.length - 1;
+    let nextIndex = index;
+    if (["ArrowRight", "ArrowDown"].includes(event.key)) nextIndex = index === lastIndex ? 0 : index + 1;
+    else if (["ArrowLeft", "ArrowUp"].includes(event.key)) nextIndex = index === 0 ? lastIndex : index - 1;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = lastIndex;
+    else return;
+    event.preventDefault();
+    themeCardRefs.current[nextIndex]?.focus();
+    theme.setTheme(theme.themes[nextIndex].id);
   };
 
   const renderSection = () => {
@@ -310,6 +328,43 @@ function SettingsPage({ state }) {
           <div className="settings-section-title"><span>02</span><div><h2>本机监听</h2><p>配置被控端下一次开始监听时使用的 TCP 信令端口。</p></div></div>
           <div className="settings-fields settings-fields-wide">
             <label><span>默认监听端口</span><input key={settings.defaultListenPort} defaultValue={settings.defaultListenPort} inputMode="numeric" onBlur={(event) => changeDefaultPort(event.target.value)} /><small>有效范围为 1～65535；已经开始的监听不会自动重启。</small></label>
+          </div>
+        </article>
+      );
+    }
+    if (activeSection === "appearance") {
+      return (
+        <article className="settings-card settings-content-card appearance-settings-card">
+          <div className="settings-section-title"><span>04</span><div><h2>界面主题</h2><p>选择适合当前环境的界面明暗与色彩层次。</p></div></div>
+          <div className="theme-card-grid" role="radiogroup" aria-label="界面主题">
+            {theme.themes.map((item, index) => {
+              const selected = theme.themeId === item.id;
+              const previewStyle = {
+                "--preview-canvas": item.preview.canvas,
+                "--preview-sidebar": item.preview.sidebar,
+                "--preview-panel": item.preview.panel,
+                "--preview-accent": item.preview.accent,
+              };
+              return (
+                <button
+                  key={item.id}
+                  ref={(element) => { themeCardRefs.current[index] = element; }}
+                  className={`theme-card ${selected ? "is-selected" : ""}`}
+                  role="radio"
+                  aria-checked={selected}
+                  tabIndex={selected ? 0 : -1}
+                  onClick={() => theme.setTheme(item.id)}
+                  onKeyDown={(event) => handleThemeKeyDown(event, index)}
+                >
+                  <span className="theme-preview" style={previewStyle} aria-hidden="true">
+                    <span className="theme-preview-sidebar"><i /><i /><i /></span>
+                    <span className="theme-preview-content"><i /><span><b /><b /></span></span>
+                  </span>
+                  <span className="theme-card-copy"><strong>{item.name}</strong><em>{item.englishName}</em><small>{item.description}</small></span>
+                  <span className="theme-card-status">{selected ? "当前使用" : "选择主题"}</span>
+                </button>
+              );
+            })}
           </div>
         </article>
       );
@@ -351,8 +406,9 @@ function SettingsPage({ state }) {
 
   return (
     <section className="content-view settings-view view-enter">
-      <header className="page-heading settings-page-heading"><div><span className="eyebrow">PREFERENCES / 03</span><h1>设置</h1><p>管理这台电脑当前可用的连接和网络行为。</p></div></header>
       <div className="settings-workspace">
+        <header className="page-heading settings-page-heading"><div><span className="eyebrow">PREFERENCES / 04</span><h1>设置</h1></div></header>
+        <header className="settings-pane-heading"><div><span className="eyebrow">AVAILABLE NOW</span><h2>{active.title}</h2><p>{active.detail}</p></div><span className="settings-pane-index">{String(sections.indexOf(active) + 1).padStart(2, "0")}</span></header>
         <nav className="settings-index" aria-label="设置分类">
           <div className="settings-index-heading"><span>设置目录</span><small>SETTINGS INDEX</small></div>
           {sections.map((section, index) => (
@@ -364,7 +420,6 @@ function SettingsPage({ state }) {
           ))}
         </nav>
         <div className="settings-pane">
-          <header className="settings-pane-heading"><div><span className="eyebrow">AVAILABLE NOW</span><h2>{active.title}</h2><p>{active.detail}</p></div><span className="settings-pane-index">{String(sections.indexOf(active) + 1).padStart(2, "0")}</span></header>
           {renderSection()}
         </div>
       </div>

@@ -179,6 +179,7 @@ export function useNativeState() {
           approvalMode: message.approvalMode || "ask",
           approvalTimeoutSeconds: Number(message.approvalTimeoutSeconds) || 30,
           defaultListenPort: Number(message.defaultListenPort) || 39000,
+          themeId: message.themeId || "nordic-mist",
         };
         setApplicationSettings(settings);
         setApplicationSettingsError("");
@@ -191,6 +192,11 @@ export function useNativeState() {
 
       if (message.type === "applicationSettingsError") {
         setApplicationSettingsError(message.message || "应用设置保存失败");
+        return;
+      }
+
+      if (message.type === "applicationThemeError") {
+        setApplicationSettingsError(message.message || "主题设置保存失败");
         return;
       }
 

@@ -37,7 +37,9 @@ KMainWindow::KMainWindow(QWidget *pParent)
 
 	m_strFrontendPath = QDir(QCoreApplication::applicationDirPath())
 		.filePath(QStringLiteral("frontend/index.html"));
-	m_pWebViewWidget->loadLocalFile(m_strFrontendPath, QStringLiteral("dashboard"));
+	m_pWebViewWidget->loadLocalFile(m_strFrontendPath,
+		QStringLiteral("dashboard"),
+		m_pComposition->applicationThemeId());
 }
 
 KMainWindow::~KMainWindow()
@@ -90,7 +92,8 @@ void KMainWindow::openRemoteDesktopWindow()
 		connect(m_pRemoteDesktopWindow, &KRemoteDesktopWindow::desktopCloseRequested,
 			this, &KMainWindow::closeRemoteDesktopWindow);
 		m_pComposition->wireRemoteDesktopWindow(m_pRemoteDesktopWindow);
-		m_pRemoteDesktopWindow->loadFrontend(m_strFrontendPath);
+		m_pRemoteDesktopWindow->loadFrontend(
+			m_strFrontendPath, m_pComposition->applicationThemeId());
 	}
 
 	m_pRemoteDesktopWindow->show();

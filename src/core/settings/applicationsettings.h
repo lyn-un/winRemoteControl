@@ -17,10 +17,13 @@ struct KApplicationSettings
 	KRemoteApprovalMode approvalMode = AskRemoteApprovalMode;
 	int nApprovalTimeoutSeconds = 30;
 	quint16 nDefaultListenPort = 39000;
+	QString strThemeId = QStringLiteral("nordic-mist");
 };
 
 QString RemoteApprovalModeName(KRemoteApprovalMode mode);
 bool RemoteApprovalModeFromName(const QString &strName, KRemoteApprovalMode *pMode);
+QString DefaultApplicationThemeId();
+bool IsApplicationThemeIdValid(const QString &strThemeId);
 KApplicationSettings SanitizeApplicationSettings(const KApplicationSettings &settings);
 
 Q_DECLARE_METATYPE(KApplicationSettings)

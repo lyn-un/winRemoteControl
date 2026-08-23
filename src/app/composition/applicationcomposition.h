@@ -2,6 +2,7 @@
 #define _WINREMOTECONTROL_APPLICATIONCOMPOSITION_H_
 
 #include <QtCore/QObject>
+#include <QtCore/QString>
 
 class KCaptureService;
 class KRemoteDesktopWindow;
@@ -29,6 +30,7 @@ public:
 	KApplicationComposition &operator=(const KApplicationComposition &) = delete;
 
 	KSessionViewModel *sessionViewModel() const;
+	QString applicationThemeId() const;
 	void wireDashboard(KWebViewWidget *pWebViewWidget);
 	void wireRemoteDesktopWindow(KRemoteDesktopWindow *pWindow);
 	void enterRemoteDesktop();

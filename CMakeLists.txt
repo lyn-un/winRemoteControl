@@ -1201,16 +1201,6 @@ if(WRC_BUILD_TESTS)
 	)
 	add_test(NAME wrc_recent_device_tests COMMAND wrc_recent_device_tests)
 
-	add_executable(wrc_application_settings_tests
-		tests/unit/applicationsettingstest.cpp
-	)
-	target_link_libraries(wrc_application_settings_tests PRIVATE
-		wrc_settings_application
-		wrc_settings_adapter
-		Qt6::Core
-	)
-	add_test(NAME wrc_application_settings_tests COMMAND wrc_application_settings_tests)
-
 	add_executable(wrc_device_security_preference_tests
 		tests/unit/devicesecuritypreferencetest.cpp
 	)
@@ -1232,6 +1222,33 @@ if(WRC_BUILD_TESTS)
 	add_test(NAME wrc_clipboard_sync_tests COMMAND wrc_clipboard_sync_tests)
 
 	endif() # WRC_BUILD_APP
+
+	add_executable(wrc_application_settings_tests
+		tests/unit/applicationsettingstest.cpp
+	)
+	if(WRC_BUILD_APP)
+		target_link_libraries(wrc_application_settings_tests PRIVATE
+			wrc_settings_application
+			wrc_settings_adapter
+			Qt6::Core
+		)
+	else()
+		target_sources(wrc_application_settings_tests PRIVATE
+			src/settings/applicationsettingsservice.cpp
+			src/settings/applicationsettingsservice.h
+			src/adapters/settings/qsettingsapplicationstore.cpp
+			src/adapters/settings/qsettingsapplicationstore.h
+		)
+		target_include_directories(wrc_application_settings_tests PRIVATE
+			"${CMAKE_CURRENT_SOURCE_DIR}/src"
+		)
+		target_link_libraries(wrc_application_settings_tests PRIVATE
+			wrc_core
+			wrc_diagnostics
+			Qt6::Core
+		)
+	endif()
+	add_test(NAME wrc_application_settings_tests COMMAND wrc_application_settings_tests)
 
 	add_executable(wrc_terminal_session_tests
 		tests/unit/terminalsessionservicetest.cpp

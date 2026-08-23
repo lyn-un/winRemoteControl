@@ -170,6 +170,11 @@ KSessionViewModel *KApplicationComposition::sessionViewModel() const
 	return m_pSessionViewModel;
 }
 
+QString KApplicationComposition::applicationThemeId() const
+{
+	return m_pApplicationSettingsService->settings().strThemeId;
+}
+
 void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 {
 	Q_ASSERT(pWebViewWidget != nullptr);
@@ -219,6 +224,8 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		m_pApplicationSettingsService, &KApplicationSettingsService::requestSettings);
 	connect(pWebViewWidget, &KWebViewWidget::updateApplicationSettingsRequested,
 		m_pApplicationSettingsService, &KApplicationSettingsService::updateSettings);
+	connect(pWebViewWidget, &KWebViewWidget::updateApplicationThemeRequested,
+		m_pApplicationSettingsService, &KApplicationSettingsService::updateTheme);
 	connect(pWebViewWidget, &KWebViewWidget::respondIncomingAccessRequestRequested,
 		m_pSessionService, &KSessionCoordinator::respondIncomingAccessRequest);
 	connect(pWebViewWidget, &KWebViewWidget::respondPairingRequestRequested,
@@ -270,6 +277,8 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		pWebViewWidget, &KWebViewWidget::sendApplicationSettingsChanged);
 	connect(m_pApplicationSettingsService, &KApplicationSettingsService::settingsError,
 		pWebViewWidget, &KWebViewWidget::sendApplicationSettingsError);
+	connect(m_pApplicationSettingsService, &KApplicationSettingsService::themeError,
+		pWebViewWidget, &KWebViewWidget::sendApplicationThemeError);
 	connect(m_pSessionService, &KSessionCoordinator::incomingAccessRequest,
 		pWebViewWidget, &KWebViewWidget::sendIncomingAccessRequest);
 	connect(m_pSessionService, &KSessionCoordinator::incomingAccessRequestCleared,
@@ -342,6 +351,8 @@ void KApplicationComposition::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWin
 		pWebViewWidget, &KWebViewWidget::sendClipboardSyncStateChanged);
 	connect(m_pClipboardSyncService, &KClipboardSyncService::syncError,
 		pWebViewWidget, &KWebViewWidget::sendClipboardSyncError);
+	connect(m_pApplicationSettingsService, &KApplicationSettingsService::settingsChanged,
+		pWebViewWidget, &KWebViewWidget::sendApplicationSettingsChanged);
 	connect(m_pSessionViewModel, &KSessionViewModel::statusChanged,
 		pWebViewWidget, &KWebViewWidget::sendStatusChanged);
 	connect(m_pSessionViewModel, &KSessionViewModel::errorOccurred,
