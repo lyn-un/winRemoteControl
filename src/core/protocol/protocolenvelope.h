@@ -11,7 +11,8 @@ enum KProtocolChannel
 	SignalingProtocolChannel,
 	InputProtocolChannel,
 	SessionProtocolChannel,
-	ClipboardProtocolChannel
+	ClipboardProtocolChannel,
+	FileControlProtocolChannel
 };
 
 struct KProtocolEnvelope

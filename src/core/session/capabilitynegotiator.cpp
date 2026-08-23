@@ -69,6 +69,8 @@ KCapabilityNegotiationResult KCapabilityNegotiator::negotiate(
 	negotiated.bUnicodeText = localCapabilities.bUnicodeText && remoteCapabilities.bUnicodeText;
 	negotiated.bMouseButtons = localCapabilities.bMouseButtons && remoteCapabilities.bMouseButtons;
 	negotiated.bMouseWheel = localCapabilities.bMouseWheel && remoteCapabilities.bMouseWheel;
+	negotiated.bFileTransfer = negotiated.channels.contains(QStringLiteral("file-control"))
+		&& negotiated.channels.contains(QStringLiteral("file-data"));
 	for (const QString &strMode : localCapabilities.supportedPrivacyModes)
 	{
 		if ((strMode == QStringLiteral("disabled")

@@ -462,8 +462,13 @@ bool KDeviceAuthenticationFlow::inspectPeerTrust(
 		m_context.bRequestWithinTrust = false;
 		return true;
 	}
+	// File transfer was introduced after the original trust-store schema. Treat it
+	// as an optional capability when deciding whether an existing trusted device
+	// may use automatic access; the final permission intersection still removes it.
+	KPermissionScopes accessPermissions = m_context.requestedPermissions;
+	accessPermissions.setFlag(FileTransferPermissionScope, false);
 	m_context.bRequestWithinTrust =
-		(m_context.requestedPermissions & ~pTrusted->permissionLimit).toInt() == 0;
+		(accessPermissions & ~pTrusted->permissionLimit).toInt() == 0;
 	return true;
 }
 

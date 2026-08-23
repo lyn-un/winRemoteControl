@@ -84,6 +84,12 @@ add_library(wrc_protocol STATIC
 	src/core/protocol/accessmessage.h
 	src/core/protocol/clipboardmessage.cpp
 	src/core/protocol/clipboardmessage.h
+	src/core/protocol/filetransfercontrolmessage.cpp
+	src/core/protocol/filetransfercontrolmessage.h
+	src/core/protocol/filetransferdataframe.cpp
+	src/core/protocol/filetransferdataframe.h
+	src/core/protocol/filetransferlifecyclemessage.cpp
+	src/core/protocol/filetransferlifecyclemessage.h
 	src/core/protocol/landiscoverymessage.cpp
 	src/core/protocol/landiscoverymessage.h
 	src/core/protocol/protocolenvelope.cpp

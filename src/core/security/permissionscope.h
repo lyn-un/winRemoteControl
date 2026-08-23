@@ -10,7 +10,8 @@ enum KPermissionScope
 	ViewScreenPermissionScope = 0x01,
 	InputControlPermissionScope = 0x02,
 	ClipboardPermissionScope = 0x04,
-	TerminalPermissionScope = 0x08
+	TerminalPermissionScope = 0x08,
+	FileTransferPermissionScope = 0x10
 };
 
 Q_DECLARE_FLAGS(KPermissionScopes, KPermissionScope)
@@ -20,7 +21,8 @@ constexpr quint32 kAllPermissionScopeBits =
 	ViewScreenPermissionScope
 	| InputControlPermissionScope
 	| ClipboardPermissionScope
-	| TerminalPermissionScope;
+	| TerminalPermissionScope
+	| FileTransferPermissionScope;
 
 QStringList PermissionScopeNames(KPermissionScopes permissions);
 bool PermissionScopesFromNames(const QStringList &names,

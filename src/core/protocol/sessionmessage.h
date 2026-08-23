@@ -74,6 +74,7 @@ struct KNegotiatedCapabilities
 	bool bUnicodeText = false;
 	bool bMouseButtons = false;
 	bool bMouseWheel = false;
+	bool bFileTransfer = false;
 	QStringList supportedPrivacyModes;
 	bool bPostSessionLock = false;
 };

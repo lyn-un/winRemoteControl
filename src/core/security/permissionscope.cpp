@@ -11,6 +11,8 @@ QStringList PermissionScopeNames(KPermissionScopes permissions)
 		names.append(QStringLiteral("clipboard"));
 	if (permissions.testFlag(TerminalPermissionScope))
 		names.append(QStringLiteral("terminal"));
+	if (permissions.testFlag(FileTransferPermissionScope))
+		names.append(QStringLiteral("fileTransfer"));
 	return names;
 }
 
@@ -31,6 +33,8 @@ bool PermissionScopesFromNames(const QStringList &names,
 			permissions |= ClipboardPermissionScope;
 		else if (strName == QStringLiteral("terminal"))
 			permissions |= TerminalPermissionScope;
+		else if (strName == QStringLiteral("fileTransfer"))
+			permissions |= FileTransferPermissionScope;
 		else
 			return false;
 	}

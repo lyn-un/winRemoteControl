@@ -12,6 +12,7 @@ public:
 	static constexpr int kMaximumInputMessageBytes = 4096;
 	static constexpr int kMaximumSessionMessageBytes = 160 * 1024;
 	static constexpr int kMaximumClipboardMessageBytes = 2 * 1024 * 1024;
+	static constexpr int kMaximumFileControlMessageBytes = 128 * 1024;
 	static constexpr int kMaximumSignalingMessageBytes = 256 * 1024;
 	static constexpr int kMaximumDataChannelMessageBytes = kMaximumClipboardMessageBytes;
 	static constexpr int kMaximumWallpaperBase64Bytes = 96 * 1024;

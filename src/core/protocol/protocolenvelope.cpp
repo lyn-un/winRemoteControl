@@ -28,6 +28,8 @@ namespace
 			return KProtocolConstraints::kMaximumSessionMessageBytes;
 		if (channel == ClipboardProtocolChannel)
 			return KProtocolConstraints::kMaximumClipboardMessageBytes;
+		if (channel == FileControlProtocolChannel)
+			return KProtocolConstraints::kMaximumFileControlMessageBytes;
 		return 0;
 	}
 
@@ -192,5 +194,7 @@ QString KProtocolEnvelopeCodec::channelName(KProtocolChannel channel)
 		return QStringLiteral("session");
 	if (channel == ClipboardProtocolChannel)
 		return QStringLiteral("clipboard");
+	if (channel == FileControlProtocolChannel)
+		return QStringLiteral("file-control");
 	return QStringLiteral("invalid");
 }
