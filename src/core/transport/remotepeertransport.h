@@ -7,6 +7,8 @@
 #include "core/media/videoframe.h"
 #include "core/protocol/inputmessage.h"
 #include "core/protocol/clipboardmessage.h"
+#include "core/protocol/filetransfercontrolmessage.h"
+#include "core/protocol/filetransferlifecyclemessage.h"
 #include "core/protocol/sessionmessage.h"
 #include "core/protocol/terminalmessage.h"
 #include "core/protocol/webrtcsignalingmessage.h"
@@ -50,6 +52,13 @@ public:
 		const KTerminalMessage &message) = 0;
 	virtual bool sendTerminalData(const QByteArray &data) = 0;
 	virtual bool terminalBackpressured() const = 0;
+	virtual bool ensureFileTransferChannels() { return false; }
+	virtual KSessionMessageSendStatus sendFileTransferLifecycleMessage(
+		const KFileTransferLifecycleMessage &) { return SessionMessageChannelUnavailable; }
+	virtual bool sendFileTransferControlMessage(
+		const KFileTransferControlMessage &) { return false; }
+	virtual bool sendFileTransferData(const QByteArray &) { return false; }
+	virtual bool fileTransferBackpressured() const { return false; }
 	virtual KSessionMessageSendStatus sendSessionMessage(
 		const KSessionMessage &message) = 0;
 	virtual void setInputRealtimeEnabled(bool bEnabled) = 0;
@@ -74,6 +83,15 @@ signals:
 	void terminalDataReceived(quint64 nGeneration, const QByteArray &data);
 	void terminalChannelChanged(quint64 nGeneration, bool bOpen);
 	void terminalLowWatermarkReached(quint64 nGeneration);
+	void fileTransferLifecycleMessageReceived(quint64 nGeneration,
+		const KFileTransferLifecycleMessage &message);
+	void fileTransferControlMessageReceived(quint64 nGeneration,
+		const KFileTransferControlMessage &message);
+	void fileTransferDataReceived(quint64 nGeneration, const QByteArray &data);
+	void fileTransferChannelsChanged(quint64 nGeneration,
+		bool bControlOpen,
+		bool bDataOpen);
+	void fileTransferLowWatermarkReached(quint64 nGeneration);
 	void sessionMessageReceived(quint64 nGeneration, const KSessionMessage &message);
 	void sessionChannelChanged(quint64 nGeneration, bool bOpen);
 	void connectionInterrupted(quint64 nGeneration);

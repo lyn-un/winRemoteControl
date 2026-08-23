@@ -50,6 +50,11 @@ void KWebRtcDataChannel::clear()
 		emit openChanged(false);
 }
 
+bool KWebRtcDataChannel::hasChannel() const
+{
+	return m_spChannel != nullptr;
+}
+
 bool KWebRtcDataChannel::isOpen() const
 {
 	return m_spChannel != nullptr

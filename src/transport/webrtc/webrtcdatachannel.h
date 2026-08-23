@@ -26,6 +26,7 @@ public:
 
 	void setChannel(webrtc::scoped_refptr<webrtc::DataChannelInterface> spChannel);
 	void clear();
+	bool hasChannel() const;
 	bool isOpen() const;
 	bool sendText(const QString &strMessage);
 	bool sendBinary(const QByteArray &data);

@@ -61,6 +61,13 @@ public:
 		const KTerminalMessage &message) override;
 	bool sendTerminalData(const QByteArray &data) override;
 	bool terminalBackpressured() const override;
+	bool ensureFileTransferChannels() override;
+	KSessionMessageSendStatus sendFileTransferLifecycleMessage(
+		const KFileTransferLifecycleMessage &message) override;
+	bool sendFileTransferControlMessage(
+		const KFileTransferControlMessage &message) override;
+	bool sendFileTransferData(const QByteArray &data) override;
+	bool fileTransferBackpressured() const override;
 	KSessionMessageSendStatus sendSessionMessage(const KSessionMessage &message) override;
 	void setInputRealtimeEnabled(bool bEnabled) override;
 	void setStreamConfig(const KStreamConfig &config) override;
@@ -102,6 +109,8 @@ private:
 	bool createSessionDataChannel(QString *pErrorMessage);
 	bool createClipboardDataChannel(QString *pErrorMessage);
 	bool createTerminalDataChannel(QString *pErrorMessage);
+	bool createFileTransferControlDataChannel(QString *pErrorMessage);
+	bool createFileTransferDataDataChannel(QString *pErrorMessage);
 	bool addLocalVideoTrack(QString *pErrorMessage);
 	bool addRemoteVideoReceiver(QString *pErrorMessage);
 	void handleInputChannelChanged(bool bOpen);
@@ -109,6 +118,7 @@ private:
 	void handleSessionChannelChanged(bool bOpen);
 	void handleClipboardChannelChanged(bool bOpen);
 	void handleTerminalChannelChanged(bool bOpen);
+	void handleFileTransferChannelChanged();
 	void handleInputChannelMessage(const QString &strMessage);
 	void handleRealtimeInputChannelMessage(const QString &strMessage);
 	void handleSessionChannelMessage(const QString &strMessage);
@@ -118,6 +128,10 @@ private:
 	KProtocolHandlerResult decodeSessionMessage(const KProtocolEnvelope &envelope);
 	KProtocolHandlerResult decodeClipboardMessage(const KProtocolEnvelope &envelope);
 	KProtocolHandlerResult decodeTerminalMessage(const KProtocolEnvelope &envelope);
+	KProtocolHandlerResult decodeFileTransferLifecycleMessage(
+		const KProtocolEnvelope &envelope);
+	KProtocolHandlerResult decodeFileTransferControlMessage(
+		const KProtocolEnvelope &envelope);
 	KProtocolHandlerResult handleLatencyMessage(const KProtocolEnvelope &envelope);
 	void routeDataMessage(KProtocolChannel channel,
 		const QString &strMessage,
@@ -168,6 +182,8 @@ private:
 	KWebRtcDataChannel *m_pSessionDataChannel = nullptr;
 	KWebRtcDataChannel *m_pClipboardDataChannel = nullptr;
 	KWebRtcDataChannel *m_pTerminalDataChannel = nullptr;
+	KWebRtcDataChannel *m_pFileTransferControlDataChannel = nullptr;
+	KWebRtcDataChannel *m_pFileTransferDataDataChannel = nullptr;
 	KWebRtcRemoteFrameProcessor *m_pRemoteFrameProcessor = nullptr;
 	std::unique_ptr<KWebRtcLatencyProbe> m_spLatencyProbe;
 	webrtc::scoped_refptr<KWebRtcVideoSource> m_spVideoSource;
@@ -180,6 +196,8 @@ private:
 	std::atomic_int m_nInvalidSessionMessages = 0;
 	std::atomic_int m_nInvalidClipboardMessages = 0;
 	std::atomic_int m_nInvalidTerminalMessages = 0;
+	std::atomic_int m_nInvalidFileTransferControlMessages = 0;
+	std::atomic_int m_nInvalidFileTransferDataMessages = 0;
 	std::atomic_bool m_bProtocolTerminationPending = false;
 	std::atomic_bool m_bInputRealtimeEnabled = false;
 	KOutboundMessageQueue m_inputSendQueue { 256, 64 * 1024 };

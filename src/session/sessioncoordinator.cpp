@@ -950,6 +950,72 @@ bool KSessionCoordinator::isTerminalBackpressured() const
 	return m_spRemotePeerTransport->terminalBackpressured();
 }
 
+bool KSessionCoordinator::ensureFileTransferChannels()
+{
+	if (m_sessionStateMachine.role() != ControllerSessionRole
+		|| !hasPermission(FileTransferPermissionScope)
+		|| !m_pCapabilitySessionFlow->isComplete())
+	{
+		if (!hasPermission(FileTransferPermissionScope))
+			publishPermissionDenied(QStringLiteral("file_transfer_open"));
+		return false;
+	}
+	const QStringList &channels =
+		m_pCapabilitySessionFlow->negotiatedCapabilities().channels;
+	if (!channels.contains(QStringLiteral("file-control"))
+		|| !channels.contains(QStringLiteral("file-data")))
+	{
+		return false;
+	}
+	return m_spRemotePeerTransport->ensureFileTransferChannels();
+}
+
+bool KSessionCoordinator::sendFileTransferLifecycleMessage(
+	const KFileTransferLifecycleMessage &message)
+{
+	if (!hasPermission(FileTransferPermissionScope)
+		|| !m_pCapabilitySessionFlow->isComplete())
+	{
+		if (!hasPermission(FileTransferPermissionScope))
+			publishPermissionDenied(QStringLiteral("file_transfer_lifecycle_send"));
+		return false;
+	}
+	return m_spRemotePeerTransport->sendFileTransferLifecycleMessage(message)
+		== KRemotePeerTransport::SessionMessageAccepted;
+}
+
+bool KSessionCoordinator::sendFileTransferControlMessage(
+	const KFileTransferControlMessage &message)
+{
+	if (!hasPermission(FileTransferPermissionScope)
+		|| !m_bFileTransferControlChannelOpen
+		|| !m_pCapabilitySessionFlow->isComplete())
+	{
+		if (!hasPermission(FileTransferPermissionScope))
+			publishPermissionDenied(QStringLiteral("file_transfer_control_send"));
+		return false;
+	}
+	return m_spRemotePeerTransport->sendFileTransferControlMessage(message);
+}
+
+bool KSessionCoordinator::sendFileTransferData(const QByteArray &data)
+{
+	if (!hasPermission(FileTransferPermissionScope)
+		|| !m_bFileTransferDataChannelOpen
+		|| !m_pCapabilitySessionFlow->isComplete())
+	{
+		if (!hasPermission(FileTransferPermissionScope))
+			publishPermissionDenied(QStringLiteral("file_transfer_data_send"));
+		return false;
+	}
+	return m_spRemotePeerTransport->sendFileTransferData(data);
+}
+
+bool KSessionCoordinator::isFileTransferBackpressured() const
+{
+	return m_spRemotePeerTransport->fileTransferBackpressured();
+}
+
 QString KSessionCoordinator::sendSessionMessage(KSessionMessage message)
 {
 	return m_pSessionCommandDispatcher->send(std::move(message),
@@ -1253,8 +1319,10 @@ void KSessionCoordinator::continueStoppingTeardown()
 	m_bClipboardChannelOpen = false;
 	m_bTerminalChannelOpen = false;
 	m_bTerminalChannelStatePublished = false;
+	m_bFileTransferControlChannelOpen = false;
+	m_bFileTransferDataChannelOpen = false;
+	m_bFileTransferChannelStatePublished = false;
 	m_bSessionChannelOpen = false;
-	m_bTerminalChannelStatePublished = false;
 	emit sessionCapabilitiesChanged(KNegotiatedCapabilities());
 	m_pSessionCommandDispatcher->failAll(QStringLiteral("session_stopping"));
 	m_pShutdownCoordinator->begin(nGeneration,
@@ -1262,6 +1330,7 @@ void KSessionCoordinator::continueStoppingTeardown()
 	m_pMediaSessionController->stopCapture(nGeneration);
 	m_pMediaSessionController->reset();
 	emit sessionChannelChanged(false);
+	emit fileTransferChannelsChanged(false, false);
 	emit networkStatsReady(KNetworkStats());
 	m_pPeerLifecycleController->requestShutdown(nGeneration);
 }
@@ -1584,6 +1653,76 @@ void KSessionCoordinator::wirePeer()
 			if (nGeneration == m_nActivePeerGeneration)
 				emit terminalLowWatermarkReached();
 		});
+	connect(pTransport, &KRemotePeerTransport::fileTransferLifecycleMessageReceived,
+		this, [this](quint64 nGeneration,
+			const KFileTransferLifecycleMessage &message)
+		{
+			if (nGeneration == m_nActivePeerGeneration
+				&& hasPermission(FileTransferPermissionScope))
+			{
+				emit fileTransferLifecycleMessageReceived(message);
+			}
+			else if (nGeneration == m_nActivePeerGeneration)
+			{
+				publishPermissionDenied(QStringLiteral("file_transfer_lifecycle_receive"));
+			}
+		});
+	connect(pTransport, &KRemotePeerTransport::fileTransferControlMessageReceived,
+		this, [this](quint64 nGeneration,
+			const KFileTransferControlMessage &message)
+		{
+			if (nGeneration == m_nActivePeerGeneration
+				&& hasPermission(FileTransferPermissionScope)
+				&& m_bFileTransferControlChannelOpen)
+			{
+				emit fileTransferControlMessageReceived(message);
+			}
+			else if (nGeneration == m_nActivePeerGeneration)
+			{
+				publishPermissionDenied(QStringLiteral("file_transfer_control_receive"));
+			}
+		});
+	connect(pTransport, &KRemotePeerTransport::fileTransferDataReceived,
+		this, [this](quint64 nGeneration, const QByteArray &data)
+		{
+			if (nGeneration == m_nActivePeerGeneration
+				&& hasPermission(FileTransferPermissionScope)
+				&& m_bFileTransferDataChannelOpen)
+			{
+				emit fileTransferDataReceived(data);
+			}
+			else if (nGeneration == m_nActivePeerGeneration)
+			{
+				publishPermissionDenied(QStringLiteral("file_transfer_data_receive"));
+			}
+		});
+	connect(pTransport, &KRemotePeerTransport::fileTransferChannelsChanged,
+		this, [this](quint64 nGeneration, bool bControlOpen, bool bDataOpen)
+		{
+			if (nGeneration != m_nActivePeerGeneration)
+				return;
+			m_bFileTransferControlChannelOpen = bControlOpen;
+			m_bFileTransferDataChannelOpen = bDataOpen;
+			if (!m_pCapabilitySessionFlow->isComplete())
+				return;
+			const QStringList &channels =
+				m_pCapabilitySessionFlow->negotiatedCapabilities().channels;
+			const bool bAvailable = bControlOpen && bDataOpen
+				&& hasPermission(FileTransferPermissionScope)
+				&& channels.contains(QStringLiteral("file-control"))
+				&& channels.contains(QStringLiteral("file-data"));
+			if (bAvailable || m_bFileTransferChannelStatePublished)
+			{
+				m_bFileTransferChannelStatePublished = bAvailable;
+				emit fileTransferChannelsChanged(bAvailable, bAvailable);
+			}
+		});
+	connect(pTransport, &KRemotePeerTransport::fileTransferLowWatermarkReached,
+		this, [this](quint64 nGeneration)
+		{
+			if (nGeneration == m_nActivePeerGeneration)
+				emit fileTransferLowWatermarkReached();
+		});
 	connect(pTransport, &KRemotePeerTransport::sessionMessageReceived,
 		this, [this](quint64 nGeneration, const KSessionMessage &message)
 		{
@@ -1795,6 +1934,11 @@ void KSessionCoordinator::completeCapabilityNegotiation(
 		effectivePermissions.setFlag(ClipboardPermissionScope, false);
 	if (!capabilities.channels.contains(QStringLiteral("terminal")))
 		effectivePermissions.setFlag(TerminalPermissionScope, false);
+	if (!capabilities.channels.contains(QStringLiteral("file-control"))
+		|| !capabilities.channels.contains(QStringLiteral("file-data")))
+	{
+		effectivePermissions.setFlag(FileTransferPermissionScope, false);
+	}
 	if (!capabilities.bKeyboard && !capabilities.bUnicodeText
 		&& !capabilities.bMouseButtons && !capabilities.bMouseWheel)
 	{
@@ -1804,6 +1948,12 @@ void KSessionCoordinator::completeCapabilityNegotiation(
 	m_pMediaSessionController->setCapabilities(capabilities);
 	m_bTerminalChannelStatePublished = m_bTerminalChannelOpen
 		&& capabilities.channels.contains(QStringLiteral("terminal"));
+	m_bFileTransferChannelStatePublished =
+		m_bFileTransferControlChannelOpen
+		&& m_bFileTransferDataChannelOpen
+		&& capabilities.channels.contains(QStringLiteral("file-control"))
+		&& capabilities.channels.contains(QStringLiteral("file-data"))
+		&& effectivePermissions.testFlag(FileTransferPermissionScope);
 	m_spRemotePeerTransport->setInputRealtimeEnabled(capabilities.bInputRealtime);
 	if (!m_sessionStateMachine.markConnected())
 		return;
@@ -1814,6 +1964,9 @@ void KSessionCoordinator::completeCapabilityNegotiation(
 		&& hasPermission(ClipboardPermissionScope)
 		&& capabilities.bClipboardText);
 	emit terminalChannelChanged(m_bTerminalChannelStatePublished);
+	emit fileTransferChannelsChanged(
+		m_bFileTransferChannelStatePublished,
+		m_bFileTransferChannelStatePublished);
 	const quint64 nGeneration = m_sessionStateMachine.generation();
 	if (m_sessionStateMachine.role() == ControlledSessionRole)
 	{
@@ -1860,7 +2013,8 @@ KSessionCapabilities KSessionCoordinator::localCapabilities() const
 	capabilities.supportedCodecs = { QStringLiteral("h264") };
 	capabilities.supportedChannels = {
 		QStringLiteral("video"), QStringLiteral("session"), QStringLiteral("input"),
-		QStringLiteral("input-realtime"), QStringLiteral("clipboard")
+		QStringLiteral("input-realtime"), QStringLiteral("clipboard"),
+		QStringLiteral("file-control"), QStringLiteral("file-data")
 	};
 	capabilities.supportedPrivacyModes = { QStringLiteral("disabled") };
 	if (hasPermission(ViewScreenPermissionScope)
@@ -1893,6 +2047,11 @@ KSessionCapabilities KSessionCoordinator::localCapabilities() const
 	}
 	if (!hasPermission(TerminalPermissionScope))
 		capabilities.supportedChannels.removeAll(QStringLiteral("terminal"));
+	if (!hasPermission(FileTransferPermissionScope))
+	{
+		capabilities.supportedChannels.removeAll(QStringLiteral("file-control"));
+		capabilities.supportedChannels.removeAll(QStringLiteral("file-data"));
+	}
 	if (!hasPermission(InputControlPermissionScope))
 	{
 		capabilities.bInputRealtime = false;

@@ -100,6 +100,8 @@ namespace
 	constexpr char kSessionChannelLabel[] = "session";
 	constexpr char kClipboardChannelLabel[] = "clipboard";
 	constexpr char kTerminalChannelLabel[] = "terminal";
+	constexpr char kFileTransferControlChannelLabel[] = "file-control";
+	constexpr char kFileTransferDataChannelLabel[] = "file-data";
 	constexpr int kStatsPollingIntervalMs = 1000;
 	constexpr int kBitsPerKilobit = 1000;
 	constexpr int kReceiverMaxFrameRateFps = 60;
@@ -115,6 +117,8 @@ namespace
 	constexpr quint64 kClipboardHighWatermarkBytes = 512 * 1024;
 	constexpr quint64 kTerminalLowWatermarkBytes = 128 * 1024;
 	constexpr quint64 kTerminalHighWatermarkBytes = 256 * 1024;
+	constexpr quint64 kFileTransferLowWatermarkBytes = 256 * 1024;
+	constexpr quint64 kFileTransferHighWatermarkBytes = 1024 * 1024;
 	constexpr char kPlayoutDelayUri[] = "http://www.webrtc.org/experiments/rtp-hdrext/playout-delay";
 
 	static int secondsToMs(double fSeconds)
@@ -366,6 +370,9 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 	, m_pClipboardDataChannel(new KWebRtcDataChannel(
 		KProtocolConstraints::kMaximumClipboardMessageBytes, this))
 	, m_pTerminalDataChannel(new KWebRtcDataChannel(64 * 1024, this))
+	, m_pFileTransferControlDataChannel(new KWebRtcDataChannel(
+		KProtocolConstraints::kMaximumFileControlMessageBytes, this))
+	, m_pFileTransferDataDataChannel(new KWebRtcDataChannel(64 * 1024, this))
 	, m_pRemoteFrameProcessor(new KWebRtcRemoteFrameProcessor(this))
 	, m_spLatencyProbe(std::make_unique<KWebRtcLatencyProbe>())
 {
@@ -443,6 +450,44 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 			[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
 			{ return decodeTerminalMessage(envelope); });
 	}
+	for (KFileTransferLifecycleMessageType type : {
+		OpenRequestFileTransferLifecycleMessageType,
+		OpenAcceptedFileTransferLifecycleMessageType,
+		OpenRejectedFileTransferLifecycleMessageType,
+		CloseFileTransferLifecycleMessageType,
+		StoppedFileTransferLifecycleMessageType,
+		ErrorFileTransferLifecycleMessageType })
+	{
+		m_protocolRouter.registerHandler(SessionProtocolChannel,
+			KFileTransferLifecycleMessageCodec::typeName(type), allowMessage,
+			[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
+			{ return decodeFileTransferLifecycleMessage(envelope); });
+	}
+	for (KFileTransferControlMessageType type : {
+		ListRootsRequestFileTransferControlMessageType,
+		ListRootsResponseFileTransferControlMessageType,
+		ListDirectoryRequestFileTransferControlMessageType,
+		ListDirectoryResponseFileTransferControlMessageType,
+		CopyRequestFileTransferControlMessageType,
+		CopyPlanBeginFileTransferControlMessageType,
+		CopyPlanDirectoryFileTransferControlMessageType,
+		CopyPlanEndFileTransferControlMessageType,
+		FileBeginFileTransferControlMessageType,
+		AckFileTransferControlMessageType,
+		PauseFileTransferControlMessageType,
+		ResumeFileTransferControlMessageType,
+		CancelFileTransferControlMessageType,
+		ConflictFileTransferControlMessageType,
+		ConflictResolutionFileTransferControlMessageType,
+		FileCompleteFileTransferControlMessageType,
+		TaskCompleteFileTransferControlMessageType,
+		ErrorFileTransferControlMessageType })
+	{
+		m_protocolRouter.registerHandler(FileControlProtocolChannel,
+			KFileTransferControlMessageCodec::typeName(type), allowMessage,
+			[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
+			{ return decodeFileTransferControlMessage(envelope); });
+	}
 
 	m_pInputDataChannel->setBufferWatermarks(
 		kInputLowWatermarkBytes, kInputHighWatermarkBytes);
@@ -454,6 +499,10 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 		kClipboardLowWatermarkBytes, kClipboardHighWatermarkBytes);
 	m_pTerminalDataChannel->setBufferWatermarks(
 		kTerminalLowWatermarkBytes, kTerminalHighWatermarkBytes);
+	m_pFileTransferControlDataChannel->setBufferWatermarks(
+		kFileTransferLowWatermarkBytes, kFileTransferHighWatermarkBytes);
+	m_pFileTransferDataDataChannel->setBufferWatermarks(
+		kFileTransferLowWatermarkBytes, kFileTransferHighWatermarkBytes);
 	connect(m_pInputDataChannel, &KWebRtcDataChannel::openChanged,
 		this, &KWebRtcPeer::handleInputChannelChanged);
 	connect(m_pInputDataChannel, &KWebRtcDataChannel::textMessageReceived,
@@ -515,6 +564,33 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 		});
 	connect(m_pTerminalDataChannel, &KWebRtcDataChannel::lowWatermarkReached,
 		this, [this]() { emit terminalLowWatermarkReached(m_nGeneration.load()); });
+	connect(m_pFileTransferControlDataChannel, &KWebRtcDataChannel::openChanged,
+		this, [this](bool) { handleFileTransferChannelChanged(); });
+	connect(m_pFileTransferControlDataChannel, &KWebRtcDataChannel::textMessageReceived,
+		this, [this](const QString &strMessage)
+		{ routeDataMessage(FileControlProtocolChannel, strMessage,
+			&m_nInvalidFileTransferControlMessages); });
+	connect(m_pFileTransferControlDataChannel, &KWebRtcDataChannel::messageRejected,
+		this, [this](int nMessageBytes, const QString &strReason)
+		{
+			handleProtocolReject(QStringLiteral("file-control"), nMessageBytes,
+				strReason, &m_nInvalidFileTransferControlMessages);
+		});
+	connect(m_pFileTransferControlDataChannel, &KWebRtcDataChannel::lowWatermarkReached,
+		this, [this]() { emit fileTransferLowWatermarkReached(m_nGeneration.load()); });
+	connect(m_pFileTransferDataDataChannel, &KWebRtcDataChannel::openChanged,
+		this, [this](bool) { handleFileTransferChannelChanged(); });
+	connect(m_pFileTransferDataDataChannel, &KWebRtcDataChannel::binaryMessageReceived,
+		this, [this](const QByteArray &data)
+		{ emit fileTransferDataReceived(m_nGeneration.load(), data); });
+	connect(m_pFileTransferDataDataChannel, &KWebRtcDataChannel::messageRejected,
+		this, [this](int nMessageBytes, const QString &strReason)
+		{
+			handleProtocolReject(QStringLiteral("file-data"), nMessageBytes,
+				strReason, &m_nInvalidFileTransferDataMessages);
+		});
+	connect(m_pFileTransferDataDataChannel, &KWebRtcDataChannel::lowWatermarkReached,
+		this, [this]() { emit fileTransferLowWatermarkReached(m_nGeneration.load()); });
 	connect(m_pRemoteFrameProcessor, &KWebRtcRemoteFrameProcessor::frameReady,
 		this, [this](const KDecodedVideoFrame &frame)
 		{ emit remoteFrameReady(m_nGeneration.load(), frame); });
@@ -692,6 +768,8 @@ void KWebRtcPeer::requestShutdown(quint64 nGeneration)
 	m_nInvalidSessionMessages = 0;
 	m_nInvalidClipboardMessages = 0;
 	m_nInvalidTerminalMessages = 0;
+	m_nInvalidFileTransferControlMessages = 0;
+	m_nInvalidFileTransferDataMessages = 0;
 	m_bProtocolTerminationPending = false;
 	m_bInputRealtimeEnabled = false;
 	m_pInputDataChannel->clear();
@@ -699,6 +777,8 @@ void KWebRtcPeer::requestShutdown(quint64 nGeneration)
 	m_pSessionDataChannel->clear();
 	m_pClipboardDataChannel->clear();
 	m_pTerminalDataChannel->clear();
+	m_pFileTransferControlDataChannel->clear();
+	m_pFileTransferDataDataChannel->clear();
 
 	if (m_spPeerConnection)
 		m_spPeerConnection->Close();
@@ -908,6 +988,76 @@ bool KWebRtcPeer::sendTerminalData(const QByteArray &data)
 bool KWebRtcPeer::terminalBackpressured() const
 {
 	return m_pTerminalDataChannel->isBackpressured();
+}
+
+bool KWebRtcPeer::ensureFileTransferChannels()
+{
+	if (m_role != ControllerSessionRole
+		|| m_lifecycleState != ReadyWebRtcPeerLifecycleState
+		|| !m_spPeerConnection)
+	{
+		return false;
+	}
+
+	QString strError;
+	if (!m_pFileTransferControlDataChannel->hasChannel()
+		&& !createFileTransferControlDataChannel(&strError))
+	{
+		KSessionTraceLogger::write(roleToString(m_role),
+			QStringLiteral("file_transfer_channel"), QStringLiteral("create_failed"),
+			-1, QStringLiteral("channel=control error=%1").arg(strError));
+		return false;
+	}
+	if (!m_pFileTransferDataDataChannel->hasChannel()
+		&& !createFileTransferDataDataChannel(&strError))
+	{
+		m_pFileTransferControlDataChannel->clear();
+		KSessionTraceLogger::write(roleToString(m_role),
+			QStringLiteral("file_transfer_channel"), QStringLiteral("create_failed"),
+			-1, QStringLiteral("channel=data error=%1").arg(strError));
+		return false;
+	}
+	return true;
+}
+
+KRemotePeerTransport::KSessionMessageSendStatus
+KWebRtcPeer::sendFileTransferLifecycleMessage(
+	const KFileTransferLifecycleMessage &message)
+{
+	KOutboundMessage queuedMessage;
+	queuedMessage.strPayload = KFileTransferLifecycleMessageCodec::encode(message);
+	queuedMessage.bReliable = true;
+	if (!m_pSessionDataChannel->isOpen())
+		return SessionMessageChannelUnavailable;
+	if (!m_sessionSendQueue.isEmpty() || m_pSessionDataChannel->isBackpressured())
+	{
+		return m_sessionSendQueue.enqueue(queuedMessage) == OverflowOutboundMessage
+			? SessionMessageQueueOverflow : SessionMessageAccepted;
+	}
+	return m_pSessionDataChannel->sendText(queuedMessage.strPayload)
+		? SessionMessageAccepted : SessionMessageTransportFailed;
+}
+
+bool KWebRtcPeer::sendFileTransferControlMessage(
+	const KFileTransferControlMessage &message)
+{
+	if (m_pFileTransferControlDataChannel->isBackpressured())
+		return false;
+	return m_pFileTransferControlDataChannel->sendText(
+		KFileTransferControlMessageCodec::encode(message));
+}
+
+bool KWebRtcPeer::sendFileTransferData(const QByteArray &data)
+{
+	if (m_pFileTransferDataDataChannel->isBackpressured())
+		return false;
+	return m_pFileTransferDataDataChannel->sendBinary(data);
+}
+
+bool KWebRtcPeer::fileTransferBackpressured() const
+{
+	return m_pFileTransferControlDataChannel->isBackpressured()
+		|| m_pFileTransferDataDataChannel->isBackpressured();
 }
 
 bool KWebRtcPeer::enqueueInputMessage(const QString &strPayload, bool bMouseMove)
@@ -1267,6 +1417,26 @@ void KWebRtcPeer::OnDataChannel(webrtc::scoped_refptr<webrtc::DataChannelInterfa
 		m_pClipboardDataChannel->setChannel(channel);
 	else if (channel->label() == kTerminalChannelLabel)
 		m_pTerminalDataChannel->setChannel(channel);
+	else if (channel->label() == kFileTransferControlChannelLabel)
+	{
+		if (m_role != ControlledSessionRole
+			|| m_pFileTransferControlDataChannel->hasChannel())
+		{
+			channel->Close();
+			return;
+		}
+		m_pFileTransferControlDataChannel->setChannel(channel);
+	}
+	else if (channel->label() == kFileTransferDataChannelLabel)
+	{
+		if (m_role != ControlledSessionRole
+			|| m_pFileTransferDataDataChannel->hasChannel())
+		{
+			channel->Close();
+			return;
+		}
+		m_pFileTransferDataDataChannel->setChannel(channel);
+	}
 }
 
 void KWebRtcPeer::OnRenegotiationNeeded()
@@ -1399,6 +1569,13 @@ void KWebRtcPeer::handleTerminalChannelChanged(bool bOpen)
 	emit terminalChannelChanged(m_nGeneration.load(), bOpen);
 }
 
+void KWebRtcPeer::handleFileTransferChannelChanged()
+{
+	emit fileTransferChannelsChanged(m_nGeneration.load(),
+		m_pFileTransferControlDataChannel->isOpen(),
+		m_pFileTransferDataDataChannel->isOpen());
+}
+
 void KWebRtcPeer::handleSessionChannelMessage(const QString &strMessage)
 {
 	routeDataMessage(SessionProtocolChannel, strMessage, &m_nInvalidSessionMessages);
@@ -1421,6 +1598,28 @@ KProtocolHandlerResult KWebRtcPeer::decodeTerminalMessage(const KProtocolEnvelop
 	if (!KTerminalMessageCodec::decode(envelope, &message, &strError))
 		return KProtocolHandlerResult::failure(ProtocolHandlerDecodeFailed, strError);
 	emit terminalControlMessageReceived(m_nGeneration.load(), message);
+	return KProtocolHandlerResult::success();
+}
+
+KProtocolHandlerResult KWebRtcPeer::decodeFileTransferLifecycleMessage(
+	const KProtocolEnvelope &envelope)
+{
+	KFileTransferLifecycleMessage message;
+	QString strError;
+	if (!KFileTransferLifecycleMessageCodec::decode(envelope, &message, &strError))
+		return KProtocolHandlerResult::failure(ProtocolHandlerDecodeFailed, strError);
+	emit fileTransferLifecycleMessageReceived(m_nGeneration.load(), message);
+	return KProtocolHandlerResult::success();
+}
+
+KProtocolHandlerResult KWebRtcPeer::decodeFileTransferControlMessage(
+	const KProtocolEnvelope &envelope)
+{
+	KFileTransferControlMessage message;
+	QString strError;
+	if (!KFileTransferControlMessageCodec::decode(envelope, &message, &strError))
+		return KProtocolHandlerResult::failure(ProtocolHandlerDecodeFailed, strError);
+	emit fileTransferControlMessageReceived(m_nGeneration.load(), message);
 	return KProtocolHandlerResult::success();
 }
 
@@ -1760,6 +1959,44 @@ bool KWebRtcPeer::createTerminalDataChannel(QString *pErrorMessage)
 		return false;
 	}
 	m_pTerminalDataChannel->setChannel(result.value());
+	return true;
+}
+
+bool KWebRtcPeer::createFileTransferControlDataChannel(QString *pErrorMessage)
+{
+	webrtc::DataChannelInit init;
+	init.ordered = true;
+	auto result = m_spPeerConnection->CreateDataChannelOrError(
+		kFileTransferControlChannelLabel, &init);
+	if (!result.ok())
+	{
+		if (pErrorMessage != nullptr)
+		{
+			*pErrorMessage = rtcErrorMessage(
+				QStringLiteral("Create file-control DataChannel failed"), result.error());
+		}
+		return false;
+	}
+	m_pFileTransferControlDataChannel->setChannel(result.value());
+	return true;
+}
+
+bool KWebRtcPeer::createFileTransferDataDataChannel(QString *pErrorMessage)
+{
+	webrtc::DataChannelInit init;
+	init.ordered = true;
+	auto result = m_spPeerConnection->CreateDataChannelOrError(
+		kFileTransferDataChannelLabel, &init);
+	if (!result.ok())
+	{
+		if (pErrorMessage != nullptr)
+		{
+			*pErrorMessage = rtcErrorMessage(
+				QStringLiteral("Create file-data DataChannel failed"), result.error());
+		}
+		return false;
+	}
+	m_pFileTransferDataDataChannel->setChannel(result.value());
 	return true;
 }
 

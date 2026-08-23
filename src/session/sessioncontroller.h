@@ -7,6 +7,8 @@
 #include "core/media/videoframe.h"
 #include "core/protocol/inputmessage.h"
 #include "core/protocol/clipboardmessage.h"
+#include "core/protocol/filetransfercontrolmessage.h"
+#include "core/protocol/filetransferlifecyclemessage.h"
 #include "core/protocol/sessionmessage.h"
 #include "core/protocol/terminalmessage.h"
 #include "core/settings/applicationsettings.h"
@@ -48,6 +50,13 @@ public slots:
 	virtual bool sendTerminalControlMessage(const KTerminalMessage &message) = 0;
 	virtual bool sendTerminalData(const QByteArray &data) = 0;
 	virtual bool isTerminalBackpressured() const = 0;
+	virtual bool ensureFileTransferChannels() { return false; }
+	virtual bool sendFileTransferLifecycleMessage(
+		const KFileTransferLifecycleMessage &) { return false; }
+	virtual bool sendFileTransferControlMessage(
+		const KFileTransferControlMessage &) { return false; }
+	virtual bool sendFileTransferData(const QByteArray &) { return false; }
+	virtual bool isFileTransferBackpressured() const { return false; }
 	virtual void sendStreamConfig(const KStreamConfig &config) = 0;
 	virtual QString requestPrivacyMode(KPrivacyMode mode) = 0;
 	virtual QString requestPostSessionAction(KPostSessionAction action) = 0;
@@ -88,6 +97,13 @@ signals:
 	void terminalDataReceived(const QByteArray &data);
 	void terminalChannelChanged(bool bOpen);
 	void terminalLowWatermarkReached();
+	void fileTransferLifecycleMessageReceived(
+		const KFileTransferLifecycleMessage &message);
+	void fileTransferControlMessageReceived(
+		const KFileTransferControlMessage &message);
+	void fileTransferDataReceived(const QByteArray &data);
+	void fileTransferChannelsChanged(bool bControlOpen, bool bDataOpen);
+	void fileTransferLowWatermarkReached();
 	void sessionChannelChanged(bool bOpen);
 	void sessionCapabilitiesChanged(const KNegotiatedCapabilities &capabilities);
 	void privacyModeStatusChanged(const KPrivacyModeStatus &status);

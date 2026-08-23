@@ -148,6 +148,8 @@ add_library(wrc_core STATIC
 	src/core/discovery/discovereddevice.h
 	src/core/discovery/landiscoverytransport.h
 	src/core/input/inputinjectorinterface.h
+	src/core/file_transfer/filesystemport.h
+	src/core/file_transfer/filetransfertypes.h
 	src/core/media/captureframe.h
 	src/core/media/captureframesink.h
 	src/core/media/capturesource.h
@@ -230,6 +232,27 @@ target_link_libraries(wrc_windows_security_adapter PUBLIC
 	ncrypt
 	crypt32
 )
+
+add_library(wrc_windows_file_transfer_adapter STATIC
+	src/adapters/windows/file_transfer/windowsfilesystemadapter.cpp
+	src/adapters/windows/file_transfer/windowsfilesystemadapter.h
+)
+
+target_compile_definitions(wrc_windows_file_transfer_adapter PRIVATE
+	UNICODE
+	_UNICODE
+	WIN32_LEAN_AND_MEAN
+	NOMINMAX
+)
+
+target_include_directories(wrc_windows_file_transfer_adapter PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_windows_file_transfer_adapter PUBLIC
+	wrc_core
+	Qt6::Core
+)
 endif()
 
 add_library(wrc_diagnostics STATIC
@@ -260,6 +283,25 @@ target_include_directories(wrc_session_contract PUBLIC
 target_link_libraries(wrc_session_contract PUBLIC
 	wrc_core
 	wrc_protocol
+	Qt6::Core
+)
+
+add_library(wrc_file_transfer_application STATIC
+	src/core/file_transfer/filetransferstate.cpp
+	src/core/file_transfer/filetransferstate.h
+	src/file_transfer/filetransfersessionservice.cpp
+	src/file_transfer/filetransfersessionservice.h
+)
+
+target_include_directories(wrc_file_transfer_application PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_file_transfer_application PUBLIC
+	wrc_core
+	wrc_protocol
+	wrc_session_contract
+	wrc_diagnostics
 	Qt6::Core
 )
 
@@ -911,6 +953,43 @@ if(WRC_BUILD_TESTS)
 	)
 	add_test(NAME wrc_protocol_robustness_tests COMMAND wrc_protocol_robustness_tests)
 
+	add_executable(wrc_file_transfer_protocol_tests
+		tests/unit/filetransferprotocoltest.cpp
+	)
+	target_link_libraries(wrc_file_transfer_protocol_tests PRIVATE
+		wrc_core
+		wrc_protocol
+		Qt6::Core
+	)
+	add_test(NAME wrc_file_transfer_protocol_tests
+		COMMAND wrc_file_transfer_protocol_tests)
+
+	add_executable(wrc_file_transfer_data_frame_tests
+		tests/unit/filetransferdataframetest.cpp
+	)
+	target_link_libraries(wrc_file_transfer_data_frame_tests PRIVATE
+		wrc_protocol
+		Qt6::Core
+	)
+	add_test(NAME wrc_file_transfer_data_frame_tests
+		COMMAND wrc_file_transfer_data_frame_tests)
+
+	if(WIN32)
+	add_executable(wrc_windows_filesystem_adapter_tests
+		tests/unit/windowsfilesystemadaptertest.cpp
+	)
+	target_link_libraries(wrc_windows_filesystem_adapter_tests PRIVATE
+		wrc_windows_file_transfer_adapter
+		Qt6::Core
+	)
+	add_test(NAME wrc_windows_filesystem_adapter_tests
+		COMMAND wrc_windows_filesystem_adapter_tests)
+	set_tests_properties(wrc_windows_filesystem_adapter_tests PROPERTIES
+		ENVIRONMENT_MODIFICATION
+			"Path=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+	)
+	endif()
+
 	add_executable(wrc_session_state_tests
 		tests/unit/sessionstatemachinetest.cpp
 	)
@@ -972,6 +1051,8 @@ if(WRC_BUILD_TESTS)
 	set_tests_properties(
 		wrc_protocol_tests
 		wrc_protocol_robustness_tests
+		wrc_file_transfer_protocol_tests
+		wrc_file_transfer_data_frame_tests
 		wrc_session_state_tests
 		wrc_network_stats_tests
 		wrc_terminal_write_all_tests

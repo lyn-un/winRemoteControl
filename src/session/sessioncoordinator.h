@@ -83,6 +83,13 @@ public slots:
 	bool sendTerminalControlMessage(const KTerminalMessage &message) override;
 	bool sendTerminalData(const QByteArray &data) override;
 	bool isTerminalBackpressured() const override;
+	bool ensureFileTransferChannels() override;
+	bool sendFileTransferLifecycleMessage(
+		const KFileTransferLifecycleMessage &message) override;
+	bool sendFileTransferControlMessage(
+		const KFileTransferControlMessage &message) override;
+	bool sendFileTransferData(const QByteArray &data) override;
+	bool isFileTransferBackpressured() const override;
 	void sendStreamConfig(const KStreamConfig &config) override;
 	QString requestPrivacyMode(KPrivacyMode mode) override;
 	QString requestPostSessionAction(KPostSessionAction action) override;
@@ -207,6 +214,9 @@ private:
 	bool m_bClipboardChannelOpen = false;
 	bool m_bTerminalChannelOpen = false;
 	bool m_bTerminalChannelStatePublished = false;
+	bool m_bFileTransferControlChannelOpen = false;
+	bool m_bFileTransferDataChannelOpen = false;
+	bool m_bFileTransferChannelStatePublished = false;
 	bool m_bControllerTerminalCapabilityAvailable = false;
 	bool m_bControlledTerminalCapabilityAvailable = false;
 	bool m_bSessionChannelOpen = false;
