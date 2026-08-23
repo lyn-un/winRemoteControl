@@ -397,17 +397,22 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 	}
 	for (KSessionMessageType type : { DeviceInfoRequestSessionMessageType,
 		StartStreamingSessionMessageType, StopStreamingSessionMessageType,
-		StreamConfigSessionMessageType })
+		StreamConfigSessionMessageType, SetPrivacyModeSessionMessageType,
+		SetPostSessionActionSessionMessageType })
 	{
 		m_protocolRouter.registerHandler(SessionProtocolChannel,
 			KSessionMessageCodec::typeName(type), allowControlledInput,
 			[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
 			{ return decodeSessionMessage(envelope); });
 	}
-	m_protocolRouter.registerHandler(SessionProtocolChannel,
-		KSessionMessageCodec::typeName(DeviceInfoSessionMessageType), allowControllerMessage,
-		[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
-		{ return decodeSessionMessage(envelope); });
+	for (KSessionMessageType type : { DeviceInfoSessionMessageType,
+		PrivacyModeStateSessionMessageType, PostSessionActionStateSessionMessageType })
+	{
+		m_protocolRouter.registerHandler(SessionProtocolChannel,
+			KSessionMessageCodec::typeName(type), allowControllerMessage,
+			[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
+			{ return decodeSessionMessage(envelope); });
+	}
 	m_protocolRouter.registerHandler(SessionProtocolChannel,
 		KSessionMessageCodec::typeName(EndSessionMessageType), allowMessage,
 		[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)

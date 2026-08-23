@@ -55,6 +55,7 @@ public:
 	quint64 sessionGeneration() const override;
 	bool isIdle() const override;
 	bool matchesCurrentEndpoint(const QString &strHost, quint16 nPort) const override;
+	KNegotiatedCapabilities negotiatedCapabilities() const;
 	QString authenticatedDeviceId() const;
 	void setTerminalCapabilitiesAvailable(bool bControllerAvailable,
 		bool bControlledAvailable);

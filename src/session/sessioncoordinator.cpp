@@ -284,6 +284,11 @@ bool KSessionCoordinator::matchesCurrentEndpoint(
 		&& m_pAccessSessionFlow->matchesEndpoint(strHost, nPort);
 }
 
+KNegotiatedCapabilities KSessionCoordinator::negotiatedCapabilities() const
+{
+	return m_pCapabilitySessionFlow->negotiatedCapabilities();
+}
+
 QString KSessionCoordinator::authenticatedDeviceId() const
 {
 	return m_pAccessSessionFlow->authenticationContext().strRemoteDeviceId;
