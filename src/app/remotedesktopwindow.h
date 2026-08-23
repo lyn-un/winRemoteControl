@@ -35,6 +35,9 @@ public slots:
 	void handleSessionCapabilitiesChanged(const KNegotiatedCapabilities &capabilities);
 	void handlePrivacyModeStatusChanged(const KPrivacyModeStatus &status);
 	void handlePostSessionActionStatusChanged(const KPostSessionActionStatus &status);
+	void handlePrivacyModeCommandStarted();
+	void handlePostSessionActionCommandStarted();
+	void handleSecurityPreferenceError(const QString &strError);
 	void handlePrivacyModeCommandCompleted(const QString &strRequestId,
 		bool bSuccess,
 		const QString &strErrorCode);

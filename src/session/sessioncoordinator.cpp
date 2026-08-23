@@ -270,6 +270,11 @@ quint64 KSessionCoordinator::sessionGeneration() const
 	return m_sessionStateMachine.generation();
 }
 
+KSessionRole KSessionCoordinator::sessionRole() const
+{
+	return m_sessionStateMachine.role();
+}
+
 bool KSessionCoordinator::isIdle() const
 {
 	return m_sessionStateMachine.state() == IdleSessionState;
@@ -758,6 +763,7 @@ void KSessionCoordinator::revokeTrustedDevice(const QString &strDeviceId)
 			? QStringLiteral("Failed to revoke trusted device") : strError);
 		return;
 	}
+	emit trustedDeviceRevoked(strDeviceId);
 	requestTrustedDevices();
 }
 
@@ -790,6 +796,7 @@ void KSessionCoordinator::requestRePairDevice(const QString &strDeviceId)
 			? QStringLiteral("Failed to remove trusted device") : strError);
 		return;
 	}
+	emit trustedDeviceRevoked(strDeviceId);
 	requestTrustedDevices();
 }
 
@@ -1093,7 +1100,7 @@ void KSessionCoordinator::sendStreamConfig(const KStreamConfig &config)
 	sendSessionMessage(message);
 }
 
-void KSessionCoordinator::requestPrivacyMode(KPrivacyMode mode)
+QString KSessionCoordinator::requestPrivacyMode(KPrivacyMode mode)
 {
 	const KSessionState state = m_sessionStateMachine.state();
 	if (m_sessionStateMachine.role() != ControllerSessionRole
@@ -1102,7 +1109,7 @@ void KSessionCoordinator::requestPrivacyMode(KPrivacyMode mode)
 	{
 		emit privacyModeCommandCompleted(QString(), false,
 			QStringLiteral("invalid_session_state"));
-		return;
+		return QString();
 	}
 	QString strMode;
 	if (mode == DisabledPrivacyMode)
@@ -1117,17 +1124,15 @@ void KSessionCoordinator::requestPrivacyMode(KPrivacyMode mode)
 	{
 		emit privacyModeCommandCompleted(QString(), false,
 			QStringLiteral("unsupported_mode"));
-		return;
+		return QString();
 	}
 	KSessionMessage message;
 	message.type = SetPrivacyModeSessionMessageType;
 	message.privacyMode = mode;
-	const QString strRequestId = sendSessionMessage(message);
-	if (strRequestId.isEmpty())
-		emit privacyModeCommandCompleted(QString(), false, QStringLiteral("send_failed"));
+	return sendSessionMessage(message);
 }
 
-void KSessionCoordinator::requestPostSessionAction(KPostSessionAction action)
+QString KSessionCoordinator::requestPostSessionAction(KPostSessionAction action)
 {
 	const KSessionState state = m_sessionStateMachine.state();
 	if (m_sessionStateMachine.role() != ControllerSessionRole
@@ -1136,7 +1141,7 @@ void KSessionCoordinator::requestPostSessionAction(KPostSessionAction action)
 	{
 		emit postSessionActionCommandCompleted(QString(), false,
 			QStringLiteral("invalid_session_state"));
-		return;
+		return QString();
 	}
 	if (action == UnknownPostSessionAction
 		|| (action == LockWorkstationPostSessionAction
@@ -1144,14 +1149,12 @@ void KSessionCoordinator::requestPostSessionAction(KPostSessionAction action)
 	{
 		emit postSessionActionCommandCompleted(QString(), false,
 			QStringLiteral("unsupported_action"));
-		return;
+		return QString();
 	}
 	KSessionMessage message;
 	message.type = SetPostSessionActionSessionMessageType;
 	message.postSessionAction = action;
-	const QString strRequestId = sendSessionMessage(message);
-	if (strRequestId.isEmpty())
-		emit postSessionActionCommandCompleted(QString(), false, QStringLiteral("send_failed"));
+	return sendSessionMessage(message);
 }
 
 void KSessionCoordinator::handleCaptureFailure()

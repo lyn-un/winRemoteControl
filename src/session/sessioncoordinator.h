@@ -53,6 +53,7 @@ public:
 		QObject *pParent = nullptr);
 	~KSessionCoordinator() override;
 	quint64 sessionGeneration() const override;
+	KSessionRole sessionRole() const override;
 	bool isIdle() const override;
 	bool matchesCurrentEndpoint(const QString &strHost, quint16 nPort) const override;
 	KNegotiatedCapabilities negotiatedCapabilities() const;
@@ -83,8 +84,8 @@ public slots:
 	bool sendTerminalData(const QByteArray &data) override;
 	bool isTerminalBackpressured() const override;
 	void sendStreamConfig(const KStreamConfig &config) override;
-	void requestPrivacyMode(KPrivacyMode mode) override;
-	void requestPostSessionAction(KPostSessionAction action) override;
+	QString requestPrivacyMode(KPrivacyMode mode) override;
+	QString requestPostSessionAction(KPostSessionAction action) override;
 	void handleCaptureFailure() override;
 	void applyApplicationSettings(const KApplicationSettings &settings) override;
 	void respondIncomingAccessRequest(const QString &strRequestId, bool bAccepted) override;
@@ -101,6 +102,7 @@ public slots:
 signals:
 	void trustedDevicesChanged(const QVector<KTrustedDevice> &devices);
 	void trustedDeviceError(const QString &strError);
+	void trustedDeviceRevoked(const QString &strDeviceId);
 	void securityMigrationNotice(const QString &strMessage);
 
 private:

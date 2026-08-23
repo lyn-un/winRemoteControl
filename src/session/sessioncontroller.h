@@ -49,8 +49,8 @@ public slots:
 	virtual bool sendTerminalData(const QByteArray &data) = 0;
 	virtual bool isTerminalBackpressured() const = 0;
 	virtual void sendStreamConfig(const KStreamConfig &config) = 0;
-	virtual void requestPrivacyMode(KPrivacyMode mode) = 0;
-	virtual void requestPostSessionAction(KPostSessionAction action) = 0;
+	virtual QString requestPrivacyMode(KPrivacyMode mode) = 0;
+	virtual QString requestPostSessionAction(KPostSessionAction action) = 0;
 	virtual void handleCaptureFailure() = 0;
 	virtual void applyApplicationSettings(const KApplicationSettings &settings) = 0;
 	virtual void respondIncomingAccessRequest(const QString &strRequestId, bool bAccepted) = 0;
@@ -60,6 +60,7 @@ public slots:
 
 public:
 	virtual quint64 sessionGeneration() const = 0;
+	virtual KSessionRole sessionRole() const = 0;
 	virtual bool isIdle() const = 0;
 	virtual bool matchesCurrentEndpoint(const QString &strHost, quint16 nPort) const = 0;
 

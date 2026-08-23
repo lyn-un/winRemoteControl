@@ -12,6 +12,7 @@ class KDeviceDiscoveryController;
 class KDeviceDiscoveryViewModel;
 class KRecentDeviceService;
 class KApplicationSettingsService;
+class KDeviceSecurityPreferenceService;
 class KClipboardSyncService;
 class KTerminalSessionService;
 class QTimer;
@@ -50,6 +51,7 @@ private:
 	KDeviceDiscoveryViewModel *m_pDiscoveryViewModel = nullptr;
 	KRecentDeviceService *m_pRecentDeviceService = nullptr;
 	KApplicationSettingsService *m_pApplicationSettingsService = nullptr;
+	KDeviceSecurityPreferenceService *m_pDeviceSecurityPreferenceService = nullptr;
 	KClipboardSyncService *m_pClipboardSyncService = nullptr;
 	KTerminalSessionService *m_pTerminalSessionService = nullptr;
 	QTimer *m_pShutdownDeadlineTimer = nullptr;

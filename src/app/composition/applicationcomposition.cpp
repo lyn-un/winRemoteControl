@@ -12,6 +12,7 @@
 #include "adapters/discovery/udplandiscoverytransport.h"
 #include "adapters/settings/qsettingsrecentdevicestore.h"
 #include "adapters/settings/qsettingsapplicationstore.h"
+#include "adapters/settings/qsettingsdevicesecuritypreferencestore.h"
 #include "app/remotedesktopwindow.h"
 #include "adapters/windows/terminal/windowspseudoconsole.h"
 #include "adapters/windows/terminal/windowsterminalfrontend.h"
@@ -25,6 +26,7 @@
 #include "transport/webrtc/webrtcpeer.h"
 #include "session/sessioncoordinator.h"
 #include "settings/applicationsettingsservice.h"
+#include "settings/devicesecuritypreferenceservice.h"
 #include "clipboard/clipboardsyncservice.h"
 #include "terminal/terminalsessionservice.h"
 #include "privacy/postsessionactionservice.h"
@@ -71,6 +73,12 @@ namespace
 			.filePath(QStringLiteral("settings.ini"));
 	}
 
+	QString DeviceSecurityPreferencesFilePath()
+	{
+		return QDir(QCoreApplication::applicationDirPath())
+			.filePath(QStringLiteral("device_security_preferences.ini"));
+	}
+
 	QString SecurityDirectoryPath()
 	{
 		return QDir(QCoreApplication::applicationDirPath())
@@ -114,6 +122,11 @@ KApplicationComposition::KApplicationComposition(QObject *pParent)
 	, m_pApplicationSettingsService(new KApplicationSettingsService(
 		std::make_unique<KQSettingsApplicationStore>(ApplicationSettingsFilePath()),
 		this))
+	, m_pDeviceSecurityPreferenceService(new KDeviceSecurityPreferenceService(
+		std::make_unique<KQSettingsDeviceSecurityPreferenceStore>(
+			DeviceSecurityPreferencesFilePath()),
+		m_pSessionService,
+		this))
 	, m_pClipboardSyncService(new KClipboardSyncService(
 		std::make_unique<KQtClipboardAdapter>(),
 		m_pSessionService,
@@ -140,6 +153,7 @@ KApplicationComposition::KApplicationComposition(QObject *pParent)
 		this, &KApplicationComposition::handleShutdownDeadline);
 	m_pRecentDeviceService->initialize();
 	m_pApplicationSettingsService->initialize();
+	m_pDeviceSecurityPreferenceService->initialize();
 	m_pSessionService->applyApplicationSettings(m_pApplicationSettingsService->settings());
 	m_pTerminalSessionService->setApprovalTimeoutSeconds(
 		m_pApplicationSettingsService->settings().nApprovalTimeoutSeconds);
@@ -307,6 +321,14 @@ void KApplicationComposition::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWin
 	if (!remoteScreenSize.isEmpty())
 		pWindow->setRemoteScreenSize(remoteScreenSize.width(), remoteScreenSize.height());
 	pWindow->handleSessionCapabilitiesChanged(m_pSessionService->negotiatedCapabilities());
+	pWindow->handlePrivacyModeStatusChanged(
+		m_pDeviceSecurityPreferenceService->privacyModeStatus());
+	pWindow->handlePostSessionActionStatusChanged(
+		m_pDeviceSecurityPreferenceService->postSessionActionStatus());
+	if (m_pDeviceSecurityPreferenceService->isPrivacyCommandPending())
+		pWindow->handlePrivacyModeCommandStarted();
+	if (m_pDeviceSecurityPreferenceService->isPostSessionActionCommandPending())
+		pWindow->handlePostSessionActionCommandStarted();
 
 	KWebViewWidget *pWebViewWidget = pWindow->webViewWidget();
 	KVideoRenderWidget *pVideoRenderWidget = pWindow->videoRenderWidget();
@@ -352,10 +374,21 @@ void KApplicationComposition::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWin
 		pWindow, &KRemoteDesktopWindow::handlePrivacyModeCommandCompleted);
 	connect(m_pSessionService, &KSessionCoordinator::postSessionActionCommandCompleted,
 		pWindow, &KRemoteDesktopWindow::handlePostSessionActionCommandCompleted);
+	connect(m_pDeviceSecurityPreferenceService,
+		&KDeviceSecurityPreferenceService::privacyModeCommandStarted,
+		pWindow, &KRemoteDesktopWindow::handlePrivacyModeCommandStarted);
+	connect(m_pDeviceSecurityPreferenceService,
+		&KDeviceSecurityPreferenceService::postSessionActionCommandStarted,
+		pWindow, &KRemoteDesktopWindow::handlePostSessionActionCommandStarted);
+	connect(m_pDeviceSecurityPreferenceService,
+		&KDeviceSecurityPreferenceService::preferenceError,
+		pWindow, &KRemoteDesktopWindow::handleSecurityPreferenceError);
 	connect(pWindow, &KRemoteDesktopWindow::privacyModeRequested,
-		m_pSessionService, &KSessionCoordinator::requestPrivacyMode);
+		m_pDeviceSecurityPreferenceService,
+		&KDeviceSecurityPreferenceService::requestPrivacyMode);
 	connect(pWindow, &KRemoteDesktopWindow::postSessionActionRequested,
-		m_pSessionService, &KSessionCoordinator::requestPostSessionAction);
+		m_pDeviceSecurityPreferenceService,
+		&KDeviceSecurityPreferenceService::requestPostSessionAction);
 	connect(m_pSessionViewModel, &KSessionViewModel::remoteDeviceInfoChanged,
 		pWindow,
 		[pWindow](const QString &, const QString &, const QString &, int nScreenWidth, int nScreenHeight)
@@ -471,6 +504,17 @@ void KApplicationComposition::wireServices()
 	connect(m_pApplicationSettingsService, &KApplicationSettingsService::settingsChanged,
 		this, [this](const KApplicationSettings &settings)
 		{ m_pTerminalSessionService->setApprovalTimeoutSeconds(settings.nApprovalTimeoutSeconds); });
+	connect(m_pSessionService, &KSessionCoordinator::trustedDeviceRevoked,
+		m_pDeviceSecurityPreferenceService,
+		&KDeviceSecurityPreferenceService::removePreference);
+	connect(m_pDeviceSecurityPreferenceService,
+		&KDeviceSecurityPreferenceService::preferenceError,
+		this,
+		[](const QString &strError)
+		{
+			qWarning().noquote() << QStringLiteral("Device security preference error: %1")
+				.arg(strError);
+		});
 	connect(m_pCaptureService, &KCaptureService::webRtcFrameReady,
 		m_pSessionService,
 		[m_pSessionService = m_pSessionService](quint64 nGeneration, const KVideoFrame &frame)

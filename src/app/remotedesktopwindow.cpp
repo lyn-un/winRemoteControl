@@ -127,6 +127,22 @@ void KRemoteDesktopWindow::handlePostSessionActionStatusChanged(
 	m_bPostSessionActionCommandPending = false;
 }
 
+void KRemoteDesktopWindow::handlePrivacyModeCommandStarted()
+{
+	m_bPrivacyCommandPending = true;
+}
+
+void KRemoteDesktopWindow::handlePostSessionActionCommandStarted()
+{
+	m_bPostSessionActionCommandPending = true;
+}
+
+void KRemoteDesktopWindow::handleSecurityPreferenceError(const QString &)
+{
+	QToolTip::showText(QCursor::pos(),
+		QStringLiteral("安全设置已生效，但未能保存设备偏好"), this);
+}
+
 void KRemoteDesktopWindow::handlePrivacyModeCommandCompleted(const QString &,
 	bool bSuccess,
 	const QString &strErrorCode)

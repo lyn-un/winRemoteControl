@@ -84,14 +84,15 @@ namespace
 		void pushVideoFrame(const KVideoFrame &) override {}
 		void sendInputMessage(const KInputMessage &) override {}
 		void sendStreamConfig(const KStreamConfig &) override {}
-		void requestPrivacyMode(KPrivacyMode) override {}
-		void requestPostSessionAction(KPostSessionAction) override {}
+		QString requestPrivacyMode(KPrivacyMode) override { return QString(); }
+		QString requestPostSessionAction(KPostSessionAction) override { return QString(); }
 		void handleCaptureFailure() override {}
 		void applyApplicationSettings(const KApplicationSettings &) override {}
 		void respondIncomingAccessRequest(const QString &, bool) override {}
 		void respondPairingRequest(const QString &, bool,
 			KPermissionScopes) override {}
 		quint64 sessionGeneration() const override { return 1; }
+		KSessionRole sessionRole() const override { return ControllerSessionRole; }
 		bool isIdle() const override { return false; }
 		bool matchesCurrentEndpoint(const QString &, quint16) const override { return false; }
 

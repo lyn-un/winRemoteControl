@@ -158,6 +158,9 @@ add_library(wrc_core STATIC
 	src/core/session/sessionstatemachine.h
 	src/core/settings/applicationsettings.cpp
 	src/core/settings/applicationsettingsstore.h
+	src/core/settings/devicesecuritypreference.cpp
+	src/core/settings/devicesecuritypreference.h
+	src/core/settings/devicesecuritypreferencestore.h
 	src/core/transport/remotepeertransport.h
 	src/core/transport/keyingmaterialexporter.h
 	src/core/transport/signalingtransport.h
@@ -428,6 +431,8 @@ add_library(wrc_recent_device_application STATIC
 add_library(wrc_settings_application STATIC
 	src/settings/applicationsettingsservice.cpp
 	src/settings/applicationsettingsservice.h
+	src/settings/devicesecuritypreferenceservice.cpp
+	src/settings/devicesecuritypreferenceservice.h
 )
 
 add_library(wrc_clipboard_application STATIC
@@ -539,6 +544,7 @@ target_include_directories(wrc_settings_application PUBLIC
 
 target_link_libraries(wrc_settings_application PUBLIC
 	wrc_core
+	wrc_session_contract
 	wrc_diagnostics
 	Qt6::Core
 )
@@ -556,6 +562,8 @@ target_link_libraries(wrc_recent_device_application PUBLIC
 add_library(wrc_settings_adapter STATIC
 	src/adapters/settings/qsettingsapplicationstore.cpp
 	src/adapters/settings/qsettingsapplicationstore.h
+	src/adapters/settings/qsettingsdevicesecuritypreferencestore.cpp
+	src/adapters/settings/qsettingsdevicesecuritypreferencestore.h
 	src/adapters/settings/qsettingsrecentdevicestore.cpp
 	src/adapters/settings/qsettingsrecentdevicestore.h
 )
@@ -566,6 +574,7 @@ target_include_directories(wrc_settings_adapter PUBLIC
 
 target_link_libraries(wrc_settings_adapter PUBLIC
 	wrc_core
+	wrc_diagnostics
 	Qt6::Core
 )
 
@@ -1201,6 +1210,17 @@ if(WRC_BUILD_TESTS)
 		Qt6::Core
 	)
 	add_test(NAME wrc_application_settings_tests COMMAND wrc_application_settings_tests)
+
+	add_executable(wrc_device_security_preference_tests
+		tests/unit/devicesecuritypreferencetest.cpp
+	)
+	target_link_libraries(wrc_device_security_preference_tests PRIVATE
+		wrc_settings_application
+		wrc_settings_adapter
+		Qt6::Core
+	)
+	add_test(NAME wrc_device_security_preference_tests
+		COMMAND wrc_device_security_preference_tests)
 
 	add_executable(wrc_clipboard_sync_tests
 		tests/unit/clipboardsyncservicetest.cpp
