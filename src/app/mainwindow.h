@@ -6,6 +6,7 @@
 #include <QtWidgets/QMainWindow>
 
 class KRemoteDesktopWindow;
+class KFileTransferWindow;
 class KApplicationComposition;
 class KWebViewWidget;
 
@@ -28,6 +29,8 @@ private:
 	void initConnections();
 	void openRemoteDesktopWindow();
 	void closeRemoteDesktopWindow();
+	void openFileTransferWindow();
+	void closeFileTransferWindow();
 	void beginWindowDrag();
 	void applyWindowCorners();
 	bool handleNativeHitTest(void *pMessage, qintptr *pResult) const;
@@ -36,6 +39,7 @@ private:
 	KApplicationComposition *m_pComposition = nullptr;
 	KWebViewWidget *m_pWebViewWidget = nullptr;
 	KRemoteDesktopWindow *m_pRemoteDesktopWindow = nullptr;
+	KFileTransferWindow *m_pFileTransferWindow = nullptr;
 	bool m_bClosePending = false;
 	bool m_bShutdownComplete = false;
 };

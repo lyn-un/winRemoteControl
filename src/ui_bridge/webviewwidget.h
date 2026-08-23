@@ -9,6 +9,7 @@
 #include "core/session/sessionerror.h"
 #include "core/protocol/sessionmessage.h"
 #include "core/terminal/terminalstate.h"
+#include "core/file_transfer/filetransferstate.h"
 #include "core/security/permissionscope.h"
 #include "core/security/trusteddevice.h"
 
@@ -17,6 +18,7 @@
 #include <QtCore/QQueue>
 #include <QtCore/QRect>
 #include <QtCore/QString>
+#include <QtCore/QStringList>
 #include <QtWidgets/QWidget>
 
 #include <Windows.h>
@@ -105,6 +107,24 @@ public slots:
 	void sendIncomingTerminalRequestCleared(const QString &strRequestId,
 		const QString &strReason);
 	void sendTerminalError(const QString &strError);
+	void sendFileTransferStateChanged(KFileTransferState state,
+		bool bAvailable,
+		const QString &strStatus,
+		const QString &strDeviceName = QString(),
+		const QString &strDeviceSource = QString(),
+		int nActiveTaskCount = 0,
+		quint64 nGeneration = 0);
+	void sendFilePaneLoading(KFileTransferPane pane, const QString &strRequestId);
+	void sendFilePaneChanged(const KFileTransferPaneSnapshot &snapshot);
+	void sendFileTransferSnapshot(
+		const QVector<KFileTransferTaskSnapshot> &taskList);
+	void sendFileTransferTaskChanged(const KFileTransferTaskSnapshot &task);
+	void sendFileTransferTaskRemoved(const QString &strTaskId);
+	void sendFileTransferConflictRequested(
+		const KFileTransferConflictSnapshot &conflict);
+	void sendFileTransferError(const QString &strErrorCode,
+		const QString &strMessage);
+	void sendFileTransferClosePromptRequested();
 
 signals:
 	void startCaptureRequested();
@@ -122,6 +142,8 @@ signals:
 	void removeRecentDeviceRequested(const QString &strDeviceId);
 	void openRecentDeviceTerminalRequested(const QString &strDeviceId);
 	void openCurrentTerminalRequested();
+	void openCurrentFileTransferRequested();
+	void stopCurrentFileTransferRequested();
 	void requestTerminalFrontendSupportRequested();
 	void respondTerminalAccessRequestRequested(const QString &strRequestId, bool bAccepted);
 	void closeTerminalRequested();
@@ -152,6 +174,31 @@ signals:
 	void minimizeDesktopWindowRequested();
 	void toggleMaximizeDesktopWindowRequested();
 	void beginDesktopWindowDragRequested();
+	void closeFileTransferWindowRequested();
+	void minimizeFileTransferWindowRequested();
+	void toggleMaximizeFileTransferWindowRequested();
+	void beginFileTransferWindowDragRequested();
+	void requestFileTransferSnapshotRequested();
+	void navigateFilePaneRequested(const QString &strPane,
+		const QString &strListingId,
+		const QString &strTargetEntryId);
+	void navigateFilePaneByPathRequested(const QString &strPane,
+		const QString &strPath);
+	void navigateFilePaneUpRequested(const QString &strPane,
+		const QString &strListingId);
+	void refreshFilePaneRequested(const QString &strPane);
+	void startFileCopyRequested(const QString &strSourcePane,
+		const QString &strSourceListingId,
+		const QStringList &sourceEntryIds,
+		const QString &strDestinationListingId);
+	void pauseFileTransferTaskRequested(const QString &strTaskId);
+	void resumeFileTransferTaskRequested(const QString &strTaskId);
+	void cancelFileTransferTaskRequested(const QString &strTaskId);
+	void retryFileTransferTaskRequested(const QString &strTaskId);
+	void resolveFileConflictRequested(const QString &strConflictId,
+		const QString &strResolution,
+		bool bApplyToRemaining);
+	void clearCompletedFileTransferTasksRequested();
 	void showControlCenterMenuRequested(const QPoint &pos);
 	void streamConfigRequested(const KStreamConfig &config);
 	void previewRectChanged(const QRect &rect);

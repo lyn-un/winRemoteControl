@@ -17,6 +17,7 @@ function Icon({ name }) {
     settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.09A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.14.37.35.7.6 1 .3.28.68.42 1.1.4h.09v4h-.09A1.7 1.7 0 0 0 19.4 15Z" /></>,
     shield: <><path d="M12 3 5 6v5c0 4.6 2.8 8.2 7 10 4.2-1.8 7-5.4 7-10V6l-7-3Z" /><path d="m9 12 2 2 4-4" /></>,
 		terminal: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></>,
+		fileTransfer: <><path d="M3 7h7l2 2h9v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /><path d="M8 14h8M13 11l3 3-3 3" /></>,
     chevron: <path d="m8 10 4 4 4-4" />,
   };
   return <svg className="ui-icon" viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>;
@@ -47,7 +48,7 @@ function formatRecentTime(value) {
   return `${Math.floor(elapsed / 86_400_000)} 天前`;
 }
 
-function ConnectedSession({ state, wallpaperUrl, onDisconnect, onOpenTerminal }) {
+function ConnectedSession({ state, wallpaperUrl, onDisconnect, onOpenTerminal, onOpenFileTransfer }) {
   const screenWidth = state.deviceInfo?.screenWidth || 0;
   const screenHeight = state.deviceInfo?.screenHeight || 0;
   const previewStyle = wallpaperUrl ? { backgroundImage: `url(${wallpaperUrl})` } : {};
@@ -61,6 +62,14 @@ function ConnectedSession({ state, wallpaperUrl, onDisconnect, onOpenTerminal })
       ? "对方不支持远程终端，或终端通道尚未就绪"
       : state.terminalState.status || "打开远程 PowerShell";
   const terminalLabel = terminalBusy ? "终端连接中" : terminalRunning ? "聚焦终端" : "终端";
+	const transferState = state.fileTransferState?.state || "Closed";
+	const transferBusy = ["Opening", "WaitingChannels", "Reconnecting", "Closing"].includes(transferState);
+	const transferOpen = transferState === "Ready";
+	const transferSupported = Boolean(state.fileTransferState?.available);
+	const transferReason = transferSupported
+		? state.fileTransferState.status || "在独立窗口中浏览并复制文件"
+		: state.fileTransferState?.status || "当前可信设备未授予文件传输权限";
+	const transferLabel = transferBusy ? "正在连接" : transferOpen ? "聚焦传输" : "文件传输";
   return (
     <section className="connected-view view-enter">
       <header className="session-heading">
@@ -81,6 +90,7 @@ function ConnectedSession({ state, wallpaperUrl, onDisconnect, onOpenTerminal })
           <footer>
             <div><i /><span><strong>设备桌面入口</strong></span></div>
             <span className="desktop-entry-actions">
+			  <button className="terminal-action-button" disabled={!transferSupported || transferBusy} title={transferReason} onClick={onOpenFileTransfer}><Icon name="fileTransfer" />{transferLabel}{state.fileTransferState?.activeTasks > 0 ? ` · ${state.fileTransferState.activeTasks}` : ""}</button>
               <button className="terminal-action-button" disabled={!terminalSupported || terminalBusy} title={terminalReason} onClick={onOpenTerminal}><Icon name="terminal" />{terminalLabel}</button>
             </span>
           </footer>
@@ -370,7 +380,7 @@ function SettingsPage({ state }) {
       );
     }
     if (activeSection === "trusted") {
-      const permissionLabels = { viewScreen: "查看画面", inputControl: "键鼠控制", clipboard: "剪贴板", terminal: "终端" };
+      const permissionLabels = { viewScreen: "查看画面", inputControl: "键鼠控制", clipboard: "剪贴板", terminal: "终端", fileTransfer: "文件传输" };
       const updateTrusted = (device, patch) => sendCommand("updateTrustedDevice", {
         deviceId: device.deviceId,
         alias: patch.alias ?? device.name,
@@ -469,7 +479,7 @@ function PairingRequestModal({ request }) {
   const [seconds, setSeconds] = useState(() => Math.max(0, Math.ceil((request.expiresAtMs - Date.now()) / 1000)));
   const [permissions, setPermissions] = useState(() => new Set(request.permissions));
 	const [step, setStep] = useState("verify");
-  const permissionLabels = { viewScreen: "查看画面", inputControl: "键盘与鼠标", clipboard: "剪贴板", terminal: "远程终端" };
+  const permissionLabels = { viewScreen: "查看画面", inputControl: "键盘与鼠标", clipboard: "剪贴板", terminal: "远程终端", fileTransfer: "文件传输" };
   const respond = (accepted) => sendCommand("respondPairingRequest", { requestId: request.requestId, accepted, permissions: [...permissions] });
   const toggle = (permission) => setPermissions((current) => {
     const next = new Set(current);
@@ -656,7 +666,7 @@ export function DashboardPage() {
     });
   };
 
-  const errors = [state.error, state.recentDeviceError, state.applicationSettingsError].filter(Boolean);
+  const errors = [state.error, state.recentDeviceError, state.applicationSettingsError, state.fileTransferError].filter(Boolean);
 
   return (
     <main className="dashboard-shell">
@@ -703,7 +713,7 @@ export function DashboardPage() {
         {activePage === "settings" ? (
           <SettingsPage state={state} />
         ) : remoteOnline ? (
-          <ConnectedSession state={state} wallpaperUrl={wallpaperUrl} onDisconnect={() => sendCommand("disconnectSession")} onOpenTerminal={() => sendCommand("openCurrentTerminal")} />
+          <ConnectedSession state={state} wallpaperUrl={wallpaperUrl} onDisconnect={() => sendCommand("disconnectSession")} onOpenTerminal={() => sendCommand("openCurrentTerminal")} onOpenFileTransfer={() => sendCommand("openCurrentFileTransfer")} />
         ) : activePage === "devices" ? (
           <DevicesPage
             selectedDevice={selectedDevice}
@@ -724,6 +734,7 @@ export function DashboardPage() {
 		{state.pairingRequest && <PairingRequestModal request={state.pairingRequest} />}
 		{state.incomingTerminalRequest && <TerminalRequestModal request={state.incomingTerminalRequest} />}
 		{state.terminalState.state === "Running" && state.role === "controlled" && <div className="terminal-running-banner"><Icon name="terminal" /><div><strong>远程终端正在运行</strong><small>PowerShell 使用当前登录用户权限</small></div><button onClick={() => sendCommand("closeTerminal")}>停止终端</button></div>}
+		{["Ready", "Reconnecting"].includes(state.fileTransferState.state) && state.role === "controlled" && <div className="terminal-running-banner file-transfer-running-banner"><Icon name="fileTransfer" /><div><strong>{state.fileTransferState.state === "Reconnecting" ? "文件传输已暂停" : "文件传输正在进行"}</strong><small>{state.fileTransferState.activeTasks > 0 ? `${state.fileTransferState.activeTasks} 个活动任务` : "控制端可以浏览并复制已授权会话中的文件"}</small></div><button onClick={() => sendCommand("stopCurrentFileTransfer")}>停止传输</button></div>}
         {deviceContextMenu && <div className="device-context-menu" style={{ left: deviceContextMenu.x, top: deviceContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { sendCommand("removeRecentDevice", { deviceId: deviceContextMenu.deviceId }); setDeviceContextMenu(null); }}><Icon name="trash" />移除最近记录</button></div>}
         {errors.length > 0 && <div className="error-stack">{errors.map((error, index) => <p key={`${index}-${error}`}>{error}</p>)}</div>}
       </div>

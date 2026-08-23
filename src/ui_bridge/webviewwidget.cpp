@@ -1,5 +1,6 @@
 #include "ui_bridge/webviewwidget.h"
 
+#include "core/protocol/filetransfercontrolmessage.h"
 #include "session/sessionerrorpresenter.h"
 
 #include <QtCore/QDir>
@@ -11,6 +12,134 @@
 #include <QtCore/QUrlQuery>
 
 #include <wrl/event.h>
+
+namespace
+{
+	QString FileTransferPaneName(KFileTransferPane pane)
+	{
+		return pane == RemoteFileTransferPane
+			? QStringLiteral("remote") : QStringLiteral("local");
+	}
+
+	QString FileTransferEntryKind(KFileListingEntryType type)
+	{
+		switch (type)
+		{
+		case DriveFileListingEntryType:
+			return QStringLiteral("drive");
+		case DirectoryFileListingEntryType:
+			return QStringLiteral("directory");
+		case RegularFileListingEntryType:
+			return QStringLiteral("file");
+		default:
+			return QStringLiteral("unknown");
+		}
+	}
+
+	QString FileTransferDirectionNameForBridge(KFileTransferDirection direction)
+	{
+		return direction == DownloadFileTransferDirection
+			? QStringLiteral("download") : QStringLiteral("upload");
+	}
+
+	QString FileTransferStatusText(const QString &strStatus)
+	{
+		if (strStatus == QStringLiteral("closed"))
+			return QStringLiteral("文件传输未打开");
+		if (strStatus == QStringLiteral("opening"))
+			return QStringLiteral("正在请求文件传输");
+		if (strStatus == QStringLiteral("waiting_channels"))
+			return QStringLiteral("正在建立安全文件通道");
+		if (strStatus == QStringLiteral("ready"))
+			return QStringLiteral("文件传输已就绪");
+		if (strStatus == QStringLiteral("reconnecting"))
+			return QStringLiteral("网络恢复中，传输已暂停");
+		if (strStatus == QStringLiteral("closing"))
+			return QStringLiteral("正在停止文件传输");
+		if (strStatus == QStringLiteral("unavailable")
+			|| strStatus == QStringLiteral("permission_denied"))
+		{
+			return QStringLiteral("当前可信设备未授予文件传输权限");
+		}
+		if (strStatus == QStringLiteral("stopped_by_controlled"))
+			return QStringLiteral("被控端已停止文件传输");
+		if (strStatus == QStringLiteral("stopped_by_remote"))
+			return QStringLiteral("对方已停止文件传输");
+		if (strStatus == QStringLiteral("channel_closed"))
+			return QStringLiteral("文件传输通道已关闭");
+		return strStatus;
+	}
+
+	QString FileTransferErrorText(const QString &strErrorCode)
+	{
+		if (strErrorCode == QStringLiteral("invalid_pane")
+			|| strErrorCode == QStringLiteral("invalid_direction")
+			|| strErrorCode == QStringLiteral("invalid_copy_request"))
+		{
+			return QStringLiteral("文件传输请求无效，请刷新后重试");
+		}
+		if (strErrorCode == QStringLiteral("stale_listing")
+			|| strErrorCode == QStringLiteral("stale_page_token")
+			|| strErrorCode == QStringLiteral("stale_source")
+			|| strErrorCode == QStringLiteral("stale_destination"))
+		{
+			return QStringLiteral("目录内容已经变化，请刷新后重新选择");
+		}
+		if (strErrorCode == QStringLiteral("source_changed"))
+			return QStringLiteral("源文件已经变化，请重新发起传输");
+		if (strErrorCode == QStringLiteral("permission_denied")
+			|| strErrorCode == QStringLiteral("role_not_allowed")
+			|| strErrorCode == QStringLiteral("controller_required"))
+		{
+			return QStringLiteral("当前会话没有执行此文件操作的权限");
+		}
+		if (strErrorCode == QStringLiteral("file_transfer_unavailable")
+			|| strErrorCode == QStringLiteral("unsupported_mode"))
+		{
+			return QStringLiteral("当前设备不支持文件传输或尚未授权");
+		}
+		if (strErrorCode == QStringLiteral("open_timeout")
+			|| strErrorCode == QStringLiteral("channel_closed")
+			|| strErrorCode == QStringLiteral("channel_create_failed"))
+		{
+			return QStringLiteral("文件传输通道不可用，请稍后重新打开");
+		}
+		if (strErrorCode == QStringLiteral("list_failed")
+			|| strErrorCode == QStringLiteral("destination_unavailable")
+			|| strErrorCode == QStringLiteral("destination_open_failed"))
+		{
+			return QStringLiteral("无法访问所选位置，请检查权限和磁盘状态");
+		}
+		if (strErrorCode == QStringLiteral("integrity_check_failed"))
+			return QStringLiteral("文件完整性校验失败，未写入目标文件");
+		if (strErrorCode == QStringLiteral("write_failed"))
+			return QStringLiteral("写入文件失败，请检查磁盘空间和目录权限");
+		if (strErrorCode == QStringLiteral("cancelled"))
+			return QStringLiteral("文件传输已取消");
+		if (strErrorCode.isEmpty())
+			return QStringLiteral("文件传输发生错误");
+		return QStringLiteral("文件传输失败（%1）").arg(strErrorCode);
+	}
+
+	QJsonObject FileTransferTaskObject(const KFileTransferTaskSnapshot &task)
+	{
+		QJsonObject object;
+		object.insert(QStringLiteral("taskId"), task.strTaskId);
+		object.insert(QStringLiteral("fileId"), task.strFileId);
+		object.insert(QStringLiteral("displayName"), task.strDisplayName);
+		object.insert(QStringLiteral("kind"), FileTransferTaskKindName(task.kind));
+		object.insert(QStringLiteral("direction"),
+			FileTransferDirectionNameForBridge(task.direction));
+		object.insert(QStringLiteral("status"), FileTransferTaskStateName(task.state));
+		object.insert(QStringLiteral("bytesTransferred"),
+			QString::number(task.nBytesTransferred));
+		object.insert(QStringLiteral("bytesTotal"), QString::number(task.nBytesTotal));
+		object.insert(QStringLiteral("errorCode"), task.strErrorCode);
+		object.insert(QStringLiteral("canPause"), task.bCanPause);
+		object.insert(QStringLiteral("canRetry"), task.bCanRetry);
+		return object;
+	}
+}
 
 KWebViewWidget::KWebViewWidget(QWidget *pParent)
 	: QWidget(pParent)
@@ -393,6 +522,7 @@ void KWebViewWidget::sendSessionCapabilitiesChanged(
 	object.insert(QStringLiteral("unicodeText"), capabilities.bUnicodeText);
 	object.insert(QStringLiteral("mouseButtons"), capabilities.bMouseButtons);
 	object.insert(QStringLiteral("mouseWheel"), capabilities.bMouseWheel);
+	object.insert(QStringLiteral("fileTransfer"), capabilities.bFileTransfer);
 	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
 }
 
@@ -455,6 +585,147 @@ void KWebViewWidget::sendTerminalError(const QString &strError)
 	QJsonObject object;
 	object.insert(QStringLiteral("type"), QStringLiteral("terminalError"));
 	object.insert(QStringLiteral("message"), strError);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendFileTransferStateChanged(
+	KFileTransferState state,
+	bool bAvailable,
+	const QString &strStatus,
+	const QString &strDeviceName,
+	const QString &strDeviceSource,
+	int nActiveTaskCount,
+	quint64 nGeneration)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("fileTransferStateChanged"));
+	object.insert(QStringLiteral("state"), FileTransferStateName(state));
+	object.insert(QStringLiteral("available"), bAvailable);
+	object.insert(QStringLiteral("status"), FileTransferStatusText(strStatus));
+	object.insert(QStringLiteral("deviceName"), strDeviceName);
+	object.insert(QStringLiteral("deviceSource"), strDeviceSource);
+	object.insert(QStringLiteral("activeTasks"), nActiveTaskCount);
+	object.insert(QStringLiteral("generation"), QString::number(nGeneration));
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendFilePaneLoading(
+	KFileTransferPane pane,
+	const QString &strRequestId)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("filePaneLoading"));
+	object.insert(QStringLiteral("pane"), FileTransferPaneName(pane));
+	object.insert(QStringLiteral("requestId"), strRequestId);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendFilePaneChanged(const KFileTransferPaneSnapshot &snapshot)
+{
+	QJsonArray entries;
+	for (const KFileTransferPaneEntry &entry : snapshot.entryList)
+	{
+		QJsonObject item;
+		item.insert(QStringLiteral("entryId"), entry.strEntryId);
+		item.insert(QStringLiteral("name"), entry.strName);
+		item.insert(QStringLiteral("kind"), FileTransferEntryKind(entry.type));
+		item.insert(QStringLiteral("sizeBytes"), QString::number(entry.nSize));
+		item.insert(QStringLiteral("modifiedAtMs"),
+			QString::number(entry.lastModifiedUtc.toMSecsSinceEpoch()));
+		item.insert(QStringLiteral("navigable"), entry.bNavigable);
+		item.insert(QStringLiteral("transferable"), entry.bTransferable);
+		item.insert(QStringLiteral("extension"),
+			entry.type == RegularFileListingEntryType
+				? QFileInfo(entry.strName).suffix().toLower() : QString());
+		entries.append(item);
+	}
+
+	QJsonObject location;
+	location.insert(QStringLiteral("displayPath"), snapshot.strDisplayPath);
+	location.insert(QStringLiteral("canGoUp"), snapshot.bCanGoUp);
+
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("filePaneChanged"));
+	object.insert(QStringLiteral("pane"), FileTransferPaneName(snapshot.pane));
+	object.insert(QStringLiteral("requestId"), snapshot.strRequestId);
+	object.insert(QStringLiteral("listingId"), snapshot.strListingId);
+	object.insert(QStringLiteral("location"), location);
+	object.insert(QStringLiteral("entries"), entries);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendFileTransferSnapshot(
+	const QVector<KFileTransferTaskSnapshot> &taskList)
+{
+	QJsonArray tasks;
+	for (const KFileTransferTaskSnapshot &task : taskList)
+		tasks.append(FileTransferTaskObject(task));
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("fileTransferSnapshot"));
+	object.insert(QStringLiteral("tasks"), tasks);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendFileTransferTaskChanged(
+	const KFileTransferTaskSnapshot &task)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("fileTransferTaskChanged"));
+	object.insert(QStringLiteral("task"), FileTransferTaskObject(task));
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendFileTransferTaskRemoved(const QString &strTaskId)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("fileTransferTaskRemoved"));
+	object.insert(QStringLiteral("taskId"), strTaskId);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendFileTransferConflictRequested(
+	const KFileTransferConflictSnapshot &conflict)
+{
+	QJsonObject source;
+	source.insert(QStringLiteral("sizeBytes"), QString::number(conflict.nSourceSize));
+	source.insert(QStringLiteral("modifiedAtMs"),
+		QString::number(conflict.sourceLastModifiedUtc.toMSecsSinceEpoch()));
+	QJsonObject destination;
+	destination.insert(QStringLiteral("sizeBytes"),
+		QString::number(conflict.nDestinationSize));
+	destination.insert(QStringLiteral("modifiedAtMs"),
+		QString::number(conflict.destinationLastModifiedUtc.toMSecsSinceEpoch()));
+	QJsonObject object;
+	object.insert(QStringLiteral("type"),
+		QStringLiteral("fileTransferConflictRequested"));
+	object.insert(QStringLiteral("conflictId"), conflict.strConflictId);
+	object.insert(QStringLiteral("taskId"), conflict.strTaskId);
+	object.insert(QStringLiteral("fileId"), conflict.strFileId);
+	object.insert(QStringLiteral("name"), conflict.strName);
+	object.insert(QStringLiteral("source"), source);
+	object.insert(QStringLiteral("destination"), destination);
+	object.insert(QStringLiteral("applyToRemainingAllowed"),
+		conflict.bApplyToRemainingAllowed);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendFileTransferError(
+	const QString &strErrorCode,
+	const QString &strMessage)
+{
+	Q_UNUSED(strMessage);
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("fileTransferError"));
+	object.insert(QStringLiteral("code"), strErrorCode);
+	object.insert(QStringLiteral("message"), FileTransferErrorText(strErrorCode));
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendFileTransferClosePromptRequested()
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"),
+		QStringLiteral("fileTransferClosePromptRequested"));
 	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
 }
 
@@ -621,6 +892,10 @@ void KWebViewWidget::handleWebMessage(const QString &strMessage)
 			document.object().value(QStringLiteral("deviceId")).toString());
 	else if (strCommand == QStringLiteral("openCurrentTerminal"))
 		emit openCurrentTerminalRequested();
+	else if (strCommand == QStringLiteral("openCurrentFileTransfer"))
+		emit openCurrentFileTransferRequested();
+	else if (strCommand == QStringLiteral("stopCurrentFileTransfer"))
+		emit stopCurrentFileTransferRequested();
 	else if (strCommand == QStringLiteral("requestTerminalFrontendSupport"))
 		emit requestTerminalFrontendSupportRequested();
 	else if (strCommand == QStringLiteral("respondTerminalAccessRequest"))
@@ -718,6 +993,109 @@ void KWebViewWidget::handleWebMessage(const QString &strMessage)
 		emit toggleMaximizeDesktopWindowRequested();
 	else if (strCommand == QStringLiteral("beginDesktopWindowDrag"))
 		emit beginDesktopWindowDragRequested();
+	else if (strCommand == QStringLiteral("closeFileTransferWindow"))
+		emit closeFileTransferWindowRequested();
+	else if (strCommand == QStringLiteral("minimizeFileTransferWindow"))
+		emit minimizeFileTransferWindowRequested();
+	else if (strCommand == QStringLiteral("toggleMaximizeFileTransferWindow"))
+		emit toggleMaximizeFileTransferWindowRequested();
+	else if (strCommand == QStringLiteral("beginFileTransferWindowDrag"))
+		emit beginFileTransferWindowDragRequested();
+	else if (strCommand == QStringLiteral("requestFileTransferSnapshot"))
+		emit requestFileTransferSnapshotRequested();
+	else if (strCommand == QStringLiteral("navigateFilePane"))
+	{
+		const QJsonObject object = document.object();
+		emit navigateFilePaneRequested(
+			object.value(QStringLiteral("pane")).toString(),
+			object.value(QStringLiteral("listingId")).toString(),
+			object.value(QStringLiteral("targetEntryId")).toString());
+	}
+	else if (strCommand == QStringLiteral("navigateFilePaneByPath"))
+	{
+		const QJsonObject object = document.object();
+		emit navigateFilePaneByPathRequested(
+			object.value(QStringLiteral("pane")).toString(),
+			object.value(QStringLiteral("path")).toString());
+	}
+	else if (strCommand == QStringLiteral("navigateFilePaneUp"))
+	{
+		const QJsonObject object = document.object();
+		emit navigateFilePaneUpRequested(
+			object.value(QStringLiteral("pane")).toString(),
+			object.value(QStringLiteral("listingId")).toString());
+	}
+	else if (strCommand == QStringLiteral("refreshFilePane"))
+	{
+		emit refreshFilePaneRequested(
+			document.object().value(QStringLiteral("pane")).toString());
+	}
+	else if (strCommand == QStringLiteral("startFileCopy"))
+	{
+		const QJsonObject object = document.object();
+		const QJsonValue entryIdValue = object.value(
+			QStringLiteral("sourceEntryIds"));
+		QStringList entryIds;
+		bool bValidEntryIds = entryIdValue.isArray();
+		const QJsonArray entryIdArray = entryIdValue.toArray();
+		if (entryIdArray.isEmpty()
+			|| entryIdArray.size()
+				> KFileTransferControlMessageCodec::kMaximumEntryIdCount)
+		{
+			bValidEntryIds = false;
+		}
+		for (const QJsonValue &value : entryIdArray)
+		{
+			const QString strEntryId = value.toString();
+			if (!value.isString() || strEntryId.isEmpty()
+				|| strEntryId.size() > 64)
+			{
+				bValidEntryIds = false;
+				break;
+			}
+			entryIds.append(strEntryId);
+		}
+		const QString strSourceListingId = object.value(
+			QStringLiteral("sourceListingId")).toString();
+		const QString strDestinationListingId = object.value(
+			QStringLiteral("destinationListingId")).toString();
+		if (!bValidEntryIds || strSourceListingId.isEmpty()
+			|| strSourceListingId.size() > 64
+			|| strDestinationListingId.isEmpty()
+			|| strDestinationListingId.size() > 64)
+		{
+			sendFileTransferError(QStringLiteral("invalid_copy_request"),
+				QString());
+			return;
+		}
+		emit startFileCopyRequested(
+			object.value(QStringLiteral("sourcePane")).toString(),
+			strSourceListingId,
+			entryIds,
+			strDestinationListingId);
+	}
+	else if (strCommand == QStringLiteral("pauseFileTransferTask"))
+		emit pauseFileTransferTaskRequested(
+			document.object().value(QStringLiteral("taskId")).toString());
+	else if (strCommand == QStringLiteral("resumeFileTransferTask"))
+		emit resumeFileTransferTaskRequested(
+			document.object().value(QStringLiteral("taskId")).toString());
+	else if (strCommand == QStringLiteral("cancelFileTransferTask"))
+		emit cancelFileTransferTaskRequested(
+			document.object().value(QStringLiteral("taskId")).toString());
+	else if (strCommand == QStringLiteral("retryFileTransferTask"))
+		emit retryFileTransferTaskRequested(
+			document.object().value(QStringLiteral("taskId")).toString());
+	else if (strCommand == QStringLiteral("resolveFileConflict"))
+	{
+		const QJsonObject object = document.object();
+		emit resolveFileConflictRequested(
+			object.value(QStringLiteral("conflictId")).toString(),
+			object.value(QStringLiteral("resolution")).toString(),
+			object.value(QStringLiteral("applyToRemaining")).toBool(false));
+	}
+	else if (strCommand == QStringLiteral("clearCompletedFileTransferTasks"))
+		emit clearCompletedFileTransferTasksRequested();
 	else if (strCommand == QStringLiteral("showControlCenterMenu"))
 	{
 		const QJsonObject object = document.object();

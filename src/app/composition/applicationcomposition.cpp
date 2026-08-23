@@ -2,6 +2,7 @@
 
 #include "adapters/windows/device/windowsdeviceinfoprovider.h"
 #include "adapters/windows/input/windowsinputinjector.h"
+#include "adapters/windows/file_transfer/windowsfilesystemadapter.h"
 #include "adapters/windows/privacy/windowsdisplaypoweradapter.h"
 #include "adapters/windows/privacy/windowsprivacyoverlayadapter.h"
 #include "adapters/windows/privacy/windowsworkstationlockadapter.h"
@@ -14,6 +15,7 @@
 #include "adapters/settings/qsettingsapplicationstore.h"
 #include "adapters/settings/qsettingsdevicesecuritypreferencestore.h"
 #include "app/remotedesktopwindow.h"
+#include "app/filetransferwindow.h"
 #include "adapters/windows/terminal/windowspseudoconsole.h"
 #include "adapters/windows/terminal/windowsterminalfrontend.h"
 #include "capture/captureservice.h"
@@ -29,6 +31,7 @@
 #include "settings/devicesecuritypreferenceservice.h"
 #include "clipboard/clipboardsyncservice.h"
 #include "terminal/terminalsessionservice.h"
+#include "file_transfer/filetransfersessionservice.h"
 #include "privacy/postsessionactionservice.h"
 #include "privacy/privacymodeservice.h"
 #include "ui_bridge/webviewwidget.h"
@@ -90,6 +93,35 @@ namespace
 		return QDir(SecurityDirectoryPath())
 			.filePath(QStringLiteral("trusted_devices.json"));
 	}
+
+	bool ParseFileTransferPane(const QString &strPane, KFileTransferPane *pPane)
+	{
+		if (pPane == nullptr)
+			return false;
+		if (strPane == QStringLiteral("local"))
+		{
+			*pPane = LocalFileTransferPane;
+			return true;
+		}
+		if (strPane == QStringLiteral("remote"))
+		{
+			*pPane = RemoteFileTransferPane;
+			return true;
+		}
+		return false;
+	}
+
+	KFileTransferConflictResolution FileTransferConflictResolutionFromName(
+		const QString &strResolution)
+	{
+		if (strResolution == QStringLiteral("overwrite"))
+			return OverwriteFileTransferConflictResolution;
+		if (strResolution == QStringLiteral("keepBoth"))
+			return KeepBothFileTransferConflictResolution;
+		if (strResolution == QStringLiteral("skip"))
+			return SkipFileTransferConflictResolution;
+		return InvalidFileTransferConflictResolution;
+	}
 }
 
 KApplicationComposition::KApplicationComposition(QObject *pParent)
@@ -135,6 +167,10 @@ KApplicationComposition::KApplicationComposition(QObject *pParent)
 		std::make_unique<KWindowsPseudoConsole>(),
 		m_pSessionService,
 		std::make_unique<KWindowsTerminalFrontend>(),
+		this))
+	, m_pFileTransferSessionService(new KFileTransferSessionService(
+		std::make_unique<KWindowsFileSystemAdapter>(),
+		m_pSessionService,
 		this))
 	, m_pShutdownDeadlineTimer(new QTimer(this))
 {
@@ -220,6 +256,12 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		m_pTerminalSessionService, &KTerminalSessionService::respondIncomingRequest);
 	connect(pWebViewWidget, &KWebViewWidget::closeTerminalRequested,
 		m_pTerminalSessionService, &KTerminalSessionService::closeTerminal);
+	connect(pWebViewWidget, &KWebViewWidget::openCurrentFileTransferRequested,
+		m_pFileTransferSessionService,
+		&KFileTransferSessionService::openCurrentFileTransfer);
+	connect(pWebViewWidget, &KWebViewWidget::stopCurrentFileTransferRequested,
+		m_pFileTransferSessionService,
+		&KFileTransferSessionService::stopCurrentFileTransfer);
 	connect(pWebViewWidget, &KWebViewWidget::requestApplicationSettingsRequested,
 		m_pApplicationSettingsService, &KApplicationSettingsService::requestSettings);
 	connect(pWebViewWidget, &KWebViewWidget::updateApplicationSettingsRequested,
@@ -316,11 +358,59 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		{
 			pWebViewWidget->sendTerminalError(KSessionErrorPresenter::userMessage(error));
 		});
+	connect(m_pFileTransferSessionService, &KFileTransferSessionService::stateChanged,
+		pWebViewWidget,
+		[this, pWebViewWidget](KFileTransferState state,
+			bool bAvailable,
+			const QString &strStatus)
+		{
+			m_strFileTransferStatus = strStatus;
+			pWebViewWidget->sendFileTransferStateChanged(state, bAvailable,
+				strStatus, m_strFileTransferDeviceName, QString(),
+				m_nFileTransferActiveTaskCount,
+				m_pSessionService->sessionGeneration());
+		});
+	connect(m_pFileTransferSessionService,
+		&KFileTransferSessionService::controlledActivityChanged,
+		pWebViewWidget,
+		[this, pWebViewWidget](bool, int nActiveTaskCount)
+		{
+			m_nFileTransferActiveTaskCount = nActiveTaskCount;
+			pWebViewWidget->sendFileTransferStateChanged(
+				m_pFileTransferSessionService->state(),
+				m_pFileTransferSessionService->isAvailable(),
+				m_strFileTransferStatus,
+				m_strFileTransferDeviceName,
+				QString(), nActiveTaskCount,
+				m_pSessionService->sessionGeneration());
+		});
+	connect(m_pFileTransferSessionService, &KFileTransferSessionService::transferError,
+		pWebViewWidget, &KWebViewWidget::sendFileTransferError);
+	connect(m_pSessionViewModel, &KSessionViewModel::remoteDeviceInfoChanged,
+		pWebViewWidget,
+		[this, pWebViewWidget](const QString &strComputerName,
+			const QString &, const QString &, int, int)
+		{
+			m_strFileTransferDeviceName = strComputerName;
+			pWebViewWidget->sendFileTransferStateChanged(
+				m_pFileTransferSessionService->state(),
+				m_pFileTransferSessionService->isAvailable(),
+				m_strFileTransferStatus, strComputerName, QString(),
+				m_nFileTransferActiveTaskCount,
+				m_pSessionService->sessionGeneration());
+		});
 	QString strTerminalSupportReason;
 	const bool bTerminalFrontendSupported =
 		m_pTerminalSessionService->isFrontendSupported(&strTerminalSupportReason);
 	pWebViewWidget->sendTerminalFrontendSupportChanged(
 		bTerminalFrontendSupported, strTerminalSupportReason);
+	pWebViewWidget->sendFileTransferStateChanged(
+		m_pFileTransferSessionService->state(),
+		m_pFileTransferSessionService->isAvailable(),
+		m_strFileTransferStatus,
+		m_strFileTransferDeviceName,
+		QString(), m_nFileTransferActiveTaskCount,
+		m_pSessionService->sessionGeneration());
 }
 
 void KApplicationComposition::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWindow)
@@ -430,6 +520,173 @@ void KApplicationComposition::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWin
 		m_pSessionViewModel, &KSessionViewModel::handleInputFeedbackRendered);
 }
 
+void KApplicationComposition::wireFileTransferWindow(KFileTransferWindow *pWindow)
+{
+	Q_ASSERT(pWindow != nullptr);
+	KWebViewWidget *pWebViewWidget = pWindow->webViewWidget();
+	Q_ASSERT(pWebViewWidget != nullptr);
+
+	connect(pWebViewWidget, &KWebViewWidget::requestFileTransferSnapshotRequested,
+		m_pFileTransferSessionService,
+		&KFileTransferSessionService::requestSnapshot);
+	connect(pWebViewWidget, &KWebViewWidget::stopCurrentFileTransferRequested,
+		m_pFileTransferSessionService,
+		&KFileTransferSessionService::stopCurrentFileTransfer);
+	connect(pWindow, &KFileTransferWindow::fileTransferCloseRequested,
+		m_pFileTransferSessionService,
+		[this](bool bStopLogicalSession)
+		{
+			if (bStopLogicalSession)
+				m_pFileTransferSessionService->stopCurrentFileTransfer();
+		});
+	connect(pWebViewWidget, &KWebViewWidget::navigateFilePaneRequested,
+		m_pFileTransferSessionService,
+		[this, pWebViewWidget](const QString &strPane,
+			const QString &strListingId,
+			const QString &strTargetEntryId)
+		{
+			KFileTransferPane pane;
+			if (!ParseFileTransferPane(strPane, &pane))
+			{
+				pWebViewWidget->sendFileTransferError(
+					QStringLiteral("invalid_pane"), QString());
+				return;
+			}
+			m_pFileTransferSessionService->navigatePane(
+				pane, strListingId, strTargetEntryId);
+		});
+	connect(pWebViewWidget, &KWebViewWidget::navigateFilePaneByPathRequested,
+		m_pFileTransferSessionService,
+		[this, pWebViewWidget](const QString &strPane, const QString &strPath)
+		{
+			KFileTransferPane pane;
+			if (!ParseFileTransferPane(strPane, &pane))
+			{
+				pWebViewWidget->sendFileTransferError(
+					QStringLiteral("invalid_pane"), QString());
+				return;
+			}
+			m_pFileTransferSessionService->navigatePaneByPath(
+				pane, strPath);
+		});
+	connect(pWebViewWidget, &KWebViewWidget::navigateFilePaneUpRequested,
+		m_pFileTransferSessionService,
+		[this, pWebViewWidget](const QString &strPane, const QString &strListingId)
+		{
+			KFileTransferPane pane;
+			if (!ParseFileTransferPane(strPane, &pane))
+			{
+				pWebViewWidget->sendFileTransferError(
+					QStringLiteral("invalid_pane"), QString());
+				return;
+			}
+			m_pFileTransferSessionService->navigatePaneUp(
+				pane, strListingId);
+		});
+	connect(pWebViewWidget, &KWebViewWidget::refreshFilePaneRequested,
+		m_pFileTransferSessionService,
+		[this, pWebViewWidget](const QString &strPane)
+		{
+			KFileTransferPane pane;
+			if (!ParseFileTransferPane(strPane, &pane))
+			{
+				pWebViewWidget->sendFileTransferError(
+					QStringLiteral("invalid_pane"), QString());
+				return;
+			}
+			m_pFileTransferSessionService->refreshPane(pane);
+		});
+	connect(pWebViewWidget, &KWebViewWidget::startFileCopyRequested,
+		m_pFileTransferSessionService,
+		[this, pWebViewWidget](const QString &strSourcePane,
+			const QString &strSourceListingId,
+			const QStringList &sourceEntryIds,
+			const QString &strDestinationListingId)
+		{
+			KFileTransferPane pane;
+			if (!ParseFileTransferPane(strSourcePane, &pane))
+			{
+				pWebViewWidget->sendFileTransferError(
+					QStringLiteral("invalid_pane"), QString());
+				return;
+			}
+			m_pFileTransferSessionService->startCopy(
+				pane,
+				strSourceListingId, sourceEntryIds, strDestinationListingId);
+		});
+	connect(pWebViewWidget, &KWebViewWidget::pauseFileTransferTaskRequested,
+		m_pFileTransferSessionService, &KFileTransferSessionService::pauseTask);
+	connect(pWebViewWidget, &KWebViewWidget::resumeFileTransferTaskRequested,
+		m_pFileTransferSessionService, &KFileTransferSessionService::resumeTask);
+	connect(pWebViewWidget, &KWebViewWidget::cancelFileTransferTaskRequested,
+		m_pFileTransferSessionService, &KFileTransferSessionService::cancelTask);
+	connect(pWebViewWidget, &KWebViewWidget::retryFileTransferTaskRequested,
+		m_pFileTransferSessionService, &KFileTransferSessionService::retryTask);
+	connect(pWebViewWidget, &KWebViewWidget::resolveFileConflictRequested,
+		m_pFileTransferSessionService,
+		[this, pWebViewWidget](const QString &strConflictId,
+			const QString &strResolution,
+			bool bApplyToRemaining)
+		{
+			const KFileTransferConflictResolution resolution =
+				FileTransferConflictResolutionFromName(strResolution);
+			if (resolution == InvalidFileTransferConflictResolution)
+			{
+				pWebViewWidget->sendFileTransferError(
+					QStringLiteral("invalid_conflict_resolution"),
+					QStringLiteral("无法识别文件冲突处理方式"));
+				return;
+			}
+			m_pFileTransferSessionService->resolveConflict(
+				strConflictId, resolution, bApplyToRemaining);
+		});
+	connect(pWebViewWidget, &KWebViewWidget::clearCompletedFileTransferTasksRequested,
+		m_pFileTransferSessionService,
+		&KFileTransferSessionService::clearCompletedTasks);
+
+	connect(m_pFileTransferSessionService, &KFileTransferSessionService::stateChanged,
+		pWebViewWidget,
+		[this, pWebViewWidget](KFileTransferState state,
+			bool bAvailable,
+			const QString &strStatus)
+		{
+			pWebViewWidget->sendFileTransferStateChanged(state, bAvailable,
+				strStatus, m_strFileTransferDeviceName, QString(),
+				m_nFileTransferActiveTaskCount,
+				m_pSessionService->sessionGeneration());
+		});
+	connect(m_pFileTransferSessionService, &KFileTransferSessionService::paneLoading,
+		pWebViewWidget, &KWebViewWidget::sendFilePaneLoading);
+	connect(m_pFileTransferSessionService, &KFileTransferSessionService::paneChanged,
+		pWebViewWidget, &KWebViewWidget::sendFilePaneChanged);
+	connect(m_pFileTransferSessionService, &KFileTransferSessionService::snapshotChanged,
+		pWebViewWidget, &KWebViewWidget::sendFileTransferSnapshot);
+	connect(m_pFileTransferSessionService, &KFileTransferSessionService::taskChanged,
+		pWebViewWidget, &KWebViewWidget::sendFileTransferTaskChanged);
+	connect(m_pFileTransferSessionService, &KFileTransferSessionService::taskRemoved,
+		pWebViewWidget, &KWebViewWidget::sendFileTransferTaskRemoved);
+	connect(m_pFileTransferSessionService, &KFileTransferSessionService::conflictRequested,
+		pWebViewWidget, &KWebViewWidget::sendFileTransferConflictRequested);
+	connect(m_pFileTransferSessionService, &KFileTransferSessionService::transferError,
+		pWebViewWidget, &KWebViewWidget::sendFileTransferError);
+	connect(m_pFileTransferSessionService,
+		&KFileTransferSessionService::controlledActivityChanged,
+		pWindow, [pWindow](bool, int nActiveTaskCount)
+		{
+			pWindow->setHasActiveTasks(nActiveTaskCount > 0);
+		});
+	pWindow->setHasActiveTasks(m_pFileTransferSessionService->hasActiveTasks());
+
+	pWebViewWidget->sendFileTransferStateChanged(
+		m_pFileTransferSessionService->state(),
+		m_pFileTransferSessionService->isAvailable(),
+		m_strFileTransferStatus,
+		m_strFileTransferDeviceName,
+		QString(), m_nFileTransferActiveTaskCount,
+		m_pSessionService->sessionGeneration());
+	m_pFileTransferSessionService->requestSnapshot();
+}
+
 void KApplicationComposition::enterRemoteDesktop()
 {
 	m_pSessionViewModel->enterRemoteDesktop();
@@ -454,8 +711,10 @@ void KApplicationComposition::shutdown()
 	m_pShutdownDeadlineTimer->start();
 	m_bSessionShutdownPending = !m_pSessionService->isIdle();
 	m_bCaptureShutdownPending = true;
+	m_bFileTransferShutdownPending = true;
 	m_pClipboardSyncService->shutdown();
 	m_pTerminalSessionService->shutdown();
+	m_pFileTransferSessionService->shutdown();
 	m_pDiscoveryService->stop();
 	m_pSessionService->disconnectSession();
 	m_pCaptureService->stopCapture();
@@ -465,7 +724,8 @@ void KApplicationComposition::shutdown()
 void KApplicationComposition::tryFinishShutdown()
 {
 	if (!m_bShutdown || m_bShutdownFinished
-		|| m_bSessionShutdownPending || m_bCaptureShutdownPending)
+		|| m_bSessionShutdownPending || m_bCaptureShutdownPending
+		|| m_bFileTransferShutdownPending)
 		return;
 	m_bShutdownFinished = true;
 	m_pShutdownDeadlineTimer->stop();
@@ -478,9 +738,11 @@ void KApplicationComposition::handleShutdownDeadline()
 		return;
 
 	m_bShutdownFinished = true;
-	const QString strPending = QStringLiteral("session=%1 capture=%2 deadlineMs=%3")
+	const QString strPending = QStringLiteral(
+		"session=%1 capture=%2 fileTransfer=%3 deadlineMs=%4")
 		.arg(m_bSessionShutdownPending ? 1 : 0)
 		.arg(m_bCaptureShutdownPending ? 1 : 0)
+		.arg(m_bFileTransferShutdownPending ? 1 : 0)
 		.arg(kApplicationShutdownDeadlineMs);
 	qCritical().noquote() << QStringLiteral("Application shutdown deadline reached: %1")
 		.arg(strPending);
@@ -507,6 +769,16 @@ void KApplicationComposition::wireServices()
 			if (m_bShutdown)
 			{
 				m_bCaptureShutdownPending = false;
+				tryFinishShutdown();
+			}
+		});
+	connect(m_pFileTransferSessionService,
+		&KFileTransferSessionService::shutdownFinished,
+		this, [this]()
+		{
+			if (m_bShutdown)
+			{
+				m_bFileTransferShutdownPending = false;
 				tryFinishShutdown();
 			}
 		});

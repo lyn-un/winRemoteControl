@@ -1,6 +1,7 @@
 #include "app/mainwindow.h"
 
 #include "app/composition/applicationcomposition.h"
+#include "app/filetransferwindow.h"
 #include "app/remotedesktopwindow.h"
 #include "ui_bridge/webviewwidget.h"
 
@@ -56,11 +57,13 @@ void KMainWindow::closeEvent(QCloseEvent *pEvent)
 		{
 			m_bClosePending = true;
 			closeRemoteDesktopWindow();
+			closeFileTransferWindow();
 			m_pComposition->shutdown();
 		}
 		return;
 	}
 	closeRemoteDesktopWindow();
+	closeFileTransferWindow();
 	QMainWindow::closeEvent(pEvent);
 }
 
@@ -76,6 +79,8 @@ void KMainWindow::initConnections()
 	m_pComposition->wireDashboard(m_pWebViewWidget);
 	connect(m_pWebViewWidget, &KWebViewWidget::enterDesktopRequested,
 		this, &KMainWindow::openRemoteDesktopWindow);
+	connect(m_pWebViewWidget, &KWebViewWidget::openCurrentFileTransferRequested,
+		this, &KMainWindow::openFileTransferWindow);
 	connect(m_pWebViewWidget, &KWebViewWidget::minimizeMainWindowRequested,
 		this, &KMainWindow::showMinimized);
 	connect(m_pWebViewWidget, &KWebViewWidget::closeMainWindowRequested,
@@ -110,6 +115,36 @@ void KMainWindow::closeRemoteDesktopWindow()
 	m_pComposition->leaveRemoteDesktop();
 	m_pRemoteDesktopWindow->deleteLater();
 	m_pRemoteDesktopWindow = nullptr;
+}
+
+void KMainWindow::openFileTransferWindow()
+{
+	if (m_pFileTransferWindow == nullptr)
+	{
+		m_pFileTransferWindow = new KFileTransferWindow(this);
+		connect(m_pFileTransferWindow, &KFileTransferWindow::fileTransferCloseRequested,
+			this, [this](bool)
+			{
+				if (m_pFileTransferWindow == nullptr)
+					return;
+				m_pFileTransferWindow->deleteLater();
+				m_pFileTransferWindow = nullptr;
+			});
+		m_pComposition->wireFileTransferWindow(m_pFileTransferWindow);
+		m_pFileTransferWindow->loadFrontend(
+			m_strFrontendPath, m_pComposition->applicationThemeId());
+	}
+	m_pFileTransferWindow->show();
+	m_pFileTransferWindow->raise();
+	m_pFileTransferWindow->activateWindow();
+}
+
+void KMainWindow::closeFileTransferWindow()
+{
+	if (m_pFileTransferWindow == nullptr)
+		return;
+	m_pFileTransferWindow->deleteLater();
+	m_pFileTransferWindow = nullptr;
 }
 
 void KMainWindow::beginWindowDrag()

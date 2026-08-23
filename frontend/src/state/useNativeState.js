@@ -53,6 +53,13 @@ export function useNativeState() {
 	const [terminalState, setTerminalState] = useState({ state: "Closed", available: false, status: "" });
 	const [terminalFrontendSupport, setTerminalFrontendSupport] = useState({ supported: false, reason: "" });
 	const [terminalError, setTerminalError] = useState("");
+	const [fileTransferState, setFileTransferState] = useState({
+		state: "Closed",
+		available: false,
+		status: "当前会话未启用文件传输",
+		activeTasks: 0,
+	});
+	const [fileTransferError, setFileTransferError] = useState("");
   const [fps, setFps] = useState(0);
   const frameTimes = useRef([]);
   const settingsInitialized = useRef(false);
@@ -113,6 +120,7 @@ export function useNativeState() {
           setFps(0);
           frameTimes.current = [];
           setNetworkStats(emptyNetworkStats());
+		  setFileTransferState({ state: "Closed", available: false, status: "当前会话未启用文件传输", activeTasks: 0 });
           if (getViewMode() === "dashboard") {
             sendCommand("requestRecentDevices");
           }
@@ -290,6 +298,22 @@ export function useNativeState() {
 			return;
 		}
 
+		if (message.type === "fileTransferStateChanged") {
+			setFileTransferState({
+				state: message.state || "Closed",
+				available: Boolean(message.available),
+				status: message.status || "",
+				activeTasks: Number(message.activeTasks) || 0,
+			});
+			if (message.state === "Ready") setFileTransferError("");
+			return;
+		}
+
+		if (message.type === "fileTransferError") {
+			setFileTransferError(message.message || "文件传输发生错误");
+			return;
+		}
+
       if (message.type === "clipboardSyncStateChanged") {
         setClipboardSync({
           enabled: Boolean(message.enabled),
@@ -319,6 +343,7 @@ export function useNativeState() {
 				unicodeText: Boolean(message.unicodeText),
 				mouseButtons: Boolean(message.mouseButtons),
 				mouseWheel: Boolean(message.mouseWheel),
+				fileTransfer: Boolean(message.fileTransfer),
 			} : null);
 			return;
 		}
@@ -401,6 +426,8 @@ export function useNativeState() {
 		terminalState,
 		terminalFrontendSupport,
 		terminalError,
+		fileTransferState,
+		fileTransferError,
     clipboardSync,
     clipboardSyncError,
 		sessionCapabilities,

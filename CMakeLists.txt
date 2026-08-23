@@ -791,6 +791,8 @@ target_link_libraries(wrc_capture_application PUBLIC
 )
 
 add_library(wrc_qt_presentation STATIC
+	src/app/filetransferwindow.cpp
+	src/app/filetransferwindow.h
 	src/app/remotedesktopwindow.cpp
 	src/app/remotedesktopwindow.h
 	src/render/videorenderwidget.cpp
@@ -822,6 +824,7 @@ target_link_libraries(wrc_qt_presentation PUBLIC
 	wrc_session_application
 	wrc_clipboard_application
 	wrc_terminal_application
+	wrc_file_transfer_application
 	wrc_diagnostics
 	Qt6::Widgets
 	Qt6::Gui
@@ -891,6 +894,8 @@ target_link_libraries(winRemoteControl PRIVATE
 	wrc_windows_security_adapter
 	wrc_windows_terminal_adapter
 	wrc_windows_terminal_frontend_adapter
+	wrc_windows_file_transfer_adapter
+	wrc_file_transfer_application
 	wrc_capture_application
 	wrc_windows_capture_adapter
 	wrc_qt_presentation

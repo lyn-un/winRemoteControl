@@ -23,8 +23,8 @@ flowchart TB
 | 分组 | 主要目标 | 职责 |
 | --- | --- | --- |
 | 基础与核心 | `wrc_foundation`、`wrc_protocol`、`wrc_core`、`wrc_diagnostics` | 公共类型、协议 Codec、状态机、端口接口、结构化错误和诊断 |
-| 应用服务 | `wrc_session_application`、`wrc_capture_application`、`wrc_discovery_application`、`wrc_recent_device_application`、`wrc_settings_application`、`wrc_clipboard_application`、`wrc_terminal_application` | 编排用例，不直接绑定具体平台实现 |
-| 外部适配 | `wrc_webrtc_adapter`、`wrc_ffmpeg_adapter`、`wrc_signaling_adapter`、`wrc_udp_discovery_adapter`、`wrc_windows_capture_adapter`、`wrc_windows_adapters`、`wrc_settings_adapter` | WebRTC、编解码、TCP/UDP、DXGI、Win32 和 INI 持久化 |
+| 应用服务 | `wrc_session_application`、`wrc_capture_application`、`wrc_discovery_application`、`wrc_recent_device_application`、`wrc_settings_application`、`wrc_clipboard_application`、`wrc_terminal_application`、`wrc_file_transfer_application` | 编排用例，不直接绑定具体平台实现 |
+| 外部适配 | `wrc_webrtc_adapter`、`wrc_ffmpeg_adapter`、`wrc_signaling_adapter`、`wrc_udp_discovery_adapter`、`wrc_windows_capture_adapter`、`wrc_windows_adapters`、`wrc_settings_adapter` | WebRTC、编解码、TCP/UDP、DXGI、Win32 文件系统和 INI 持久化 |
 | 展示 | `wrc_qt_presentation` | Qt 窗口、WebView bridge、原生视频控件和 UI DTO |
 | 组合根 | `winRemoteControl` | 创建对象、注入端口实现、连接信号并管理进程退出 |
 
@@ -39,6 +39,8 @@ flowchart TB
 - `KCaptureService` 管理采集线程、generation 和 FrameSink；DXGI 采集源不依赖 WebRTC。
 - ViewModel 和 bridge 将 C++ 状态映射给 React，不创建或拥有网络、采集对象。
 - `KTerminalSessionService` 与 `KTerminalCommandDispatcher` 管理终端审批、实例序号、可靠命令、流控和状态；控制端由 `KWindowsTerminalFrontend + wrcTerminalRelay.exe` 接入 Windows Terminal，被控端由 `KWindowsPseudoConsole` 托管 ConPTY/Job Object。
+- `KFileTransferSessionService` 管理文件功能握手、双栏目录快照、单文件顺序队列、累计 ACK、冲突和生命周期；`IKFileSystemPort` 隔离文件系统能力，`KWindowsFileSystemAdapter` 负责 Windows 路径校验、源文件快照、临时写入、SHA-256 校验和原子提交。
+- `KFileTransferWindow` 与文件传输 ViewModel 只展示 C++ 发布的目录/任务快照。React 仅保存选择、排序和弹层等界面状态，不持有文件路径映射、文件句柄或正文。
 
 ## 线程模型
 
@@ -48,6 +50,7 @@ flowchart TB
 - Remote frame processor 线程：将控制端 I420 帧转换为 BGRA，只保留最新待处理帧，并用共享像素存储投递到 GUI。
 - teardown 后台任务：异步释放 PeerConnection、Factory 和 WebRTC 线程。
 - latency trace 线程：批量落盘高频延迟事件。
+- File transfer worker：执行目录枚举、文件读取、增量哈希、临时文件写入和清理；完成回调携带 `generation + taskId` 后投递回 Qt 所属线程。
 
 跨线程回调携带 `generation`，并通过 Callback Gate 投递到目标 Qt 线程。停止或对象销毁后 Gate 会拒绝迟到回调。
 
@@ -59,4 +62,4 @@ flowchart TB
 4. 新边界优先用小型类型化接口；没有真实替换点时不为每个类制造接口。
 5. 高频数据必须使用有上限队列、合并或丢弃旧数据的策略，不能无限积压。
 
-长期演进约束见[项目架构方针](../../PLAN.md)。
+文件传输的通道、路径安全与原子提交设计见[双向文件传输](../features/file-transfer.md)。长期演进约束见[项目架构方针](../../PLAN.md)。

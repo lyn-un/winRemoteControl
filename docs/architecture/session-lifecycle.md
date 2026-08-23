@@ -42,7 +42,7 @@ stateDiagram-v2
 3. 被控端允许后控制端创建 SDP Offer；SDP/ICE 只通过已认证且加密的 TLS 通道传输。
 4. Session DataChannel 打开后双方交换 `KSessionCapabilities`。
 5. H.264、`video`、`session`、`input` 和协议版本必须存在交集；三秒内不能完成时明确报版本不兼容。
-6. 协商成功才进入 `Connected`，剪贴板、实时输入和画质上限使用交集结果。
+6. 协商成功才进入 `Connected`，剪贴板、实时输入、文件传输和画质上限使用交集结果。文件传输还必须满足最终权限包含 `fileTransfer`，缺少这项可选能力不会阻止远程桌面连接。
 
 审批前不采集、不开放输入。完整重连会创建新的审批请求；只有同一条已审批会话内的 ICE Restart 不重复审批。
 
@@ -50,9 +50,13 @@ stateDiagram-v2
 
 首次 ICE `Disconnected` 后进入 `Reconnecting`，立即暂停输入并释放被控端已按下的键鼠。若 TCP 信令仍可用，只有原 Offer 发起方请求一次 ICE Restart；恢复窗口为 10 秒。成功后回到中断前的 `Connected` 或 `Streaming`，失败则进入一次性清理。
 
+文件传输是主会话内的附加生命周期，不增加主状态。控制端发出 `fileTransferOpenRequest`，被控端在当前 generation 的权限与能力检查通过后直接接受；随后仅由控制端按需建立可靠有序的 `file-control` 和 `file-data`。两条通道都打开后进入文件传输 Ready。被控端本地停止后，本 generation 内拒绝重新打开。
+
+进入 `Reconnecting` 时，文件任务停止新的磁盘读取和网络发送，保留最后累计 ACK 的 offset；同一会话恢复后从该 offset 继续。恢复失败、通道关闭、权限失效或 generation 改变时取消任务并异步清理临时文件。第一版不跨完整重连或新 generation 保存断点。
+
 ## 正常停止与异常停止
 
-Capture 和 Peer 使用请求式异步停止。`Stopping` 会等待两者按当前 `generation` 完成，再进入 `Idle` 或恢复 `Listening`。重复停止、旧 generation 和迟到回调不会重复结束会话。
+Capture、Peer 与文件清理使用请求式异步停止。`Stopping` 会等待当前 `generation` 的底层资源完成，再进入 `Idle` 或恢复 `Listening`。重复停止、旧 generation 和迟到回调不会重复结束会话。文件清理关闭读写句柄、删除未提交的 `.wrc-part-<uuid>`，且不会在 GUI 线程无限等待。
 
 被控端启用隐私屏时，最终断开的安全顺序固定为：禁止新命令、恢复遮罩或显示器、释放键鼠、异步停止 Capture 与 Peer、完成一次性 teardown，最后才消费会话结束动作。只有确实进入过 `Streaming` 且已选择 `LockWorkstation` 的 generation 会调用一次 `LockWorkStation()`；`Reconnecting`、审批失败和从未推流的连接不会锁屏。短暂恢复期间保留当前隐私模式，最终恢复失败才走上述断开流程。
 

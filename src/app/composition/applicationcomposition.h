@@ -6,6 +6,7 @@
 
 class KCaptureService;
 class KRemoteDesktopWindow;
+class KFileTransferWindow;
 class KSessionViewModel;
 class KWebViewWidget;
 class KSessionCoordinator;
@@ -16,6 +17,7 @@ class KApplicationSettingsService;
 class KDeviceSecurityPreferenceService;
 class KClipboardSyncService;
 class KTerminalSessionService;
+class KFileTransferSessionService;
 class QTimer;
 
 class KApplicationComposition : public QObject
@@ -33,6 +35,7 @@ public:
 	QString applicationThemeId() const;
 	void wireDashboard(KWebViewWidget *pWebViewWidget);
 	void wireRemoteDesktopWindow(KRemoteDesktopWindow *pWindow);
+	void wireFileTransferWindow(KFileTransferWindow *pWindow);
 	void enterRemoteDesktop();
 	void leaveRemoteDesktop();
 	void disconnectSession();
@@ -56,11 +59,16 @@ private:
 	KDeviceSecurityPreferenceService *m_pDeviceSecurityPreferenceService = nullptr;
 	KClipboardSyncService *m_pClipboardSyncService = nullptr;
 	KTerminalSessionService *m_pTerminalSessionService = nullptr;
+	KFileTransferSessionService *m_pFileTransferSessionService = nullptr;
 	QTimer *m_pShutdownDeadlineTimer = nullptr;
+	QString m_strFileTransferStatus = QStringLiteral("closed");
+	QString m_strFileTransferDeviceName;
+	int m_nFileTransferActiveTaskCount = 0;
 	bool m_bShutdown = false;
 	bool m_bShutdownFinished = false;
 	bool m_bSessionShutdownPending = false;
 	bool m_bCaptureShutdownPending = false;
+	bool m_bFileTransferShutdownPending = false;
 };
 
 #endif // _WINREMOTECONTROL_APPLICATIONCOMPOSITION_H_
