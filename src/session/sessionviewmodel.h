@@ -30,6 +30,7 @@ public:
 	KSessionViewModel &operator=(const KSessionViewModel &) = delete;
 
 	QSize remoteScreenSize() const;
+	KSessionState sessionState() const;
 
 public slots:
 	void startLocalPreview();

@@ -557,7 +557,7 @@ void KSessionCoordinator::startSignalingServer(quint16 nPort)
 	}
 
 	m_sessionStateMachine.beginListening();
-	updateListeningAvailability(true, nPort);
+	updateListeningAvailability(true, m_pAccessSessionFlow->listeningPort());
 	publishSessionState();
 }
 
@@ -1175,6 +1175,13 @@ QString KSessionCoordinator::requestPrivacyMode(KPrivacyMode mode)
 	{
 		emit privacyModeCommandCompleted(QString(), false,
 			QStringLiteral("invalid_session_state"));
+		return QString();
+	}
+	if (!hasPermission(ViewScreenPermissionScope)
+		|| !hasPermission(InputControlPermissionScope))
+	{
+		emit privacyModeCommandCompleted(QString(), false,
+			QStringLiteral("permission_denied"));
 		return QString();
 	}
 	QString strMode;

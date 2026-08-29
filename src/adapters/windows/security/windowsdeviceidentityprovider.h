@@ -11,6 +11,7 @@ class KWindowsDeviceIdentityProvider final : public KDeviceIdentityProvider
 {
 public:
 	explicit KWindowsDeviceIdentityProvider(const QString &strSecurityDirectory);
+	KWindowsDeviceIdentityProvider(const QString &strSecurityDirectory, bool bEphemeralIdentity);
 	~KWindowsDeviceIdentityProvider() override;
 
 	KWindowsDeviceIdentityProvider(const KWindowsDeviceIdentityProvider &) = delete;
@@ -52,6 +53,7 @@ private:
 	NCRYPT_KEY_HANDLE m_hKey = 0;
 	void *m_pCertificateContext = nullptr;
 	KDeviceCertificate m_certificate;
+	bool m_bEphemeralIdentity = false;
 };
 
 #endif // _WINREMOTECONTROL_ADAPTERS_WINDOWS_SECURITY_WINDOWSDEVICEIDENTITYPROVIDER_H_

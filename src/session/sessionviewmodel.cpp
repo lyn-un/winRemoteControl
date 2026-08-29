@@ -42,6 +42,11 @@ QSize KSessionViewModel::remoteScreenSize() const
 	return m_remoteScreenSize;
 }
 
+KSessionState KSessionViewModel::sessionState() const
+{
+	return m_lastSessionState;
+}
+
 void KSessionViewModel::startLocalPreview()
 {
 	m_pCaptureController->startCapture();

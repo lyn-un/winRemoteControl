@@ -71,6 +71,15 @@
         "WRC_ENABLE_FFMPEG": "OFF",
         "WRC_ENABLE_WEBVIEW2": "OFF"
       }
+    },
+    {
+      "name": "automation-tests",
+      "displayName": "Automation driver and SDK tests",
+      "inherits": "core-tests",
+      "binaryDir": "${sourceDir}/build/automation-tests",
+      "cacheVariables": {
+        "WRC_BUILD_AUTOMATION_DRIVER": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -112,6 +121,19 @@
         "wrc_device_identity_tests",
         "wrc_device_authentication_tests",
         "wrc_schannel_transport_tests"
+      ]
+    },
+    {
+      "name": "automation-tests",
+      "configurePreset": "automation-tests",
+      "configuration": "Release",
+      "targets": [
+        "wrcdriver",
+        "wrc_driver_base_tests",
+        "wrc_application_command_registry_tests",
+        "wrc_application_paths_tests",
+        "wrc_automation_host_bridge_tests",
+        "wrc_automation_loader_tests"
       ]
     }
   ],
@@ -161,6 +183,25 @@
       "filter": {
         "include": {
           "name": "^wrc_(protocol|device_identity|device_authentication|schannel_transport)_tests$"
+        }
+      },
+      "execution": {
+        "timeout": 30
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "automation-tests",
+      "configurePreset": "automation-tests",
+      "configuration": "Release",
+      "environment": {
+        "PATH": "$env{QTDIR}\\bin;$penv{PATH}"
+      },
+      "filter": {
+        "include": {
+          "name": "^wrc_(driver_base|application_command_registry|application_paths|automation_host_bridge|automation_loader)_tests$"
         }
       },
       "execution": {

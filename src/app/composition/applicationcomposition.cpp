@@ -19,6 +19,10 @@
 #include "adapters/windows/terminal/windowspseudoconsole.h"
 #include "adapters/windows/terminal/windowsterminalfrontend.h"
 #include "capture/captureservice.h"
+#include "commands/applicationcommandregistry.h"
+#include "commands/builtincommands.h"
+#include "automation/automationhostbridge.h"
+#include "automation/automationpluginloader.h"
 #include "core/discovery/devicediscoverycontroller.h"
 #include "discovery/landiscoveryservice.h"
 #include "devices/recentdeviceservice.h"
@@ -37,6 +41,7 @@
 #include "ui_bridge/webviewwidget.h"
 #include "ui_bridge/devicediscoveryviewmodel.h"
 #include "common/sessiontracelogger.h"
+#include "common/applicationpaths.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDebug>
@@ -44,6 +49,7 @@
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
+#include <QtCore/QJsonObject>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QUuid>
 #include <QtCore/QTimer>
@@ -56,7 +62,7 @@ namespace
 	QString RecentDevicesFilePath()
 	{
 		const QString strFileName = QStringLiteral("recent_devices.ini");
-		const QString strFilePath = QDir(QCoreApplication::applicationDirPath()).filePath(strFileName);
+		const QString strFilePath = KApplicationPaths::dataFilePath(strFileName);
 		const QString strLegacyFilePath =
 			QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
 				.filePath(strFileName);
@@ -72,20 +78,18 @@ namespace
 
 	QString ApplicationSettingsFilePath()
 	{
-		return QDir(QCoreApplication::applicationDirPath())
-			.filePath(QStringLiteral("settings.ini"));
+		return KApplicationPaths::dataFilePath(QStringLiteral("settings.ini"));
 	}
 
 	QString DeviceSecurityPreferencesFilePath()
 	{
-		return QDir(QCoreApplication::applicationDirPath())
-			.filePath(QStringLiteral("device_security_preferences.ini"));
+		return KApplicationPaths::dataFilePath(
+			QStringLiteral("device_security_preferences.ini"));
 	}
 
 	QString SecurityDirectoryPath()
 	{
-		return QDir(QCoreApplication::applicationDirPath())
-			.filePath(QStringLiteral("security"));
+		return KApplicationPaths::dataFilePath(QStringLiteral("security"));
 	}
 
 	QString TrustedDevicesFilePath()
@@ -127,12 +131,14 @@ namespace
 KApplicationComposition::KApplicationComposition(QObject *pParent)
 	: QObject(pParent)
 	, m_pCaptureService(new KCaptureService(this))
+	, m_pApplicationCommandRegistry(new KApplicationCommandRegistry(this))
 	, m_pSessionService(new KSessionCoordinator(
 		std::make_unique<KWindowsDeviceInfoProvider>(),
 		std::make_unique<KWindowsInputInjector>(),
 		std::make_unique<KWebRtcPeer>(),
 		std::make_unique<KTcpSignalingTransport>(),
-		std::make_unique<KWindowsDeviceIdentityProvider>(SecurityDirectoryPath()),
+		std::make_unique<KWindowsDeviceIdentityProvider>(
+			SecurityDirectoryPath(), KApplicationPaths::isAutomationTestProfile()),
 		std::make_unique<KSignedJsonTrustedDeviceStore>(TrustedDevicesFilePath()),
 		this))
 	, m_pSessionViewModel(new KSessionViewModel(
@@ -174,6 +180,31 @@ KApplicationComposition::KApplicationComposition(QObject *pParent)
 		this))
 	, m_pShutdownDeadlineTimer(new QTimer(this))
 {
+	if (!RegisterBuiltinApplicationCommands(
+		m_pApplicationCommandRegistry,
+		m_pSessionViewModel,
+		m_pSessionService,
+		m_pDeviceSecurityPreferenceService))
+	{
+		qFatal("Failed to register built-in application commands");
+	}
+	m_pAutomationHostBridge = new KAutomationHostBridge(
+		m_pApplicationCommandRegistry,
+		m_pSessionService,
+		KApplicationPaths::dataDirectoryPath(),
+		this);
+	m_spAutomationPluginLoader = std::make_unique<KAutomationPluginLoader>();
+	QString strAutomationError;
+	if (!m_spAutomationPluginLoader->load(QCoreApplication::applicationDirPath(),
+		m_pAutomationHostBridge->hostApi(), &strAutomationError))
+	{
+		qWarning().noquote() << QStringLiteral("Automation driver was not loaded: %1")
+			.arg(strAutomationError);
+	}
+	else if (!m_spAutomationPluginLoader->isLoaded())
+	{
+		qInfo().noquote() << QStringLiteral("Automation driver is not present");
+	}
 	m_pSessionService->configurePrivacyServices(
 		std::make_unique<KPrivacyModeService>(
 			std::make_unique<KWindowsPrivacyOverlayAdapter>(),
@@ -206,6 +237,11 @@ KSessionViewModel *KApplicationComposition::sessionViewModel() const
 	return m_pSessionViewModel;
 }
 
+KApplicationCommandRegistry *KApplicationComposition::applicationCommandRegistry() const
+{
+	return m_pApplicationCommandRegistry;
+}
+
 QString KApplicationComposition::applicationThemeId() const
 {
 	return m_pApplicationSettingsService->settings().strThemeId;
@@ -219,9 +255,14 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 	connect(pWebViewWidget, &KWebViewWidget::stopCaptureRequested,
 		m_pSessionViewModel, &KSessionViewModel::stopCapture);
 	connect(pWebViewWidget, &KWebViewWidget::setRoleRequested,
-		m_pSessionViewModel, &KSessionViewModel::setRole);
-	connect(pWebViewWidget, &KWebViewWidget::setRoleRequested,
-		m_pDiscoveryViewModel, &KDeviceDiscoveryViewModel::setRole);
+		this, [this](const QString &strRole)
+		{
+			const KApplicationCommandResult result = m_pApplicationCommandRegistry->execute(
+				QStringLiteral("application.set_role"),
+				QJsonObject{{QStringLiteral("role"), strRole}});
+			if (result.status == ApplicationCommandSucceeded)
+				m_pDiscoveryViewModel->setRole(strRole);
+		});
 	connect(pWebViewWidget, &KWebViewWidget::startSignalingServerRequested,
 		m_pSessionViewModel, &KSessionViewModel::startSignalingServer);
 	connect(pWebViewWidget, &KWebViewWidget::connectSignalingRequested,
@@ -708,6 +749,8 @@ void KApplicationComposition::shutdown()
 		return;
 
 	m_bShutdown = true;
+	m_pAutomationHostBridge->stopAcceptingRequests();
+	m_spAutomationPluginLoader->shutdown();
 	m_pShutdownDeadlineTimer->start();
 	m_bSessionShutdownPending = !m_pSessionService->isIdle();
 	m_bCaptureShutdownPending = true;

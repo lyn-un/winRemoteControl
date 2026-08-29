@@ -240,12 +240,25 @@ namespace
 
 KWindowsDeviceIdentityProvider::KWindowsDeviceIdentityProvider(
 	const QString &strSecurityDirectory)
+	: KWindowsDeviceIdentityProvider(strSecurityDirectory, false)
+{
+}
+
+KWindowsDeviceIdentityProvider::KWindowsDeviceIdentityProvider(
+	const QString &strSecurityDirectory,
+	bool bEphemeralIdentity)
 	: m_strSecurityDirectory(strSecurityDirectory)
+	, m_bEphemeralIdentity(bEphemeralIdentity)
 {
 }
 
 KWindowsDeviceIdentityProvider::~KWindowsDeviceIdentityProvider()
 {
+	if (m_bEphemeralIdentity && m_identity.isValid())
+	{
+		QString strIgnoredError;
+		deletePersistedKey(&strIgnoredError);
+	}
 	closeCertificate();
 	closeKey();
 	if (m_hProvider != 0)

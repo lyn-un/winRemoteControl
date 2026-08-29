@@ -954,23 +954,27 @@ void KFileTransferSessionServicePrivate::handleCapabilitiesChanged(
 void KFileTransferSessionServicePrivate::handleLifecycleMessage(
 	const KFileTransferLifecycleMessage &message)
 {
-	if (message.nGeneration != m_pSessionController->sessionGeneration())
-		return;
+	const quint64 nLocalGeneration = m_pSessionController->sessionGeneration();
+	writeTrace(QStringLiteral("file_transfer_lifecycle_received"),
+		QStringLiteral("messageType=%1 peerGeneration=%2 peerRequestId=%3")
+			.arg(KFileTransferLifecycleMessageCodec::typeName(message.type))
+			.arg(message.nGeneration)
+			.arg(message.strRequestId));
 	if (message.type == OpenRequestFileTransferLifecycleMessageType)
 	{
 		if (m_pSessionController->sessionRole() != ControlledSessionRole
 			|| !isAvailable()
-			|| m_nBlockedGeneration == message.nGeneration)
+			|| m_nBlockedGeneration == nLocalGeneration)
 		{
 			m_strLifecycleRequestId = message.strRequestId;
-			m_nGeneration = message.nGeneration;
+			m_nGeneration = nLocalGeneration;
 			sendLifecycle(OpenRejectedFileTransferLifecycleMessageType,
-				m_nBlockedGeneration == message.nGeneration
+				m_nBlockedGeneration == nLocalGeneration
 					? QStringLiteral("stopped_by_controlled")
 					: QStringLiteral("permission_denied"));
 			return;
 		}
-		m_nGeneration = message.nGeneration;
+		m_nGeneration = nLocalGeneration;
 		m_strLifecycleRequestId = message.strRequestId;
 		m_bOpenAccepted = true;
 		setState(OpeningFileTransferState, QStringLiteral("opening"));
@@ -986,8 +990,13 @@ void KFileTransferSessionServicePrivate::handleLifecycleMessage(
 		return;
 	}
 	if (message.strRequestId != m_strLifecycleRequestId
-		|| message.nGeneration != m_nGeneration)
+		|| m_nGeneration != nLocalGeneration)
 	{
+		writeTrace(QStringLiteral("file_transfer_lifecycle_ignored"),
+			QStringLiteral("reason=request_or_local_generation_mismatch "
+				"peerGeneration=%1 peerRequestId=%2")
+				.arg(message.nGeneration)
+				.arg(message.strRequestId));
 		return;
 	}
 	if (message.type == OpenAcceptedFileTransferLifecycleMessageType)
@@ -1050,6 +1059,8 @@ void KFileTransferSessionServicePrivate::updateReadyState()
 	{
 		return;
 	}
+	if (m_state == ReadyFileTransferState)
+		return;
 	m_pOpenTimer->stop();
 	setState(ReadyFileTransferState, QStringLiteral("ready"));
 	for (auto iterator = m_taskMap.begin(); iterator != m_taskMap.end(); ++iterator)
@@ -1155,6 +1166,8 @@ KFileTransferSessionServicePrivate::pane(KFileTransferPane pane) const
 
 void KFileTransferSessionServicePrivate::requestSnapshot()
 {
+	setState(m_state, m_strStatusCode);
+
 	QVector<KFileTransferTaskSnapshot> taskList;
 	taskList.reserve(m_rootTaskIdSet.size());
 	for (const QString &strTaskId : m_rootTaskIdSet)
@@ -1166,7 +1179,6 @@ void KFileTransferSessionServicePrivate::requestSnapshot()
 	emit m_pOwner->snapshotChanged(taskList);
 	emit m_pOwner->paneChanged(m_localPane.current);
 	emit m_pOwner->paneChanged(m_remotePane.current);
-	setState(m_state, m_strStatusCode);
 
 	// The snapshot event clears transient UI state. Re-emit an outstanding
 	// conflict afterwards so reopening the window restores the active prompt.

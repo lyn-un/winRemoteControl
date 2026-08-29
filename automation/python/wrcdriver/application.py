@@ -1,0 +1,71 @@
+from pathlib import Path
+
+from .errors import DriverNotRunning
+from .process import discover_pids, launch_process, terminate_process, wait_for_endpoint
+from .session import WrcSession
+from .transport import DriverTransport
+
+
+class WrcApplication:
+    def __init__(self, transport: DriverTransport, process=None) -> None:
+        self._transport = transport
+        self._process = process
+        self._sessions: list[WrcSession] = []
+
+    @classmethod
+    def attach(cls, pid: int | None = None) -> "WrcApplication":
+        if pid is None:
+            pids = discover_pids()
+            if len(pids) != 1:
+                raise DriverNotRunning(
+                    f"Expected one running driver, found {len(pids)}; specify pid"
+                )
+            pid = pids[0]
+        return cls(DriverTransport(wait_for_endpoint(pid)))
+
+    @classmethod
+    def launch(
+        cls, executable: str | Path, profile: str | Path, role: str | None = None
+    ) -> "WrcApplication":
+        process = launch_process(executable, profile)
+        try:
+            application = cls(DriverTransport(wait_for_endpoint(process.pid)), process)
+            if role is not None:
+                session = application.create_session()
+                session.trigger_command("application.set_role", {"role": role})
+            return application
+        except Exception:
+            terminate_process(process)
+            raise
+
+    @property
+    def pid(self) -> int:
+        return self._transport.endpoint.pid
+
+    def status(self):
+        return self._transport.request("GET", "/status")
+
+    def create_session(self) -> WrcSession:
+        value = self._transport.request("POST", "/session", {})
+        if not isinstance(value, dict) or not value.get("sessionId"):
+            raise DriverNotRunning("Driver did not return a session id")
+        session = WrcSession(self._transport, str(value["sessionId"]))
+        self._sessions.append(session)
+        return session
+
+    def close(self) -> None:
+        for session in reversed(self._sessions):
+            try:
+                session.quit()
+            except Exception:
+                pass
+        self._sessions.clear()
+        if self._process is not None:
+            terminate_process(self._process)
+            self._process = None
+
+    def __enter__(self) -> "WrcApplication":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()

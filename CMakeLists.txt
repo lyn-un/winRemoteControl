@@ -23,6 +23,8 @@ option(WRC_BUILD_TESTS "Build automated tests" ON)
 option(WRC_ENABLE_WEBRTC "Enable the WebRTC transport adapter" ON)
 option(WRC_ENABLE_FFMPEG "Enable the FFmpeg codec adapter" ON)
 option(WRC_ENABLE_WEBVIEW2 "Enable the WebView2 presentation adapter" ON)
+option(WRC_BUILD_AUTOMATION_DRIVER
+	"Build the optional automation driver DLL" OFF)
 
 if(NOT CMAKE_CONFIGURATION_TYPES)
 	set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -43,7 +45,7 @@ if(WRC_BUILD_APP)
 			"Disable WRC_BUILD_APP for a dependency-light core build.")
 	endif()
 	find_package(Qt6 REQUIRED COMPONENTS Widgets Gui Network)
-elseif(WIN32 AND WRC_BUILD_TESTS)
+elseif(WIN32 AND (WRC_BUILD_TESTS OR WRC_BUILD_AUTOMATION_DRIVER))
 	find_package(Qt6 REQUIRED COMPONENTS Network)
 endif()
 
@@ -78,6 +80,115 @@ target_include_directories(wrc_foundation INTERFACE
 target_link_libraries(wrc_foundation INTERFACE
 	Qt6::Core
 )
+
+add_library(wrc_application_paths STATIC
+	src/common/applicationpaths.cpp
+	src/common/applicationpaths.h
+)
+
+target_include_directories(wrc_application_paths PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_application_paths PUBLIC
+	Qt6::Core
+)
+
+add_library(wrc_command_application STATIC
+	src/core/commands/applicationcommand.h
+	src/core/commands/applicationcommandresult.h
+	src/commands/applicationcommandregistry.cpp
+	src/commands/applicationcommandregistry.h
+	src/commands/builtincommands.cpp
+	src/commands/builtincommands.h
+)
+
+target_include_directories(wrc_command_application PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_command_application PUBLIC
+	wrc_foundation
+	Qt6::Core
+)
+
+add_library(wrc_automation_host STATIC
+	src/automation/automationhostbridge.cpp
+	src/automation/automationhostbridge.h
+	src/automation/automationpluginloader.cpp
+	src/automation/automationpluginloader.h
+	src/automation/wrcdriverhostapi.h
+)
+
+target_include_directories(wrc_automation_host PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+
+target_link_libraries(wrc_automation_host PUBLIC
+	wrc_command_application
+	Qt6::Core
+)
+
+if(WRC_BUILD_AUTOMATION_DRIVER OR WRC_BUILD_TESTS)
+add_subdirectory(automation/driver)
+endif()
+
+if(WRC_BUILD_AUTOMATION_DRIVER)
+if(WRC_BUILD_TESTS)
+add_library(wrc_automation_missing_exports_fixture SHARED
+	tests/fixtures/automationdrivermissingexports.cpp
+)
+set_target_properties(wrc_automation_missing_exports_fixture PROPERTIES
+	OUTPUT_NAME "wrcdriver"
+	ARCHIVE_OUTPUT_DIRECTORY_RELEASE
+		"${CMAKE_BINARY_DIR}/automation-fixtures/missing-exports/lib"
+	RUNTIME_OUTPUT_DIRECTORY_RELEASE
+		"${CMAKE_BINARY_DIR}/automation-fixtures/missing-exports/automation"
+)
+
+add_library(wrc_automation_bad_abi_fixture SHARED
+	tests/fixtures/automationdriverbadabi.cpp
+)
+target_include_directories(wrc_automation_bad_abi_fixture PRIVATE
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(wrc_automation_bad_abi_fixture PRIVATE Qt6::Core)
+set_target_properties(wrc_automation_bad_abi_fixture PROPERTIES
+	OUTPUT_NAME "wrcdriver"
+	ARCHIVE_OUTPUT_DIRECTORY_RELEASE
+		"${CMAKE_BINARY_DIR}/automation-fixtures/bad-abi/lib"
+	RUNTIME_OUTPUT_DIRECTORY_RELEASE
+		"${CMAKE_BINARY_DIR}/automation-fixtures/bad-abi/automation"
+)
+
+add_executable(wrc_automation_loader_tests
+	tests/integration/automationloadertest.cpp
+)
+target_include_directories(wrc_automation_loader_tests PRIVATE
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(wrc_automation_loader_tests PRIVATE
+	wrc_automation_host
+	Qt6::Core
+	Qt6::Network
+)
+add_dependencies(wrc_automation_loader_tests
+	wrcdriver
+	wrc_automation_missing_exports_fixture
+	wrc_automation_bad_abi_fixture
+)
+add_test(NAME wrc_automation_loader_tests
+	COMMAND wrc_automation_loader_tests
+		"${CMAKE_CURRENT_SOURCE_DIR}/build/Release"
+		"${CMAKE_BINARY_DIR}/automation-fixtures/missing-exports"
+		"${CMAKE_BINARY_DIR}/automation-fixtures/bad-abi"
+)
+set_tests_properties(wrc_automation_loader_tests PROPERTIES
+	ENVIRONMENT_MODIFICATION
+		"PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+)
+endif()
+endif()
 
 add_library(wrc_protocol STATIC
 	src/core/protocol/accessmessage.cpp
@@ -878,6 +989,9 @@ target_include_directories(winRemoteControl PRIVATE
 )
 
 target_link_libraries(winRemoteControl PRIVATE
+	wrc_application_paths
+	wrc_command_application
+	wrc_automation_host
 	wrc_core
 	wrc_protocol
 	wrc_diagnostics
@@ -909,6 +1023,58 @@ target_link_libraries(winRemoteControl PRIVATE
 endif() # WRC_BUILD_APP
 
 if(WRC_BUILD_TESTS)
+	add_executable(wrc_automation_host_bridge_tests
+		tests/unit/automationhostbridgetest.cpp
+	)
+	target_link_libraries(wrc_automation_host_bridge_tests PRIVATE
+		wrc_automation_host
+		wrc_core
+		wrc_session_contract
+		Qt6::Core
+	)
+	add_test(NAME wrc_automation_host_bridge_tests
+		COMMAND wrc_automation_host_bridge_tests)
+	set_tests_properties(wrc_automation_host_bridge_tests PROPERTIES
+		ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+	)
+
+	add_executable(wrc_driver_base_tests
+		tests/unit/driverbasetest.cpp
+	)
+	target_link_libraries(wrc_driver_base_tests PRIVATE
+		wrc_driver_base
+		Qt6::Core
+	)
+	add_test(NAME wrc_driver_base_tests COMMAND wrc_driver_base_tests)
+	set_tests_properties(wrc_driver_base_tests PROPERTIES
+		ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+	)
+
+	add_executable(wrc_application_paths_tests
+		tests/unit/applicationpathstest.cpp
+	)
+	target_link_libraries(wrc_application_paths_tests PRIVATE
+		wrc_application_paths
+		Qt6::Core
+	)
+	add_test(NAME wrc_application_paths_tests COMMAND wrc_application_paths_tests)
+	set_tests_properties(wrc_application_paths_tests PROPERTIES
+		ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+	)
+
+	add_executable(wrc_application_command_registry_tests
+		tests/unit/applicationcommandregistrytest.cpp
+	)
+	target_link_libraries(wrc_application_command_registry_tests PRIVATE
+		wrc_command_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_application_command_registry_tests
+		COMMAND wrc_application_command_registry_tests)
+	set_tests_properties(wrc_application_command_registry_tests PROPERTIES
+		ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+	)
+
 	if(WIN32)
 	add_executable(wrc_device_identity_tests
 		tests/unit/deviceidentitytest.cpp
@@ -978,6 +1144,16 @@ if(WRC_BUILD_TESTS)
 	)
 	add_test(NAME wrc_file_transfer_data_frame_tests
 		COMMAND wrc_file_transfer_data_frame_tests)
+
+	add_executable(wrc_file_transfer_session_service_tests
+		tests/unit/filetransfersessionservicetest.cpp
+	)
+	target_link_libraries(wrc_file_transfer_session_service_tests PRIVATE
+		wrc_file_transfer_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_file_transfer_session_service_tests
+		COMMAND wrc_file_transfer_session_service_tests)
 
 	if(WIN32)
 	add_executable(wrc_windows_filesystem_adapter_tests
@@ -1058,6 +1234,7 @@ if(WRC_BUILD_TESTS)
 		wrc_protocol_robustness_tests
 		wrc_file_transfer_protocol_tests
 		wrc_file_transfer_data_frame_tests
+		wrc_file_transfer_session_service_tests
 		wrc_session_state_tests
 		wrc_network_stats_tests
 		wrc_terminal_write_all_tests
@@ -1493,4 +1670,12 @@ add_custom_command(TARGET winRemoteControl POST_BUILD
 		"$<TARGET_FILE:winRemoteControl>"
 	VERBATIM
 )
+if(NOT WRC_BUILD_AUTOMATION_DRIVER)
+	add_custom_target(wrc_remove_stale_automation_driver ALL
+		COMMAND ${CMAKE_COMMAND} -E rm -f
+			"$<TARGET_FILE_DIR:winRemoteControl>/automation/wrcdriver.dll"
+		VERBATIM
+	)
+	add_dependencies(winRemoteControl wrc_remove_stale_automation_driver)
+endif()
 endif() # WRC_BUILD_APP

@@ -1,0 +1,14 @@
+#ifndef _WINREMOTECONTROL_BUILTINCOMMANDS_H_
+#define _WINREMOTECONTROL_BUILTINCOMMANDS_H_
+
+class KApplicationCommandRegistry;
+class KSessionController;
+class KSessionViewModel;
+class KDeviceSecurityPreferenceService;
+
+bool RegisterBuiltinApplicationCommands(KApplicationCommandRegistry *pRegistry,
+	KSessionViewModel *pSessionViewModel,
+	KSessionController *pSessionController,
+	KDeviceSecurityPreferenceService *pSecurityPreferenceService);
+
+#endif // _WINREMOTECONTROL_BUILTINCOMMANDS_H_

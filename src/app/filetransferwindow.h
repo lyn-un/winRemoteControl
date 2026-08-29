@@ -31,6 +31,7 @@ private:
 	void initConnections();
 	void toggleMaximizeWindow();
 	void beginWindowDrag();
+	void applyWindowCorners();
 	bool handleNativeHitTest(void *pMessage, qintptr *pResult) const;
 
 	KWebViewWidget *m_pWebViewWidget = nullptr;

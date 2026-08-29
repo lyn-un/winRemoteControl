@@ -54,3 +54,53 @@ jobs:
         run: cmake --build --preset security-tests
       - name: Run Schannel security tests
         run: ctest --preset security-tests
+
+  automation-tests:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          cache: true
+      - name: Configure automation driver targets
+        run: cmake --preset automation-tests
+      - name: Build automation driver targets
+        run: cmake --build --preset automation-tests
+      - name: Run C++ automation tests
+        run: ctest --preset automation-tests
+      - name: Run Python SDK tests
+        shell: pwsh
+        run: |
+          $env:PYTHONDONTWRITEBYTECODE = '1'
+          $env:PYTHONPATH = (Resolve-Path 'automation/python')
+          python -m unittest discover -s automation/tests -p 'test_*.py' -v
+
+  automation-e2e:
+    if: vars.WRC_ENABLE_AUTOMATION_E2E == '1'
+    runs-on: [self-hosted, Windows, X64, interactive]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build React presentation assets
+        run: |
+          npm.cmd ci --prefix frontend
+          npm.cmd run build --prefix frontend
+      - name: Configure normal Release application
+        run: cmake --preset release
+      - name: Build normal Release without the driver
+        run: cmake --build --preset release --target winRemoteControl
+      - name: Enable and build the optional automation driver
+        run: |
+          cmake --preset release -DWRC_BUILD_AUTOMATION_DRIVER=ON
+          cmake --build --preset release --target wrcdriver
+      - name: Run interactive two-process connection tests
+        shell: pwsh
+        run: |
+          $env:PYTHONDONTWRITEBYTECODE = '1'
+          $env:PYTHONPATH = (Resolve-Path 'automation/python')
+          $env:WRC_RUN_E2E = '1'
+          $env:WRC_EXECUTABLE = (Resolve-Path 'build/Release/winRemoteControl.exe')
+          python -m unittest discover -s automation/tests -p 'test_*.py' -v

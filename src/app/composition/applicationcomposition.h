@@ -4,7 +4,12 @@
 #include <QtCore/QObject>
 #include <QtCore/QString>
 
+#include <memory>
+
 class KCaptureService;
+class KApplicationCommandRegistry;
+class KAutomationHostBridge;
+class KAutomationPluginLoader;
 class KRemoteDesktopWindow;
 class KFileTransferWindow;
 class KSessionViewModel;
@@ -32,6 +37,7 @@ public:
 	KApplicationComposition &operator=(const KApplicationComposition &) = delete;
 
 	KSessionViewModel *sessionViewModel() const;
+	KApplicationCommandRegistry *applicationCommandRegistry() const;
 	QString applicationThemeId() const;
 	void wireDashboard(KWebViewWidget *pWebViewWidget);
 	void wireRemoteDesktopWindow(KRemoteDesktopWindow *pWindow);
@@ -50,6 +56,9 @@ private:
 	void handleShutdownDeadline();
 
 	KCaptureService *m_pCaptureService = nullptr;
+	KApplicationCommandRegistry *m_pApplicationCommandRegistry = nullptr;
+	KAutomationHostBridge *m_pAutomationHostBridge = nullptr;
+	std::unique_ptr<KAutomationPluginLoader> m_spAutomationPluginLoader;
 	KSessionCoordinator *m_pSessionService = nullptr;
 	KSessionViewModel *m_pSessionViewModel = nullptr;
 	KDeviceDiscoveryController *m_pDiscoveryService = nullptr;

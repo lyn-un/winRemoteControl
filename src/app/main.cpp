@@ -2,6 +2,7 @@
 
 #include "core/media/decodedvideoframe.h"
 #include "common/latencytracelogger.h"
+#include "common/applicationpaths.h"
 #include "common/sessiontracelogger.h"
 #include "common/traceoptions.h"
 #include "core/media/networkstats.h"
@@ -29,10 +30,25 @@ int main(int nArgc, char *pArgv[])
 	QCommandLineParser parser;
 	parser.setApplicationDescription(QStringLiteral("winRemoteControl LAN remote desktop client"));
 	parser.addHelpOption();
+	parser.addOption(QCommandLineOption(QStringLiteral("data-dir"),
+		QStringLiteral("Store application data in the specified directory."),
+		QStringLiteral("path")));
+	parser.addOption(QCommandLineOption(QStringLiteral("automation-test-profile"),
+		QStringLiteral("Delete the temporary CNG identity when this test process exits.")));
 	KTraceOptionsParser::addOptions(&parser);
 	parser.process(app);
+	QString strPathError;
+	if (!KApplicationPaths::configureDataDirectory(
+		parser.value(QStringLiteral("data-dir")), &strPathError))
+	{
+		qCritical().noquote() << strPathError;
+		::CoUninitialize();
+		return 2;
+	}
+	KApplicationPaths::setAutomationTestProfile(
+		parser.isSet(QStringLiteral("automation-test-profile")));
 	const KTraceOptions traceOptions = KTraceOptionsParser::options(
-		parser, QCoreApplication::applicationDirPath());
+		parser, KApplicationPaths::dataDirectoryPath());
 	if (!traceOptions.strValidationError.isEmpty())
 	{
 		qCritical().noquote() << traceOptions.strValidationError;
@@ -47,7 +63,8 @@ int main(int nArgc, char *pArgv[])
 		traceOptions.strLatencyScenario);
 	KLatencyTraceLogger::write(QStringLiteral("app"),
 		QStringLiteral("startup"),
-		QStringLiteral("dir=%1").arg(QCoreApplication::applicationDirPath()));
+		QStringLiteral("dir=%1 dataDir=%2")
+			.arg(QCoreApplication::applicationDirPath(), KApplicationPaths::dataDirectoryPath()));
 	QNetworkProxy::setApplicationProxy(QNetworkProxy::NoProxy);
 	qRegisterMetaType<KDecodedVideoFrame>("KDecodedVideoFrame");
 	qRegisterMetaType<KStreamConfig>("KStreamConfig");

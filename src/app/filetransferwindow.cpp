@@ -5,6 +5,7 @@
 #include <QtGui/QCloseEvent>
 
 #include <Windows.h>
+#include <dwmapi.h>
 #include <windowsx.h>
 
 namespace
@@ -21,6 +22,7 @@ KFileTransferWindow::KFileTransferWindow(QWidget *pParent)
 	setMinimumSize(960, 640);
 	resize(1380, 820);
 	setCentralWidget(m_pWebViewWidget);
+	applyWindowCorners();
 	initConnections();
 }
 
@@ -103,6 +105,13 @@ void KFileTransferWindow::beginWindowDrag()
 {
 	::ReleaseCapture();
 	::SendMessageW(reinterpret_cast<HWND>(winId()), WM_NCLBUTTONDOWN, HTCAPTION, 0);
+}
+
+void KFileTransferWindow::applyWindowCorners()
+{
+	const DWM_WINDOW_CORNER_PREFERENCE preference = DWMWCP_ROUND;
+	::DwmSetWindowAttribute(reinterpret_cast<HWND>(winId()),
+		DWMWA_WINDOW_CORNER_PREFERENCE, &preference, sizeof(preference));
 }
 
 bool KFileTransferWindow::handleNativeHitTest(void *pMessage, qintptr *pResult) const
