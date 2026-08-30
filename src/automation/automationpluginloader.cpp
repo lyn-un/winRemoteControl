@@ -26,12 +26,12 @@ KAutomationPluginLoader::~KAutomationPluginLoader()
 }
 
 bool KAutomationPluginLoader::load(const QString &strApplicationDirectory,
-	const KWrcDriverHostApiV1 *pHostApi,
+	const KWrcDriverHostApiV2 *pHostApi,
 	QString *pErrorMessage)
 {
 	if (m_bStarted)
 		return true;
-	if (pHostApi == nullptr || pHostApi->nAbiVersion != KWrcDriverAbiVersion1)
+	if (pHostApi == nullptr || pHostApi->nAbiVersion != KWrcDriverAbiVersion2)
 	{
 		if (pErrorMessage != nullptr)
 			*pErrorMessage = QStringLiteral("Invalid automation Host API");
@@ -48,6 +48,7 @@ bool KAutomationPluginLoader::load(const QString &strApplicationDirectory,
 	}
 
 	m_library.setFileName(strLibraryPath);
+	m_library.setLoadHints(QLibrary::PreventUnloadHint);
 	if (!m_library.load())
 	{
 		if (pErrorMessage != nullptr)
@@ -71,7 +72,7 @@ bool KAutomationPluginLoader::load(const QString &strApplicationDirectory,
 		m_library.unload();
 		return false;
 	}
-	if (pAbiVersion() != KWrcDriverAbiVersion1)
+	if (pAbiVersion() != KWrcDriverAbiVersion2)
 	{
 		if (pErrorMessage != nullptr)
 			*pErrorMessage = QStringLiteral("Automation driver ABI version mismatch");
@@ -79,7 +80,7 @@ bool KAutomationPluginLoader::load(const QString &strApplicationDirectory,
 		return false;
 	}
 
-	KWrcDriverBuildInfoV1 buildInfo;
+	KWrcDriverBuildInfoV2 buildInfo;
 	if (!pBuildInfo(&buildInfo) || !validateBuildInfo(buildInfo, pErrorMessage))
 	{
 		m_library.unload();
@@ -93,7 +94,6 @@ bool KAutomationPluginLoader::load(const QString &strApplicationDirectory,
 		return false;
 	}
 	m_bStarted = true;
-	m_library.setLoadHints(QLibrary::PreventUnloadHint);
 	if (pErrorMessage != nullptr)
 		pErrorMessage->clear();
 	return true;
@@ -113,7 +113,7 @@ bool KAutomationPluginLoader::isLoaded() const
 	return m_bStarted;
 }
 
-bool KAutomationPluginLoader::validateBuildInfo(const KWrcDriverBuildInfoV1 &buildInfo,
+bool KAutomationPluginLoader::validateBuildInfo(const KWrcDriverBuildInfoV2 &buildInfo,
 	QString *pErrorMessage) const
 {
 	const QByteArray rawBuildId(buildInfo.szBuildId,
@@ -121,8 +121,8 @@ bool KAutomationPluginLoader::validateBuildInfo(const KWrcDriverBuildInfoV1 &bui
 	const qsizetype nTerminator = rawBuildId.indexOf('\0');
 	const QByteArray buildId = nTerminator >= 0
 		? rawBuildId.left(nTerminator) : rawBuildId;
-	const bool bValid = buildInfo.nStructSize >= sizeof(KWrcDriverBuildInfoV1)
-		&& buildInfo.nAbiVersion == KWrcDriverAbiVersion1
+	const bool bValid = buildInfo.nStructSize >= sizeof(KWrcDriverBuildInfoV2)
+		&& buildInfo.nAbiVersion == KWrcDriverAbiVersion2
 		&& buildInfo.nArchitecture == KWrcDriverArchitectureX64
 		&& buildInfo.nRuntimeFlavor == RuntimeFlavor()
 		&& buildInfo.nQtMajorVersion == QT_VERSION_MAJOR

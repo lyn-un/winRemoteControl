@@ -5,7 +5,10 @@
 
 #include <QtCore/QJsonObject>
 
-QJsonObject DriverStatusValue(const QString &strPid, const QString &strBuildId, bool bReady);
+QJsonObject DriverStatusValue(const QString &strPid,
+	const QString &strBuildId,
+	bool bDriverReady,
+	bool bHostReady);
 QJsonObject DriverSessionValue(const KDriverSession &session,
 	const QString &strPid,
 	const QString &strBuildId);

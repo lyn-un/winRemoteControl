@@ -3,6 +3,7 @@
 
 #include <QtCore/QMetaObject>
 #include <QtCore/QMutexLocker>
+#include <QtCore/QDebug>
 #include <QtCore/QThread>
 #include <QtCore/QtGlobal>
 
@@ -26,14 +27,14 @@ namespace
 
 extern "C" __declspec(dllexport) std::uint32_t wrcDriverAbiVersion()
 {
-	return KWrcDriverAbiVersion1;
+	return KWrcDriverAbiVersion2;
 }
 
-extern "C" __declspec(dllexport) bool wrcDriverBuildInfo(KWrcDriverBuildInfoV1 *pBuildInfo)
+extern "C" __declspec(dllexport) bool wrcDriverBuildInfo(KWrcDriverBuildInfoV2 *pBuildInfo)
 {
-	if (pBuildInfo == nullptr || pBuildInfo->nStructSize < sizeof(KWrcDriverBuildInfoV1))
+	if (pBuildInfo == nullptr || pBuildInfo->nStructSize < sizeof(KWrcDriverBuildInfoV2))
 		return false;
-	pBuildInfo->nAbiVersion = KWrcDriverAbiVersion1;
+	pBuildInfo->nAbiVersion = KWrcDriverAbiVersion2;
 	pBuildInfo->nArchitecture = KWrcDriverArchitectureX64;
 	pBuildInfo->nRuntimeFlavor = RuntimeFlavor();
 	pBuildInfo->nQtMajorVersion = QT_VERSION_MAJOR;
@@ -43,7 +44,7 @@ extern "C" __declspec(dllexport) bool wrcDriverBuildInfo(KWrcDriverBuildInfoV1 *
 	return true;
 }
 
-extern "C" __declspec(dllexport) bool wrcDriverStartup(const KWrcDriverHostApiV1 *pHostApi)
+extern "C" __declspec(dllexport) bool wrcDriverStartup(const KWrcDriverHostApiV2 *pHostApi)
 {
 	if (g_pDriverThread != nullptr || g_pDriverModule != nullptr)
 		return false;
@@ -52,6 +53,7 @@ extern "C" __declspec(dllexport) bool wrcDriverStartup(const KWrcDriverHostApiV1
 	{
 		QMutexLocker locker(&g_callbackGate.mutex);
 		g_callbackGate.pModule = g_pDriverModule;
+		g_callbackGate.startedRequestIds.clear();
 	}
 	g_pDriverModule->moveToThread(g_pDriverThread);
 	QObject::connect(g_pDriverThread, &QThread::finished,
@@ -69,6 +71,7 @@ extern "C" __declspec(dllexport) bool wrcDriverStartup(const KWrcDriverHostApiV1
 	{
 		QMutexLocker locker(&g_callbackGate.mutex);
 		g_callbackGate.pModule = nullptr;
+		g_callbackGate.startedRequestIds.clear();
 	}
 	g_pDriverThread->quit();
 	g_pDriverThread->wait();
@@ -85,6 +88,7 @@ extern "C" __declspec(dllexport) void wrcDriverShutdown()
 	{
 		QMutexLocker locker(&g_callbackGate.mutex);
 		g_callbackGate.pModule = nullptr;
+		g_callbackGate.startedRequestIds.clear();
 	}
 	QMetaObject::invokeMethod(g_pDriverModule,
 		[]() { g_pDriverModule->stop(); }, Qt::BlockingQueuedConnection);
@@ -94,7 +98,10 @@ extern "C" __declspec(dllexport) void wrcDriverShutdown()
 		g_pDriverThread->requestInterruption();
 		g_pDriverThread->quit();
 		if (!g_pDriverThread->wait(1000))
+		{
+			qCritical("Automation driver thread did not stop within 6000 ms; DLL remains loaded");
 			return;
+		}
 	}
 	delete g_pDriverThread;
 	g_pDriverThread = nullptr;

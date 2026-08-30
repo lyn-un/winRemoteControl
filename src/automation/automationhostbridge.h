@@ -5,8 +5,10 @@
 #include "core/privacy/privacytypes.h"
 
 #include <QtCore/QJsonObject>
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QList>
 #include <QtCore/QObject>
+#include <QtCore/QSet>
 
 #include <atomic>
 
@@ -29,13 +31,22 @@ public:
 	KAutomationHostBridge(const KAutomationHostBridge &) = delete;
 	KAutomationHostBridge &operator=(const KAutomationHostBridge &) = delete;
 
-	const KWrcDriverHostApiV1 *hostApi() const;
+	const KWrcDriverHostApiV2 *hostApi() const;
+	void setHostReady();
 	void stopAcceptingRequests();
 
 private:
+	enum KAutomationEventCategory
+	{
+		CriticalAutomationEventCategory,
+		StateAutomationEventCategory,
+		TelemetryAutomationEventCategory
+	};
+
 	struct KAutomationEvent
 	{
 		quint64 nSequence = 0;
+		KAutomationEventCategory category = StateAutomationEventCategory;
 		QString strType;
 		QJsonObject value;
 	};
@@ -46,6 +57,8 @@ private:
 		std::uint32_t nCommandIdBytes,
 		const char *pArgumentsJsonUtf8,
 		std::uint32_t nArgumentsJsonBytes,
+		std::uint32_t nTimeoutMs,
+		KWrcDriverCommandStartedCallback pStartedCallback,
 		KWrcDriverJsonCallback pCallback,
 		void *pCallbackContext);
 	static void RequestSnapshot(void *pHostContext,
@@ -60,6 +73,7 @@ private:
 		std::uint32_t nKeyBytes,
 		char *pDestinationUtf8,
 		std::uint32_t nDestinationBytes);
+	static bool IsHostReady(void *pHostContext);
 	static void WriteLog(void *pHostContext,
 		std::uint32_t nLevel,
 		const char *pMessageUtf8,
@@ -68,6 +82,8 @@ private:
 	void submitCommand(quint64 nRequestId,
 		const QByteArray &commandIdUtf8,
 		const QByteArray &argumentsJsonUtf8,
+		quint32 nTimeoutMs,
+		KWrcDriverCommandStartedCallback pStartedCallback,
 		KWrcDriverJsonCallback pCallback,
 		void *pCallbackContext);
 	void requestSnapshot(quint64 nRequestId,
@@ -77,7 +93,10 @@ private:
 		void *pCallbackContext);
 	void synchronizeSessionGeneration();
 	void initializeStateConnections();
-	void appendEvent(const QString &strType, const QJsonObject &value);
+	void appendEvent(KAutomationEventCategory category,
+		const QString &strType,
+		const QJsonObject &value);
+	QJsonObject sessionErrorObject(const KSessionError &error) const;
 	QJsonObject stateSnapshot() const;
 	QJsonObject eventsSnapshot(quint64 nSinceSequence) const;
 	void completeJson(quint64 nRequestId,
@@ -85,7 +104,7 @@ private:
 		KWrcDriverJsonCallback pCallback,
 		void *pCallbackContext) const;
 
-	KWrcDriverHostApiV1 m_hostApi;
+	KWrcDriverHostApiV2 m_hostApi;
 	KApplicationCommandRegistry *m_pRegistry = nullptr;
 	KSessionController *m_pSessionController = nullptr;
 	QString m_strDataDirectory;
@@ -93,18 +112,24 @@ private:
 	QString m_strSignalingState;
 	QString m_strWebRtcState;
 	QString m_strRemoteDeviceId;
-	QString m_strLastError;
+	QJsonObject m_currentError;
+	QJsonObject m_lastError;
 	QStringList m_negotiatedCapabilities;
 	KPrivacyModeStatus m_privacyModeStatus;
 	KPostSessionActionStatus m_postSessionActionStatus;
 	QList<KAutomationEvent> m_events;
+	QList<quint64> m_commandRequestOrder;
+	QSet<quint64> m_seenCommandRequestIds;
 	quint64 m_nNextEventSequence = 1;
+	QElapsedTimer m_frameProgressEventTimer;
 	quint64 m_nReceivedFrameCount = 0;
 	qint64 m_nLastFrameTimestampMs = 0;
 	int m_nLastFrameWidth = 0;
 	int m_nLastFrameHeight = 0;
 	quint16 m_nListeningPort = 0;
 	std::atomic<quint64> m_nObservedSessionGeneration{0};
+	std::atomic<quint64> m_nPublishedEventCursor{0};
+	std::atomic_bool m_bHostReady{false};
 	bool m_bAcceptingRequests = true;
 	bool m_bListeningAvailable = false;
 	bool m_bSessionChannelOpen = false;

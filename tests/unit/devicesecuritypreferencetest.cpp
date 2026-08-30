@@ -250,6 +250,22 @@ namespace
 		Check(pStore->nSaveCount == 0,
 			QStringLiteral("automatic application does not rewrite preferences"));
 
+		controller.nGeneration = 2;
+		controller.publishState(ConnectingSessionState);
+		controller.authenticate(strDeviceId);
+		controller.publishCapabilities(true, true);
+		controller.publishState(StreamingSessionState);
+		Check(controller.privacyRequests.size() == 2
+			&& controller.privacyRequests.last() == PrivacyOverlayPrivacyMode
+			&& controller.postActionRequests.size() == 2
+			&& controller.postActionRequests.last()
+				== LockWorkstationPostSessionAction,
+			QStringLiteral("same device reapplies preferences in a new generation"));
+		controller.completeLastPrivacy(true);
+		controller.completeLastPostAction(true);
+		Check(pStore->nSaveCount == 0,
+			QStringLiteral("new-generation automatic application remains read-only"));
+
 		service.requestPrivacyMode(DisabledPrivacyMode);
 		controller.completeLastPrivacy(true);
 		Check(pStore->nSaveCount == 1
@@ -345,6 +361,64 @@ namespace
 				== LockWorkstationPostSessionAction,
 			QStringLiteral("service caches actual runtime status for late windows"));
 	}
+
+	void TestProcessRestartAndDeviceIsolation()
+	{
+		QTemporaryDir temporaryDir;
+		const QString strFilePath = temporaryDir.filePath(
+			QStringLiteral("device_security_preferences.ini"));
+		const QString strFirstDevice = DeviceId(50);
+		const QString strSecondDevice = DeviceId(51);
+		{
+			KFakeSessionController controller;
+			auto spStore = std::make_unique<KQSettingsDeviceSecurityPreferenceStore>(
+				strFilePath);
+			KDeviceSecurityPreferenceService service(std::move(spStore), &controller);
+			service.initialize();
+			controller.authenticate(strFirstDevice);
+			controller.publishCapabilities(true, true);
+			controller.publishState(StreamingSessionState);
+			service.requestPrivacyMode(PrivacyOverlayPrivacyMode);
+			controller.completeLastPrivacy(true);
+			service.requestPostSessionAction(LockWorkstationPostSessionAction);
+			controller.completeLastPostAction(true);
+
+			controller.nGeneration = 2;
+			controller.publishState(ConnectingSessionState);
+			controller.authenticate(strSecondDevice);
+			controller.publishCapabilities(true, true);
+			controller.publishState(StreamingSessionState);
+			service.requestPrivacyMode(DisabledPrivacyMode);
+			controller.completeLastPrivacy(true);
+			service.requestPostSessionAction(NoPostSessionAction);
+			controller.completeLastPostAction(true);
+		}
+		{
+			KFakeSessionController controller;
+			auto spStore = std::make_unique<KQSettingsDeviceSecurityPreferenceStore>(
+				strFilePath);
+			KDeviceSecurityPreferenceService service(std::move(spStore), &controller);
+			service.initialize();
+			controller.authenticate(strFirstDevice);
+			controller.publishCapabilities(true, true);
+			controller.publishState(StreamingSessionState);
+			Check(controller.privacyRequests
+				== QVector<KPrivacyMode>{PrivacyOverlayPrivacyMode},
+				QStringLiteral("process restart restores the first device preference"));
+			Check(controller.postActionRequests
+				== QVector<KPostSessionAction>{LockWorkstationPostSessionAction},
+				QStringLiteral("process restart restores the first device post action"));
+
+			controller.nGeneration = 2;
+			controller.publishState(ConnectingSessionState);
+			controller.authenticate(strSecondDevice);
+			controller.publishCapabilities(true, true);
+			controller.publishState(StreamingSessionState);
+			Check(controller.privacyRequests.size() == 1
+				&& controller.postActionRequests.size() == 1,
+				QStringLiteral("second device keeps independent disabled and none preferences"));
+		}
+	}
 }
 
 int main(int nArgc, char *pArgv[])
@@ -354,6 +428,7 @@ int main(int nArgc, char *pArgv[])
 	TestAutoApplyAndUserPersistence();
 	TestDeviceGenerationCapabilityAndRevocationBoundaries();
 	TestCachedRuntimeStatus();
+	TestProcessRestartAndDeviceIsolation();
 	if (g_nFailureCount == 0)
 		qInfo() << "All device security preference tests passed";
 	return g_nFailureCount == 0 ? 0 : 1;

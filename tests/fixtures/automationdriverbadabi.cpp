@@ -6,15 +6,15 @@
 
 extern "C" __declspec(dllexport) std::uint32_t wrcDriverAbiVersion()
 {
-	return KWrcDriverAbiVersion1 + 1;
+	return KWrcDriverAbiVersion2 + 1;
 }
 
 extern "C" __declspec(dllexport) bool wrcDriverBuildInfo(
-	KWrcDriverBuildInfoV1 *pBuildInfo)
+	KWrcDriverBuildInfoV2 *pBuildInfo)
 {
 	if (pBuildInfo == nullptr)
 		return false;
-	*pBuildInfo = KWrcDriverBuildInfoV1();
+	*pBuildInfo = KWrcDriverBuildInfoV2();
 	pBuildInfo->nQtMajorVersion = QT_VERSION_MAJOR;
 	std::memset(pBuildInfo->szBuildId, 0, sizeof(pBuildInfo->szBuildId));
 	std::memcpy(pBuildInfo->szBuildId, KWrcAutomationBuildId,
@@ -23,7 +23,7 @@ extern "C" __declspec(dllexport) bool wrcDriverBuildInfo(
 }
 
 extern "C" __declspec(dllexport) bool wrcDriverStartup(
-	const KWrcDriverHostApiV1 *)
+	const KWrcDriverHostApiV2 *)
 {
 	return true;
 }

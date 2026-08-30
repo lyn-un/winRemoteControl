@@ -9,6 +9,10 @@ from .errors import DriverNotRunning, ProcessExited, WaitTimeout
 from .transport import DriverEndpoint
 
 
+AUTOMATION_PROTOCOL_VERSION = 1
+AUTOMATION_BUILD_ID = "wrc-automation-abi2-20260830"
+
+
 def discovery_directory() -> Path:
     local_app_data = os.environ.get("LOCALAPPDATA")
     if not local_app_data:
@@ -76,7 +80,11 @@ def load_endpoint(pid: int) -> DriverEndpoint:
         )
     except (KeyError, TypeError, ValueError) as error:
         raise DriverNotRunning("Driver discovery file is malformed") from error
-    if endpoint.pid != pid or endpoint.protocol_version != 1:
+    if (
+        endpoint.pid != pid
+        or endpoint.protocol_version != AUTOMATION_PROTOCOL_VERSION
+        or endpoint.build_id != AUTOMATION_BUILD_ID
+    ):
         raise DriverNotRunning("Driver discovery metadata does not match the target")
     process_started_at_ms = _process_started_at_ms(pid)
     if (

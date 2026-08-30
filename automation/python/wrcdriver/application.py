@@ -1,6 +1,7 @@
 from pathlib import Path
+import time
 
-from .errors import DriverNotRunning
+from .errors import DriverNotRunning, DriverProtocolError, ProcessExited, WaitTimeout
 from .process import discover_pids, launch_process, terminate_process, wait_for_endpoint
 from .session import WrcSession
 from .transport import DriverTransport
@@ -21,7 +22,9 @@ class WrcApplication:
                     f"Expected one running driver, found {len(pids)}; specify pid"
                 )
             pid = pids[0]
-        return cls(DriverTransport(wait_for_endpoint(pid)))
+        application = cls(DriverTransport(wait_for_endpoint(pid)))
+        application.wait_until_ready()
+        return application
 
     @classmethod
     def launch(
@@ -30,6 +33,7 @@ class WrcApplication:
         process = launch_process(executable, profile)
         try:
             application = cls(DriverTransport(wait_for_endpoint(process.pid)), process)
+            application.wait_until_ready()
             if role is not None:
                 session = application.create_session()
                 session.trigger_command("application.set_role", {"role": role})
@@ -45,11 +49,31 @@ class WrcApplication:
     def status(self):
         return self._transport.request("GET", "/status")
 
+    def wait_until_ready(self, timeout: float = 15.0) -> dict:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self._process is not None and self._process.poll() is not None:
+                raise ProcessExited(
+                    f"Process {self._process.pid} exited before the application was ready"
+                )
+            status = self.status()
+            if not isinstance(status, dict):
+                raise DriverProtocolError("Driver status response shape is invalid")
+            if status.get("ready") is True:
+                return status
+            time.sleep(0.05)
+        raise WaitTimeout("Timed out waiting for the application host to become ready")
+
     def create_session(self) -> WrcSession:
         value = self._transport.request("POST", "/session", {})
         if not isinstance(value, dict) or not value.get("sessionId"):
             raise DriverNotRunning("Driver did not return a session id")
-        session = WrcSession(self._transport, str(value["sessionId"]))
+        session = WrcSession(
+            self._transport,
+            str(value["sessionId"]),
+            int(value.get("eventCursor", 0)),
+            int(value.get("sessionGeneration", 0)),
+        )
         self._sessions.append(session)
         return session
 

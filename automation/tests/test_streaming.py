@@ -13,8 +13,8 @@ class StreamingTests(unittest.TestCase):
             pair.connect()
             state = pair.start_streaming()
             self.assertGreater(int(state["receivedFrameCount"]), 0)
-            pair.controller_session.trigger_command("stream.stop")
-            pair.controller_session.wait_for_state("Connected", timeout=15)
+            stopped = pair.stop_streaming()
+            self.assertEqual(stopped["sessionState"], "Connected")
         finally:
             pair.close()
 

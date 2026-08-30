@@ -16,6 +16,8 @@ QString DriverStatusName(KDriverStatus status)
 		return QStringLiteral("command_busy");
 	if (status == CommandTimeoutDriverStatus)
 		return QStringLiteral("command_timeout");
+	if (status == CommandExecutionStartedDriverStatus)
+		return QStringLiteral("command_execution_started");
 	if (status == UnsupportedOperationDriverStatus)
 		return QStringLiteral("unsupported_operation");
 	return QStringLiteral("internal_error");
@@ -34,12 +36,23 @@ QJsonObject DriverErrorResponse(KDriverStatus status,
 	const QString &strError,
 	const QString &strMessage)
 {
+	return DriverErrorResponse(status, strError, strMessage, false, false);
+}
+
+QJsonObject DriverErrorResponse(KDriverStatus status,
+	const QString &strError,
+	const QString &strMessage,
+	bool bRetryable,
+	bool bOutcomeUnknown)
+{
 	return QJsonObject{
 		{QStringLiteral("status"), static_cast<int>(status)},
 		{QStringLiteral("value"), QJsonObject{
 			{QStringLiteral("error"), strError.isEmpty() ? DriverStatusName(status) : strError},
 			{QStringLiteral("message"), strMessage},
-			{QStringLiteral("stacktrace"), QString()}
+			{QStringLiteral("stacktrace"), QString()},
+			{QStringLiteral("retryable"), bRetryable},
+			{QStringLiteral("outcomeUnknown"), bOutcomeUnknown}
 		}},
 		{QStringLiteral("isSuccess"), false}
 	};

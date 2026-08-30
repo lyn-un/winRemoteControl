@@ -56,7 +56,14 @@ namespace
 		QByteArray json;
 		quint64 nRequestId = 0;
 		QThread *pCallbackThread = nullptr;
+		bool bExecutionStarted = false;
 	};
+
+	void CommandStarted(void *pContext, std::uint64_t)
+	{
+		auto *pState = static_cast<KCallbackState *>(pContext);
+		pState->bExecutionStarted = true;
+	}
 
 	void JsonCompleted(void *pContext,
 		std::uint64_t nRequestId,
@@ -96,9 +103,33 @@ int main(int nArgc, char *pArgv[])
 	};
 	if (!registry.registerCommand(command, nullptr))
 		return 1;
+	int nExpiredExecutionCount = 0;
+	KApplicationCommand expiredCommand;
+	expiredCommand.strId = QStringLiteral("test.expired");
+	expiredCommand.execute = [&nExpiredExecutionCount](const QJsonObject &)
+	{
+		++nExpiredExecutionCount;
+		KApplicationCommandResult result;
+		result.status = ApplicationCommandSucceeded;
+		return result;
+	};
+	if (!registry.registerCommand(expiredCommand, nullptr))
+		return 2;
+	int nOnceExecutionCount = 0;
+	KApplicationCommand onceCommand;
+	onceCommand.strId = QStringLiteral("test.once");
+	onceCommand.execute = [&nOnceExecutionCount](const QJsonObject &)
+	{
+		++nOnceExecutionCount;
+		KApplicationCommandResult result;
+		result.status = ApplicationCommandSucceeded;
+		return result;
+	};
+	if (!registry.registerCommand(onceCommand, nullptr))
+		return 2;
 	KFakeSessionController controller;
 	KAutomationHostBridge bridge(&registry, &controller, QStringLiteral("test-data"));
-	const KWrcDriverHostApiV1 *pApi = bridge.hostApi();
+	const KWrcDriverHostApiV2 *pApi = bridge.hostApi();
 
 	QEventLoop commandLoop;
 	KCallbackState commandState{&commandLoop};
@@ -109,21 +140,72 @@ int main(int nArgc, char *pArgv[])
 		pApi->submitCommand(pApi->pHostContext, 17,
 			commandId.constData(), static_cast<std::uint32_t>(commandId.size()),
 			arguments.constData(), static_cast<std::uint32_t>(arguments.size()),
-			&JsonCompleted, &commandState);
+			5000, &CommandStarted, &JsonCompleted, &commandState);
 	});
 	worker.join();
 	if (!WaitForCallback(&commandState)
 		|| commandState.nRequestId != 17
+		|| !commandState.bExecutionStarted
 		|| commandState.pCallbackThread != QThread::currentThread())
 	{
-		return 2;
+		return 3;
 	}
 	const QJsonObject commandResponse = QJsonDocument::fromJson(commandState.json).object();
 	if (commandResponse.value(QStringLiteral("status")).toInt(-1) != 0
 		|| commandResponse.value(QStringLiteral("value")).toObject()
 			.value(QStringLiteral("answer")).toInt() != 42)
 	{
-		return 3;
+		return 4;
+	}
+
+	for (int nAttempt = 0; nAttempt < 2; ++nAttempt)
+	{
+		QEventLoop duplicateLoop;
+		KCallbackState duplicateState{&duplicateLoop};
+		const QByteArray duplicateCommandId = QByteArrayLiteral("test.once");
+		const QByteArray duplicateArguments = QByteArrayLiteral("{}");
+		pApi->submitCommand(pApi->pHostContext, 28,
+			duplicateCommandId.constData(),
+			static_cast<std::uint32_t>(duplicateCommandId.size()),
+			duplicateArguments.constData(),
+			static_cast<std::uint32_t>(duplicateArguments.size()),
+			5000, &CommandStarted, &JsonCompleted, &duplicateState);
+		if (!WaitForCallback(&duplicateState))
+			return 4;
+		const QJsonObject duplicateResponse = QJsonDocument::fromJson(
+			duplicateState.json).object();
+		if ((nAttempt == 0 && duplicateResponse.value(QStringLiteral("status")).toInt(-1) != 0)
+			|| (nAttempt == 1
+				&& duplicateResponse.value(QStringLiteral("errorCode")).toString()
+					!= QStringLiteral("duplicate_request_id")))
+		{
+			return 4;
+		}
+	}
+	if (nOnceExecutionCount != 1)
+		return 4;
+
+	QEventLoop expiredLoop;
+	KCallbackState expiredState{&expiredLoop};
+	std::thread expiredWorker([pApi, &expiredState]()
+	{
+		const QByteArray commandId = QByteArrayLiteral("test.expired");
+		const QByteArray arguments = QByteArrayLiteral("{}");
+		pApi->submitCommand(pApi->pHostContext, 24,
+			commandId.constData(), static_cast<std::uint32_t>(commandId.size()),
+			arguments.constData(), static_cast<std::uint32_t>(arguments.size()),
+			5000, &CommandStarted, &JsonCompleted, &expiredState);
+	});
+	expiredWorker.join();
+	QThread::msleep(5100);
+	if (!WaitForCallback(&expiredState)
+		|| expiredState.bExecutionStarted
+		|| nExpiredExecutionCount != 0
+		|| QJsonDocument::fromJson(expiredState.json).object()
+			.value(QStringLiteral("errorCode")).toString()
+			!= QStringLiteral("command_timeout"))
+	{
+		return 5;
 	}
 
 	emit controller.sessionStateChanged(StreamingSessionState);
@@ -136,7 +218,7 @@ int main(int nArgc, char *pArgv[])
 		kind.constData(), static_cast<std::uint32_t>(kind.size()), 0,
 		&JsonCompleted, &state);
 	if (!WaitForCallback(&state))
-		return 4;
+		return 6;
 	const QJsonObject snapshot = QJsonDocument::fromJson(state.json).object();
 	if (snapshot.value(QStringLiteral("sessionState")).toString()
 		!= QStringLiteral("Streaming")
@@ -148,11 +230,12 @@ int main(int nArgc, char *pArgv[])
 			!= QStringLiteral("permission_denied")
 		|| !snapshot.contains(QStringLiteral("postSessionActionStatus")))
 	{
-		return 5;
+		return 7;
 	}
+	emit controller.incomingAccessRequest(QStringLiteral("access-before-frames"),
+		QStringLiteral("device"), QString(), 12345);
 	for (int i = 0; i < 600; ++i)
-		emit controller.sessionStateChanged((i % 2) == 0
-			? ConnectedSessionState : StreamingSessionState);
+		emit controller.remoteFrameStatsReady(640, 480, static_cast<quint64>(i), i);
 	QEventLoop eventsLoop;
 	KCallbackState eventsState{&eventsLoop};
 	const QByteArray eventsKind = QByteArrayLiteral("events");
@@ -160,20 +243,95 @@ int main(int nArgc, char *pArgv[])
 		eventsKind.constData(), static_cast<std::uint32_t>(eventsKind.size()), 0,
 		&JsonCompleted, &eventsState);
 	if (!WaitForCallback(&eventsState))
-		return 6;
-	const QJsonArray events = QJsonDocument::fromJson(eventsState.json).object()
-		.value(QStringLiteral("events")).toArray();
-	if (events.size() != 512
-		|| events.first().toObject().value(QStringLiteral("sequence")).toString().toULongLong()
-		>= events.last().toObject().value(QStringLiteral("sequence")).toString().toULongLong())
+		return 8;
+	const QJsonObject eventSnapshot = QJsonDocument::fromJson(eventsState.json).object();
+	const QJsonArray events = eventSnapshot.value(QStringLiteral("events")).toArray();
+	bool bFoundAccessRequest = false;
+	int nFrameProgressEvents = 0;
+	for (const QJsonValue &value : events)
 	{
-		return 7;
+		const QJsonObject event = value.toObject();
+		if (event.value(QStringLiteral("type")) == QStringLiteral("access.requested"))
+		{
+			bFoundAccessRequest = true;
+			if (event.value(QStringLiteral("sessionGeneration")).toString()
+				!= QStringLiteral("1"))
+			{
+				return 9;
+			}
+		}
+		if (event.value(QStringLiteral("type")) == QStringLiteral("frame.progress"))
+			++nFrameProgressEvents;
+		if (event.value(QStringLiteral("sessionGeneration")).toString().isEmpty())
+			return 9;
+	}
+	if (!bFoundAccessRequest || nFrameProgressEvents > 1)
+	{
+		return 9;
+	}
+	const quint64 nGapBaseline = eventSnapshot.value(QStringLiteral("nextSequence"))
+		.toString().toULongLong() - 1;
+	for (int i = 0; i < 250; ++i)
+		emit controller.sessionStateChanged((i % 2) == 0
+			? ConnectedSessionState : StreamingSessionState);
+	QEventLoop gapLoop;
+	KCallbackState gapState{&gapLoop};
+	pApi->requestSnapshot(pApi->pHostContext, 25,
+		eventsKind.constData(), static_cast<std::uint32_t>(eventsKind.size()),
+		nGapBaseline, &JsonCompleted, &gapState);
+	if (!WaitForCallback(&gapState)
+		|| !QJsonDocument::fromJson(gapState.json).object()
+			.value(QStringLiteral("hasGap")).toBool())
+	{
+		return 9;
 	}
 
 	KSessionError previousError;
+	previousError.domain = SignalingSessionErrorDomain;
 	previousError.code = ConnectionLostSessionErrorCode;
+	previousError.stage = ConnectedSessionErrorStage;
+	previousError.bRetryable = true;
 	previousError.strTechnicalMessage = QStringLiteral("previous generation");
 	emit controller.sessionErrorOccurred(previousError);
+	emit controller.sessionStateChanged(ReconnectingSessionState);
+	QEventLoop failureLoop;
+	KCallbackState failureState{&failureLoop};
+	pApi->requestSnapshot(pApi->pHostContext, 26,
+		kind.constData(), static_cast<std::uint32_t>(kind.size()), 0,
+		&JsonCompleted, &failureState);
+	const QJsonObject failureSnapshot = WaitForCallback(&failureState)
+		? QJsonDocument::fromJson(failureState.json).object() : QJsonObject();
+	const QJsonObject currentError = failureSnapshot.value(
+		QStringLiteral("currentError")).toObject();
+	if (currentError.value(QStringLiteral("code")).toString()
+			!= QStringLiteral("connection_lost")
+		|| currentError.value(QStringLiteral("domain")).toString()
+			!= QStringLiteral("signaling")
+		|| currentError.value(QStringLiteral("stage")).toString()
+			!= QStringLiteral("connected")
+		|| !currentError.value(QStringLiteral("retryable")).toBool()
+		|| currentError.value(QStringLiteral("technicalMessage")).toString()
+			!= QStringLiteral("previous generation")
+		|| currentError.value(QStringLiteral("occurredAtMs")).toString().isEmpty()
+		|| currentError.value(QStringLiteral("sessionGeneration")).toString()
+			!= QStringLiteral("1"))
+	{
+		return 10;
+	}
+	emit controller.sessionStateChanged(ConnectedSessionState);
+	QEventLoop recoveryLoop;
+	KCallbackState recoveryState{&recoveryLoop};
+	pApi->requestSnapshot(pApi->pHostContext, 27,
+		kind.constData(), static_cast<std::uint32_t>(kind.size()), 0,
+		&JsonCompleted, &recoveryState);
+	const QJsonObject recoverySnapshot = WaitForCallback(&recoveryState)
+		? QJsonDocument::fromJson(recoveryState.json).object() : QJsonObject();
+	if (!recoverySnapshot.value(QStringLiteral("currentError")).isNull()
+		|| recoverySnapshot.value(QStringLiteral("lastError")).toObject()
+			.value(QStringLiteral("code")).toString() != QStringLiteral("connection_lost"))
+	{
+		return 10;
+	}
 	emit controller.remoteFrameStatsReady(1920, 1080, 1, 1234);
 
 	QEventLoop staleLoop;
@@ -187,17 +345,17 @@ int main(int nArgc, char *pArgv[])
 			static_cast<std::uint32_t>(staleCommandId.size()),
 			staleArguments.constData(),
 			static_cast<std::uint32_t>(staleArguments.size()),
-			&JsonCompleted, &staleState);
+			5000, &CommandStarted, &JsonCompleted, &staleState);
 	});
 	staleWorker.join();
 	controller.nGeneration = 2;
 	if (!WaitForCallback(&staleState))
-		return 8;
+		return 10;
 	const QJsonObject staleResponse = QJsonDocument::fromJson(staleState.json).object();
 	if (staleResponse.value(QStringLiteral("errorCode")).toString()
 		!= QStringLiteral("stale_generation"))
 	{
-		return 9;
+		return 11;
 	}
 	emit controller.webRtcStateChanged(QStringLiteral("connected"));
 	emit controller.sessionStateChanged(ConnectingSessionState);
@@ -207,9 +365,13 @@ int main(int nArgc, char *pArgv[])
 		kind.constData(), static_cast<std::uint32_t>(kind.size()), 0,
 		&JsonCompleted, &resetState);
 	if (!WaitForCallback(&resetState))
-		return 10;
+		return 12;
 	const QJsonObject resetSnapshot = QJsonDocument::fromJson(resetState.json).object();
-	if (!resetSnapshot.value(QStringLiteral("lastError")).toString().isEmpty()
+	if (!resetSnapshot.value(QStringLiteral("currentError")).isNull()
+		|| resetSnapshot.value(QStringLiteral("lastError")).toObject()
+			.value(QStringLiteral("code")).toString() != QStringLiteral("connection_lost")
+		|| resetSnapshot.value(QStringLiteral("lastError")).toObject()
+			.value(QStringLiteral("sessionGeneration")).toString() != QStringLiteral("1")
 		|| resetSnapshot.value(QStringLiteral("receivedFrameCount")).toString()
 			!= QStringLiteral("0")
 		|| resetSnapshot.value(QStringLiteral("webRtcState")).toString()
@@ -217,8 +379,58 @@ int main(int nArgc, char *pArgv[])
 		|| !resetSnapshot.value(QStringLiteral("privacyModeStatus")).toObject()
 			.value(QStringLiteral("errorCode")).toString().isEmpty())
 	{
-		return 11;
+		return 13;
 	}
+	KSessionError currentGenerationError;
+	currentGenerationError.domain = SignalingSessionErrorDomain;
+	currentGenerationError.code = ConnectionLostSessionErrorCode;
+	currentGenerationError.stage = ConnectedSessionErrorStage;
+	currentGenerationError.bRetryable = true;
+	currentGenerationError.strTechnicalMessage = QStringLiteral("current generation");
+	emit controller.sessionErrorOccurred(currentGenerationError);
+	QEventLoop generationErrorLoop;
+	KCallbackState generationErrorState{&generationErrorLoop};
+	pApi->requestSnapshot(pApi->pHostContext, 29,
+		kind.constData(), static_cast<std::uint32_t>(kind.size()), 0,
+		&JsonCompleted, &generationErrorState);
+	const QJsonObject generationErrorSnapshot = WaitForCallback(&generationErrorState)
+		? QJsonDocument::fromJson(generationErrorState.json).object() : QJsonObject();
+	if (generationErrorSnapshot.value(QStringLiteral("currentError")).toObject()
+			.value(QStringLiteral("sessionGeneration")).toString() != QStringLiteral("2")
+		|| generationErrorSnapshot.value(QStringLiteral("lastError")).toObject()
+			.value(QStringLiteral("technicalMessage")).toString()
+			!= QStringLiteral("current generation"))
+	{
+		return 13;
+	}
+	QEventLoop generationEventsLoop;
+	KCallbackState generationEventsState{&generationEventsLoop};
+	pApi->requestSnapshot(pApi->pHostContext, 30,
+		eventsKind.constData(), static_cast<std::uint32_t>(eventsKind.size()), 0,
+		&JsonCompleted, &generationEventsState);
+	const QJsonArray generationEvents = WaitForCallback(&generationEventsState)
+		? QJsonDocument::fromJson(generationEventsState.json).object()
+			.value(QStringLiteral("events")).toArray() : QJsonArray();
+	bool bFoundGenerationOneError = false;
+	bool bFoundGenerationTwoError = false;
+	for (const QJsonValue &value : generationEvents)
+	{
+		const QJsonObject event = value.toObject();
+		if (event.value(QStringLiteral("type")).toString()
+			!= QStringLiteral("session.error"))
+		{
+			continue;
+		}
+		bFoundGenerationOneError = bFoundGenerationOneError
+			|| event.value(QStringLiteral("sessionGeneration")).toString()
+				== QStringLiteral("1");
+		bFoundGenerationTwoError = bFoundGenerationTwoError
+			|| event.value(QStringLiteral("sessionGeneration")).toString()
+				== QStringLiteral("2");
+	}
+	if (!bFoundGenerationOneError || !bFoundGenerationTwoError)
+		return 13;
+	emit controller.sessionStateChanged(ConnectedSessionState);
 	const qint64 nBeforeFrameReceivedMs = QDateTime::currentMSecsSinceEpoch();
 	emit controller.remoteFrameStatsReady(1280, 720, 2, 0);
 	QEventLoop frameLoop;
@@ -227,7 +439,7 @@ int main(int nArgc, char *pArgv[])
 		kind.constData(), static_cast<std::uint32_t>(kind.size()), 0,
 		&JsonCompleted, &frameState);
 	if (!WaitForCallback(&frameState))
-		return 12;
+		return 14;
 	const QJsonObject frameSnapshot = QJsonDocument::fromJson(frameState.json).object();
 	const qint64 nFrameReceivedAtMs = frameSnapshot
 		.value(QStringLiteral("lastFrameTimestampMs")).toString().toLongLong();
@@ -238,7 +450,7 @@ int main(int nArgc, char *pArgv[])
 		|| nFrameReceivedAtMs < nBeforeFrameReceivedMs
 		|| nFrameReceivedAtMs > QDateTime::currentMSecsSinceEpoch())
 	{
-		return 13;
+		return 15;
 	}
 
 	bridge.stopAcceptingRequests();
@@ -249,14 +461,14 @@ int main(int nArgc, char *pArgv[])
 	pApi->submitCommand(pApi->pHostContext, 19,
 		commandId.constData(), static_cast<std::uint32_t>(commandId.size()),
 		arguments.constData(), static_cast<std::uint32_t>(arguments.size()),
-		&JsonCompleted, &shutdownState);
+		5000, &CommandStarted, &JsonCompleted, &shutdownState);
 	if (!WaitForCallback(&shutdownState))
-		return 14;
+		return 16;
 	const QJsonObject shutdownResponse = QJsonDocument::fromJson(shutdownState.json).object();
 	if (shutdownResponse.value(QStringLiteral("errorCode")).toString()
 		!= QStringLiteral("application_shutdown"))
 	{
-		return 15;
+		return 17;
 	}
 	return 0;
 }

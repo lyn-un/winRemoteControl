@@ -188,23 +188,6 @@ KApplicationComposition::KApplicationComposition(QObject *pParent)
 	{
 		qFatal("Failed to register built-in application commands");
 	}
-	m_pAutomationHostBridge = new KAutomationHostBridge(
-		m_pApplicationCommandRegistry,
-		m_pSessionService,
-		KApplicationPaths::dataDirectoryPath(),
-		this);
-	m_spAutomationPluginLoader = std::make_unique<KAutomationPluginLoader>();
-	QString strAutomationError;
-	if (!m_spAutomationPluginLoader->load(QCoreApplication::applicationDirPath(),
-		m_pAutomationHostBridge->hostApi(), &strAutomationError))
-	{
-		qWarning().noquote() << QStringLiteral("Automation driver was not loaded: %1")
-			.arg(strAutomationError);
-	}
-	else if (!m_spAutomationPluginLoader->isLoaded())
-	{
-		qInfo().noquote() << QStringLiteral("Automation driver is not present");
-	}
 	m_pSessionService->configurePrivacyServices(
 		std::make_unique<KPrivacyModeService>(
 			std::make_unique<KWindowsPrivacyOverlayAdapter>(),
@@ -225,6 +208,25 @@ KApplicationComposition::KApplicationComposition(QObject *pParent)
 	m_pTerminalSessionService->setApprovalTimeoutSeconds(
 		m_pApplicationSettingsService->settings().nApprovalTimeoutSeconds);
 	wireServices();
+	m_pAutomationHostBridge = new KAutomationHostBridge(
+		m_pApplicationCommandRegistry,
+		m_pSessionService,
+		KApplicationPaths::dataDirectoryPath(),
+		this);
+	m_spAutomationPluginLoader = std::make_unique<KAutomationPluginLoader>();
+	QString strAutomationError;
+	if (!m_spAutomationPluginLoader->load(QCoreApplication::applicationDirPath(),
+		m_pAutomationHostBridge->hostApi(), &strAutomationError))
+	{
+		qWarning().noquote() << QStringLiteral("Automation driver was not loaded: %1")
+			.arg(strAutomationError);
+	}
+	else if (!m_spAutomationPluginLoader->isLoaded())
+	{
+		qInfo().noquote() << QStringLiteral("Automation driver is not present");
+	}
+	QTimer::singleShot(0, m_pAutomationHostBridge,
+		&KAutomationHostBridge::setHostReady);
 }
 
 KApplicationComposition::~KApplicationComposition()

@@ -58,26 +58,28 @@ namespace
 		QString strCapturedSession;
 		Check(router.registerRoute(QStringLiteral("GET"),
 			QStringLiteral("/session/:sessionId/state"),
-			[&strCapturedSession](const KParsedDriverRequest &,
+			[&strCapturedSession](quint64 nRequestId, const KParsedDriverRequest &,
 				const QHash<QString, QString> &parameters)
 			{
-				strCapturedSession = parameters.value(QStringLiteral("sessionId"));
+				if (nRequestId == 88)
+					strCapturedSession = parameters.value(QStringLiteral("sessionId"));
 			}, &strError), QStringLiteral("route registers"));
 		request.strMethod = QStringLiteral("GET");
 		request.strPath = QStringLiteral("/session/session-1/state?ignored=true");
-		Check(router.route(request) && strCapturedSession == QStringLiteral("session-1"),
+		Check(router.route(88, request) && strCapturedSession == QStringLiteral("session-1"),
 			QStringLiteral("route extracts path parameter"));
 		Check(!router.registerRoute(QStringLiteral("GET"),
-			QStringLiteral("/session/:sessionId/state"), [](const auto &, const auto &) {},
+			QStringLiteral("/session/:sessionId/state"),
+			[](quint64, const auto &, const auto &) {},
 			&strError), QStringLiteral("duplicate route is rejected"));
 		request.strPath = QStringLiteral("/unknown");
-		Check(!router.route(request), QStringLiteral("unknown route is rejected"));
+		Check(!router.route(89, request), QStringLiteral("unknown route is rejected"));
 	}
 
 	void TestSessionsAndStatus()
 	{
 		KDriverSessionManager manager;
-		const KDriverSession created = manager.createSession(1000);
+		const KDriverSession created = manager.createSession(1000, 17, 3);
 		Check(created.isValid() && manager.sessionCount() == 1,
 			QStringLiteral("driver session is created"));
 		Check(manager.session(created.strSessionId, 1200) != nullptr,
@@ -88,7 +90,7 @@ namespace
 			QStringLiteral("idle driver session is collected"));
 		Check(manager.session(QStringLiteral("missing"), 2100) == nullptr,
 			QStringLiteral("unknown driver session is rejected"));
-		const KDriverSession quitSession = manager.createSession(2200);
+		const KDriverSession quitSession = manager.createSession(2200, 19, 4);
 		Check(manager.quitSession(quitSession.strSessionId)
 			&& manager.session(quitSession.strSessionId, 2201) == nullptr,
 			QStringLiteral("quit driver session is removed"));

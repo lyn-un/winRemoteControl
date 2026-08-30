@@ -31,7 +31,7 @@ class PrivacyTests(unittest.TestCase):
             time.sleep(0.1)
         raise AssertionError(f"post-session action did not reach {expected!r}")
 
-    def test_privacy_command_uses_persistent_preference_service(self):
+    def test_privacy_command_round_trip(self):
         pair = TwoProcessSession(Path(os.environ["WRC_EXECUTABLE"]))
         try:
             pair.connect()

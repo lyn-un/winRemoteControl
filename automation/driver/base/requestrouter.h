@@ -8,7 +8,8 @@
 
 #include <functional>
 
-using KDriverRouteHandler = std::function<void(const KParsedDriverRequest &,
+using KDriverRouteHandler = std::function<void(quint64,
+	const KParsedDriverRequest &,
 	const QHash<QString, QString> &)>;
 
 class KRequestRouter
@@ -18,7 +19,7 @@ public:
 		const QString &strPathTemplate,
 		const KDriverRouteHandler &handler,
 		QString *pErrorMessage);
-	bool route(const KParsedDriverRequest &request) const;
+	bool route(quint64 nRequestId, const KParsedDriverRequest &request) const;
 
 private:
 	struct KRoute

@@ -41,14 +41,14 @@ bool KRequestRouter::registerRoute(const QString &strMethod,
 	return true;
 }
 
-bool KRequestRouter::route(const KParsedDriverRequest &request) const
+bool KRequestRouter::route(quint64 nRequestId, const KParsedDriverRequest &request) const
 {
 	for (const KRoute &route : m_routes)
 	{
 		QHash<QString, QString> pathParameters;
 		if (!match(route, request, &pathParameters))
 			continue;
-		route.handler(request, pathParameters);
+		route.handler(nRequestId, request, pathParameters);
 		return true;
 	}
 	return false;

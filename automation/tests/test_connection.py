@@ -40,7 +40,11 @@ class ConnectionTests(unittest.TestCase):
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline:
                 state = pair.controller_session.get_state()
-                if state.get("lastError"):
+                current_error = state.get("currentError")
+                if isinstance(current_error, dict):
+                    self.assertEqual(current_error.get("code"), "connection_failed")
+                    self.assertEqual(current_error.get("domain"), "signaling")
+                    self.assertEqual(current_error.get("stage"), "connecting")
                     break
                 time.sleep(0.1)
             else:

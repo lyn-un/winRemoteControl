@@ -22,11 +22,14 @@ namespace
 
 QJsonObject MapApplicationCommandResponse(const QJsonObject &hostResponse)
 {
-	const KDriverStatus status = ApplicationStatusToDriverStatus(
+	KDriverStatus status = ApplicationStatusToDriverStatus(
 		hostResponse.value(QStringLiteral("status")).toInt(5));
+	const QString strErrorCode = hostResponse.value(QStringLiteral("errorCode")).toString();
+	if (strErrorCode == QStringLiteral("command_timeout"))
+		status = CommandTimeoutDriverStatus;
 	if (status == OkDriverStatus)
 		return DriverSuccessResponse(hostResponse.value(QStringLiteral("value")));
 	return DriverErrorResponse(status,
-		hostResponse.value(QStringLiteral("errorCode")).toString(),
+		strErrorCode,
 		hostResponse.value(QStringLiteral("technicalMessage")).toString());
 }

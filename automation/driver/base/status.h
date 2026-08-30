@@ -13,6 +13,7 @@ enum KDriverStatus
 	CommandDisabledDriverStatus,
 	CommandBusyDriverStatus,
 	CommandTimeoutDriverStatus,
+	CommandExecutionStartedDriverStatus,
 	UnsupportedOperationDriverStatus,
 	InternalErrorDriverStatus
 };
@@ -22,5 +23,10 @@ QJsonObject DriverSuccessResponse(const QJsonValue &value);
 QJsonObject DriverErrorResponse(KDriverStatus status,
 	const QString &strError,
 	const QString &strMessage);
+QJsonObject DriverErrorResponse(KDriverStatus status,
+	const QString &strError,
+	const QString &strMessage,
+	bool bRetryable,
+	bool bOutcomeUnknown);
 
 #endif // _WINREMOTECONTROL_DRIVER_STATUS_H_

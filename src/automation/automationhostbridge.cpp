@@ -9,6 +9,7 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDateTime>
 #include <QtCore/QDebug>
+#include <QtCore/QDeadlineTimer>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QMetaObject>
@@ -18,6 +19,9 @@
 namespace
 {
 	constexpr int kMaximumAutomationEvents = 512;
+	constexpr int kMaximumCriticalAutomationEvents = 256;
+	constexpr int kMaximumStateAutomationEvents = 192;
+	constexpr int kMaximumTelemetryAutomationEvents = 64;
 
 	QByteArray BytesFromRaw(const char *pData, std::uint32_t nBytes)
 	{
@@ -82,6 +86,7 @@ KAutomationHostBridge::KAutomationHostBridge(KApplicationCommandRegistry *pRegis
 	m_hostApi.submitCommand = &KAutomationHostBridge::SubmitCommand;
 	m_hostApi.requestSnapshot = &KAutomationHostBridge::RequestSnapshot;
 	m_hostApi.copyHostValue = &KAutomationHostBridge::CopyHostValue;
+	m_hostApi.isHostReady = &KAutomationHostBridge::IsHostReady;
 	m_hostApi.writeLog = &KAutomationHostBridge::WriteLog;
 	initializeStateConnections();
 }
@@ -91,9 +96,14 @@ KAutomationHostBridge::~KAutomationHostBridge()
 	stopAcceptingRequests();
 }
 
-const KWrcDriverHostApiV1 *KAutomationHostBridge::hostApi() const
+const KWrcDriverHostApiV2 *KAutomationHostBridge::hostApi() const
 {
 	return &m_hostApi;
+}
+
+void KAutomationHostBridge::setHostReady()
+{
+	m_bHostReady.store(true);
 }
 
 void KAutomationHostBridge::stopAcceptingRequests()
@@ -107,6 +117,8 @@ void KAutomationHostBridge::SubmitCommand(void *pHostContext,
 	std::uint32_t nCommandIdBytes,
 	const char *pArgumentsJsonUtf8,
 	std::uint32_t nArgumentsJsonBytes,
+	std::uint32_t nTimeoutMs,
+	KWrcDriverCommandStartedCallback pStartedCallback,
 	KWrcDriverJsonCallback pCallback,
 	void *pCallbackContext)
 {
@@ -116,7 +128,7 @@ void KAutomationHostBridge::SubmitCommand(void *pHostContext,
 	pBridge->submitCommand(nRequestId,
 		BytesFromRaw(pCommandIdUtf8, nCommandIdBytes),
 		BytesFromRaw(pArgumentsJsonUtf8, nArgumentsJsonBytes),
-		pCallback, pCallbackContext);
+		nTimeoutMs, pStartedCallback, pCallback, pCallbackContext);
 }
 
 void KAutomationHostBridge::RequestSnapshot(void *pHostContext,
@@ -152,6 +164,10 @@ std::uint32_t KAutomationHostBridge::CopyHostValue(void *pHostContext,
 		value = QByteArray(KWrcAutomationBuildId);
 	else if (strKey == QStringLiteral("dataDirectory"))
 		value = pBridge->m_strDataDirectory.toUtf8();
+	else if (strKey == QStringLiteral("eventCursor"))
+		value = QByteArray::number(pBridge->m_nPublishedEventCursor.load());
+	else if (strKey == QStringLiteral("sessionGeneration"))
+		value = QByteArray::number(pBridge->m_nObservedSessionGeneration.load());
 	else
 		return 0;
 
@@ -161,6 +177,12 @@ std::uint32_t KAutomationHostBridge::CopyHostValue(void *pHostContext,
 	std::memcpy(pDestinationUtf8, value.constData(), static_cast<size_t>(value.size()));
 	pDestinationUtf8[value.size()] = '\0';
 	return nRequired;
+}
+
+bool KAutomationHostBridge::IsHostReady(void *pHostContext)
+{
+	const auto *pBridge = static_cast<const KAutomationHostBridge *>(pHostContext);
+	return pBridge != nullptr && pBridge->m_bHostReady.load();
 }
 
 void KAutomationHostBridge::WriteLog(void *pHostContext,
@@ -181,14 +203,29 @@ void KAutomationHostBridge::WriteLog(void *pHostContext,
 void KAutomationHostBridge::submitCommand(quint64 nRequestId,
 	const QByteArray &commandIdUtf8,
 	const QByteArray &argumentsJsonUtf8,
+	quint32 nTimeoutMs,
+	KWrcDriverCommandStartedCallback pStartedCallback,
 	KWrcDriverJsonCallback pCallback,
 	void *pCallbackContext)
 {
 	const quint64 nSubmittedGeneration = m_nObservedSessionGeneration.load();
+	const QDeadlineTimer deadline(static_cast<qint64>(nTimeoutMs), Qt::PreciseTimer);
 	QMetaObject::invokeMethod(this,
 		[this, nRequestId, nSubmittedGeneration, commandIdUtf8, argumentsJsonUtf8,
-			pCallback, pCallbackContext]()
+			deadline, pStartedCallback, pCallback, pCallbackContext]()
 		{
+			if (m_seenCommandRequestIds.contains(nRequestId))
+			{
+				completeJson(nRequestId,
+					ErrorObject(QStringLiteral("duplicate_request_id"),
+						QStringLiteral("Host request id was already processed")),
+					pCallback, pCallbackContext);
+				return;
+			}
+			m_seenCommandRequestIds.insert(nRequestId);
+			m_commandRequestOrder.append(nRequestId);
+			if (m_commandRequestOrder.size() > 4096)
+				m_seenCommandRequestIds.remove(m_commandRequestOrder.takeFirst());
 			if (!m_bAcceptingRequests)
 			{
 				completeJson(nRequestId,
@@ -205,6 +242,19 @@ void KAutomationHostBridge::submitCommand(quint64 nRequestId,
 					pCallback, pCallbackContext);
 				return;
 			}
+			if (deadline.hasExpired())
+			{
+				completeJson(nRequestId,
+					ErrorObject(QStringLiteral("command_timeout"),
+						QStringLiteral("Command expired before execution")),
+					pCallback, pCallbackContext);
+				appendEvent(StateAutomationEventCategory,
+					QStringLiteral("command.expired"), QJsonObject{
+					{QStringLiteral("requestId"), QString::number(nRequestId)},
+					{QStringLiteral("commandId"), QString::fromUtf8(commandIdUtf8)}
+				});
+				return;
+			}
 
 			QJsonParseError parseError;
 			const QJsonDocument document = QJsonDocument::fromJson(argumentsJsonUtf8, &parseError);
@@ -218,6 +268,8 @@ void KAutomationHostBridge::submitCommand(quint64 nRequestId,
 			}
 
 			const QString strCommandId = QString::fromUtf8(commandIdUtf8);
+			if (pStartedCallback != nullptr)
+				pStartedCallback(pCallbackContext, nRequestId);
 			const KApplicationCommandResult result = m_pRegistry->execute(
 				strCommandId, document.object());
 			QJsonObject response{
@@ -227,7 +279,8 @@ void KAutomationHostBridge::submitCommand(quint64 nRequestId,
 				{QStringLiteral("technicalMessage"), result.strTechnicalMessage}
 			};
 			completeJson(nRequestId, response, pCallback, pCallbackContext);
-			appendEvent(QStringLiteral("command.completed"), QJsonObject{
+			appendEvent(StateAutomationEventCategory,
+				QStringLiteral("command.completed"), QJsonObject{
 				{QStringLiteral("requestId"), QString::number(nRequestId)},
 				{QStringLiteral("commandId"), strCommandId},
 				{QStringLiteral("status"), static_cast<int>(result.status)}
@@ -277,7 +330,7 @@ void KAutomationHostBridge::synchronizeSessionGeneration()
 	m_strSignalingState.clear();
 	m_strWebRtcState.clear();
 	m_strRemoteDeviceId.clear();
-	m_strLastError.clear();
+	m_currentError = QJsonObject();
 	m_negotiatedCapabilities.clear();
 	m_privacyModeStatus = KPrivacyModeStatus();
 	m_postSessionActionStatus = KPostSessionActionStatus();
@@ -300,7 +353,8 @@ void KAutomationHostBridge::initializeStateConnections()
 		{
 			m_bListeningAvailable = bAvailable;
 			m_nListeningPort = nPort;
-			appendEvent(QStringLiteral("signaling.listening_changed"), QJsonObject{
+			appendEvent(StateAutomationEventCategory,
+				QStringLiteral("signaling.listening_changed"), QJsonObject{
 				{QStringLiteral("available"), bAvailable},
 				{QStringLiteral("port"), nPort}
 			});
@@ -323,10 +377,14 @@ void KAutomationHostBridge::initializeStateConnections()
 			synchronizeSessionGeneration();
 			m_strSessionState = KSessionStateMachine::stateName(state);
 			if (state == ConnectedSessionState || state == StreamingSessionState)
+			{
 				m_strWebRtcState = QStringLiteral("connected");
+				m_currentError = QJsonObject();
+			}
 			else if (state == ReconnectingSessionState)
 				m_strWebRtcState = QStringLiteral("disconnected");
-			appendEvent(QStringLiteral("session.state_changed"),
+			appendEvent(StateAutomationEventCategory,
+				QStringLiteral("session.state_changed"),
 				QJsonObject{{QStringLiteral("state"), m_strSessionState}});
 		});
 	connect(m_pSessionController, &KSessionController::sessionChannelChanged,
@@ -372,16 +430,23 @@ void KAutomationHostBridge::initializeStateConnections()
 			m_nLastFrameWidth = nWidth;
 			m_nLastFrameHeight = nHeight;
 			m_nLastFrameTimestampMs = nReceivedAtMs;
-			appendEvent(QStringLiteral("frame.received"), QJsonObject{
-				{QStringLiteral("frameCount"), QString::number(m_nReceivedFrameCount)},
-				{QStringLiteral("timestampMs"), QString::number(nReceivedAtMs)}
-			});
+			if (!m_frameProgressEventTimer.isValid()
+				|| m_frameProgressEventTimer.elapsed() >= 1000)
+			{
+				m_frameProgressEventTimer.restart();
+				appendEvent(TelemetryAutomationEventCategory,
+					QStringLiteral("frame.progress"), QJsonObject{
+						{QStringLiteral("frameCount"), QString::number(m_nReceivedFrameCount)},
+						{QStringLiteral("lastFrameTimestampMs"), QString::number(nReceivedAtMs)}
+					});
+			}
 		});
 	connect(m_pSessionController, &KSessionController::incomingAccessRequest,
 		this, [this](const QString &strRequestId, const QString &strDeviceName,
 			const QString &, qint64 nExpiresAtMs)
 		{
-			appendEvent(QStringLiteral("access.requested"), QJsonObject{
+			appendEvent(CriticalAutomationEventCategory,
+				QStringLiteral("access.requested"), QJsonObject{
 				{QStringLiteral("requestId"), strRequestId},
 				{QStringLiteral("deviceName"), strDeviceName},
 				{QStringLiteral("expiresAtMs"), QString::number(nExpiresAtMs)}
@@ -390,7 +455,8 @@ void KAutomationHostBridge::initializeStateConnections()
 	connect(m_pSessionController, &KSessionController::incomingAccessRequestCleared,
 		this, [this](const QString &strRequestId, const QString &strReason)
 		{
-			appendEvent(QStringLiteral("access.cleared"), QJsonObject{
+			appendEvent(CriticalAutomationEventCategory,
+				QStringLiteral("access.cleared"), QJsonObject{
 				{QStringLiteral("requestId"), strRequestId},
 				{QStringLiteral("reason"), strReason}
 			});
@@ -401,7 +467,8 @@ void KAutomationHostBridge::initializeStateConnections()
 			const QString &, const QString &, const QString &, const QString &,
 			KPermissionScopes requestedPermissions, qint64 nExpiresAtMs)
 		{
-			appendEvent(QStringLiteral("pairing.requested"), QJsonObject{
+			appendEvent(CriticalAutomationEventCategory,
+				QStringLiteral("pairing.requested"), QJsonObject{
 				{QStringLiteral("requestId"), strRequestId},
 				{QStringLiteral("deviceName"), strDeviceName},
 				{QStringLiteral("localRole"), strLocalRole},
@@ -414,7 +481,8 @@ void KAutomationHostBridge::initializeStateConnections()
 	connect(m_pSessionController, &KSessionController::pairingCleared,
 		this, [this](const QString &strRequestId, const QString &strReason)
 		{
-			appendEvent(QStringLiteral("pairing.cleared"), QJsonObject{
+			appendEvent(CriticalAutomationEventCategory,
+				QStringLiteral("pairing.cleared"), QJsonObject{
 				{QStringLiteral("requestId"), strRequestId},
 				{QStringLiteral("reason"), strReason}
 			});
@@ -455,23 +523,79 @@ void KAutomationHostBridge::initializeStateConnections()
 		this, [this](const KSessionError &error)
 		{
 			synchronizeSessionGeneration();
-			m_strLastError = KSessionError::codeName(error.code);
-			appendEvent(QStringLiteral("session.error"), QJsonObject{
-				{QStringLiteral("code"), m_strLastError},
-				{QStringLiteral("message"), error.strTechnicalMessage}
-			});
+			m_currentError = sessionErrorObject(error);
+			m_lastError = m_currentError;
+			appendEvent(CriticalAutomationEventCategory,
+				QStringLiteral("session.error"), m_currentError);
 		});
 }
 
-void KAutomationHostBridge::appendEvent(const QString &strType, const QJsonObject &value)
+void KAutomationHostBridge::appendEvent(KAutomationEventCategory category,
+	const QString &strType,
+	const QJsonObject &value)
 {
+	synchronizeSessionGeneration();
 	KAutomationEvent event;
 	event.nSequence = m_nNextEventSequence++;
+	event.category = category;
 	event.strType = strType;
 	event.value = value;
+	event.value.insert(QStringLiteral("sessionGeneration"),
+		QString::number(m_nObservedSessionGeneration.load()));
 	m_events.append(event);
+
+	auto categoryCount = [this](KAutomationEventCategory target)
+	{
+		int nCount = 0;
+		for (const KAutomationEvent &candidate : m_events)
+		{
+			if (candidate.category == target)
+				++nCount;
+		}
+		return nCount;
+	};
+	auto removeOldestCategory = [this](KAutomationEventCategory target)
+	{
+		for (auto iter = m_events.begin(); iter != m_events.end(); ++iter)
+		{
+			if (iter->category == target)
+			{
+				m_events.erase(iter);
+				return true;
+			}
+		}
+		return false;
+	};
+	const int nCategoryLimit = category == CriticalAutomationEventCategory
+		? kMaximumCriticalAutomationEvents
+		: (category == StateAutomationEventCategory
+			? kMaximumStateAutomationEvents : kMaximumTelemetryAutomationEvents);
+	while (categoryCount(category) > nCategoryLimit)
+		removeOldestCategory(category);
 	while (m_events.size() > kMaximumAutomationEvents)
-		m_events.removeFirst();
+	{
+		if (!removeOldestCategory(TelemetryAutomationEventCategory)
+			&& !removeOldestCategory(StateAutomationEventCategory))
+		{
+			m_events.removeFirst();
+		}
+	}
+	m_nPublishedEventCursor.store(event.nSequence);
+}
+
+QJsonObject KAutomationHostBridge::sessionErrorObject(const KSessionError &error) const
+{
+	return QJsonObject{
+		{QStringLiteral("code"), KSessionError::codeName(error.code)},
+		{QStringLiteral("domain"), KSessionError::domainName(error.domain)},
+		{QStringLiteral("stage"), KSessionError::stageName(error.stage)},
+		{QStringLiteral("retryable"), error.bRetryable},
+		{QStringLiteral("technicalMessage"), error.strTechnicalMessage},
+		{QStringLiteral("occurredAtMs"),
+			QString::number(QDateTime::currentMSecsSinceEpoch())},
+		{QStringLiteral("sessionGeneration"),
+			QString::number(m_nObservedSessionGeneration.load())}
+	};
 }
 
 QJsonObject KAutomationHostBridge::stateSnapshot() const
@@ -481,6 +605,8 @@ QJsonObject KAutomationHostBridge::stateSnapshot() const
 		capabilities.append(strCapability);
 	return QJsonObject{
 		{QStringLiteral("role"), KSessionStateMachine::roleName(m_pSessionController->sessionRole())},
+		{QStringLiteral("sessionGeneration"),
+			QString::number(m_nObservedSessionGeneration.load())},
 		{QStringLiteral("sessionState"), m_strSessionState},
 		{QStringLiteral("signalingState"), m_strSignalingState},
 		{QStringLiteral("webRtcState"), m_strWebRtcState},
@@ -506,28 +632,42 @@ QJsonObject KAutomationHostBridge::stateSnapshot() const
 			{QStringLiteral("action"), PostSessionActionName(m_postSessionActionStatus.action)},
 			{QStringLiteral("errorCode"), m_postSessionActionStatus.strErrorCode}
 		}},
-		{QStringLiteral("lastError"), m_strLastError}
+		{QStringLiteral("currentError"), m_currentError.isEmpty()
+			? QJsonValue(QJsonValue::Null) : QJsonValue(m_currentError)},
+		{QStringLiteral("lastError"), m_lastError.isEmpty()
+			? QJsonValue(QJsonValue::Null) : QJsonValue(m_lastError)}
 	};
 }
 
 QJsonObject KAutomationHostBridge::eventsSnapshot(quint64 nSinceSequence) const
 {
 	QJsonArray events;
+	quint64 nExpectedSequence = nSinceSequence + 1;
+	bool bHasGap = false;
 	for (const KAutomationEvent &event : m_events)
 	{
 		if (event.nSequence <= nSinceSequence)
 			continue;
+		if (event.nSequence != nExpectedSequence)
+			bHasGap = true;
+		nExpectedSequence = event.nSequence + 1;
 		QJsonObject item = event.value;
 		item.insert(QStringLiteral("sequence"), QString::number(event.nSequence));
 		item.insert(QStringLiteral("type"), event.strType);
+		item.insert(QStringLiteral("category"), event.category == CriticalAutomationEventCategory
+			? QStringLiteral("critical")
+			: (event.category == StateAutomationEventCategory
+				? QStringLiteral("state") : QStringLiteral("telemetry")));
 		events.append(item);
 	}
+	if (nExpectedSequence < m_nNextEventSequence)
+		bHasGap = true;
 	const quint64 nOldest = m_events.isEmpty() ? m_nNextEventSequence : m_events.first().nSequence;
 	return QJsonObject{
 		{QStringLiteral("events"), events},
 		{QStringLiteral("oldestSequence"), QString::number(nOldest)},
 		{QStringLiteral("nextSequence"), QString::number(m_nNextEventSequence)},
-		{QStringLiteral("hasGap"), nSinceSequence != 0 && nSinceSequence + 1 < nOldest}
+		{QStringLiteral("hasGap"), bHasGap}
 	};
 }
 

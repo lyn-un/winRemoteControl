@@ -4,14 +4,18 @@ from dataclasses import dataclass
 from typing import Any
 
 from .errors import (
+    ApplicationNotReady,
+    ApplicationShuttingDown,
     CommandDisabled,
     CommandBusy,
+    CommandExecutionStarted,
     CommandTimeout,
     DriverNotRunning,
     DriverProtocolError,
     InternalError,
     InvalidArgument,
     InvalidSessionId,
+    StaleSessionGeneration,
     UnknownCommand,
     UnsupportedOperation,
 )
@@ -71,7 +75,21 @@ class DriverTransport:
             "command_disabled": CommandDisabled,
             "command_busy": CommandBusy,
             "command_timeout": CommandTimeout,
+            "command_execution_started": CommandExecutionStarted,
+            "application_not_ready": ApplicationNotReady,
+            "stale_generation": StaleSessionGeneration,
+            "application_shutdown": ApplicationShuttingDown,
             "unsupported_operation": UnsupportedOperation,
             "internal_error": InternalError,
         }.get(error_code, DriverProtocolError)
-        raise exception_type(message)
+        driver_status = payload.get("status")
+        raise exception_type(
+            message,
+            error_code=error_code,
+            driver_status=driver_status if isinstance(driver_status, int) else None,
+            request_id=(
+                str(value["requestId"]) if value.get("requestId") is not None else None
+            ),
+            retryable=value.get("retryable") is True,
+            outcome_unknown=value.get("outcomeUnknown") is True,
+        )

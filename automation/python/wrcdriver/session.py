@@ -2,27 +2,44 @@ import time
 from typing import Any
 from urllib.parse import quote
 
-from .errors import WaitTimeout
+from .errors import EventHistoryLost, WaitTimeout
 from .transport import DriverTransport
 
 
 class WrcSession:
-    def __init__(self, transport: DriverTransport, session_id: str) -> None:
+    def __init__(
+        self,
+        transport: DriverTransport,
+        session_id: str,
+        event_cursor: int = 0,
+        session_generation: int = 0,
+    ) -> None:
         self._transport = transport
         self.session_id = session_id
-        self._last_event_sequence = 0
+        self.session_generation = session_generation
+        self._last_event_sequence = event_cursor
 
     @property
     def _base_path(self) -> str:
         return f"/session/{quote(self.session_id, safe='')}"
 
+    @property
+    def event_cursor(self) -> int:
+        return self._last_event_sequence
+
     def trigger_command(
-        self, command_id: str, arguments: dict[str, Any] | None = None
+        self,
+        command_id: str,
+        arguments: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
     ) -> Any:
+        body = {"id": command_id, "arguments": arguments or {}}
+        if idempotency_key is not None:
+            body["idempotencyKey"] = idempotency_key
         return self._transport.request(
             "POST",
             f"{self._base_path}/command/trigger",
-            {"id": command_id, "arguments": arguments or {}},
+            body,
         )
 
     def get_state(self) -> dict[str, Any]:
@@ -50,7 +67,15 @@ class WrcSession:
     def wait_for_event(self, event_type: str, timeout: float = 30.0) -> dict[str, Any]:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            snapshot = self.get_events(self._last_event_sequence)
+            requested_cursor = self._last_event_sequence
+            snapshot = self.get_events(requested_cursor)
+            if snapshot.get("hasGap") is True:
+                raise EventHistoryLost(
+                    requested_cursor,
+                    int(snapshot.get("oldestSequence", 0)),
+                    int(snapshot.get("nextSequence", 0)),
+                    event_type,
+                )
             for event in snapshot.get("events", []):
                 self._last_event_sequence = max(
                     self._last_event_sequence, int(event.get("sequence", 0))

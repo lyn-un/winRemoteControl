@@ -6,7 +6,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 
-from wrcdriver import WaitTimeout, WrcApplication
+from wrcdriver import EventHistoryLost, WaitTimeout, WrcApplication
 
 
 PERMISSIONS = [
@@ -16,6 +16,79 @@ PERMISSIONS = [
     "terminal",
     "fileTransfer",
 ]
+
+
+def wait_for_frame_progress(
+    session,
+    baseline_state: dict,
+    minimum_increments: int = 2,
+    observation_seconds: float = 1.0,
+    timeout: float = 30.0,
+) -> dict:
+    baseline_count = int(baseline_state.get("receivedFrameCount", "0"))
+    baseline_timestamp = int(baseline_state.get("lastFrameTimestampMs", "0"))
+    baseline_generation = str(baseline_state.get("sessionGeneration", ""))
+    deadline = time.monotonic() + timeout
+    first_sample = None
+    while time.monotonic() < deadline:
+        state = session.get_state()
+        count = int(state.get("receivedFrameCount", "0"))
+        last_frame_timestamp_ms = int(state.get("lastFrameTimestampMs", "0"))
+        is_new_healthy_frame = (
+            state.get("sessionState") == "Streaming"
+            and state.get("webRtcState") == "connected"
+            and state.get("sessionChannelOpen") is True
+            and str(state.get("sessionGeneration", "")) == baseline_generation
+            and count >= baseline_count + minimum_increments - 1
+            and int(state.get("lastFrameWidth", 0)) > 0
+            and int(state.get("lastFrameHeight", 0)) > 0
+            and last_frame_timestamp_ms > baseline_timestamp
+            and abs(int(time.time() * 1000) - last_frame_timestamp_ms) < 5_000
+            and not state.get("currentError")
+        )
+        if is_new_healthy_frame:
+            if first_sample is None:
+                first_sample = (count, last_frame_timestamp_ms, time.monotonic())
+            elif (
+                time.monotonic() - first_sample[2] >= observation_seconds
+                and count > first_sample[0]
+                and last_frame_timestamp_ms > first_sample[1]
+            ):
+                return state
+        time.sleep(0.1)
+    raise WaitTimeout("Timed out waiting for verified streaming frame progress")
+
+
+def wait_for_stream_stopped(
+    session,
+    quiet_seconds: float = 0.5,
+    timeout: float = 15.0,
+) -> dict:
+    deadline = time.monotonic() + timeout
+    quiet_started = None
+    quiet_count = 0
+    quiet_timestamp = 0
+    last_state = {}
+    while time.monotonic() < deadline:
+        last_state = session.get_state()
+        if (
+            last_state.get("sessionState") == "Connected"
+            and not last_state.get("currentError")
+        ):
+            count = int(last_state.get("receivedFrameCount", "0"))
+            timestamp = int(last_state.get("lastFrameTimestampMs", "0"))
+            if quiet_started is None or count != quiet_count or timestamp != quiet_timestamp:
+                quiet_started = time.monotonic()
+                quiet_count = count
+                quiet_timestamp = timestamp
+            elif time.monotonic() - quiet_started >= quiet_seconds:
+                return last_state
+        else:
+            quiet_started = None
+        time.sleep(0.1)
+    raise WaitTimeout(
+        f"Timed out waiting for streaming frames to stop; last state={last_state!r}"
+    )
 
 
 class TwoProcessSession:
@@ -37,8 +110,8 @@ class TwoProcessSession:
         except Exception:
             self.close()
             raise
-        self._host_sequence = 0
-        self._controller_sequence = 0
+        self._host_sequence = self.host_session.event_cursor
+        self._controller_sequence = self.controller_session.event_cursor
 
     def begin_connection(self, timeout: float = 30.0) -> None:
         self.host_session.trigger_command(
@@ -68,31 +141,22 @@ class TwoProcessSession:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             state = self.controller_session.get_state()
-            if state.get("lastError") == expected:
+            current_error = state.get("currentError")
+            if isinstance(current_error, dict) and current_error.get("code") == expected:
                 return state
             time.sleep(0.1)
         raise WaitTimeout(f"Timed out waiting for error {expected!r}")
 
     def start_streaming(self, timeout: float = 30.0) -> dict:
+        baseline = self.controller_session.get_state()
         self.controller_session.trigger_command("stream.start")
-        deadline = time.monotonic() + timeout
-        first_count = 0
-        while time.monotonic() < deadline:
-            state = self.controller_session.get_state()
-            count = int(state.get("receivedFrameCount", "0"))
-            last_frame_timestamp_ms = int(state.get("lastFrameTimestampMs", "0"))
-            if (
-                state.get("sessionState") == "Streaming"
-                and state.get("webRtcState") == "connected"
-                and state.get("sessionChannelOpen") is True
-                and count > first_count
-                and abs(int(time.time() * 1000) - last_frame_timestamp_ms) < 5_000
-                and not state.get("lastError")
-            ):
-                return state
-            first_count = max(first_count, count)
-            time.sleep(0.1)
-        raise WaitTimeout("Timed out waiting for verified streaming frames")
+        return wait_for_frame_progress(
+            self.controller_session, baseline, timeout=timeout
+        )
+
+    def stop_streaming(self, timeout: float = 15.0) -> dict:
+        self.controller_session.trigger_command("stream.stop")
+        return wait_for_stream_stopped(self.controller_session, timeout=timeout)
 
     def disconnect(self) -> None:
         if self.controller_session is None:
@@ -125,6 +189,13 @@ class TwoProcessSession:
     def _events(self, session, sequence_attribute: str):
         sequence = getattr(self, sequence_attribute)
         snapshot = session.get_events(sequence)
+        if snapshot.get("hasGap") is True:
+            raise EventHistoryLost(
+                sequence,
+                int(snapshot.get("oldestSequence", 0)),
+                int(snapshot.get("nextSequence", 0)),
+                "connection control event",
+            )
         events = snapshot.get("events", [])
         for event in events:
             sequence = max(sequence, int(event.get("sequence", 0)))

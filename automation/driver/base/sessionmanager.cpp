@@ -2,12 +2,16 @@
 
 #include <QtCore/QUuid>
 
-KDriverSession KDriverSessionManager::createSession(qint64 nNowMs)
+KDriverSession KDriverSessionManager::createSession(qint64 nNowMs,
+	quint64 nEventCursor,
+	quint64 nSessionGeneration)
 {
 	KDriverSession session;
 	session.strSessionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
 	session.nCreatedAtMs = nNowMs;
 	session.nLastActivityAtMs = nNowMs;
+	session.nEventCursor = nEventCursor;
+	session.nSessionGeneration = nSessionGeneration;
 	m_sessions.insert(session.strSessionId, session);
 	return session;
 }

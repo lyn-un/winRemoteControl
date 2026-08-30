@@ -16,13 +16,13 @@ public:
 	KAutomationPluginLoader &operator=(const KAutomationPluginLoader &) = delete;
 
 	bool load(const QString &strApplicationDirectory,
-		const KWrcDriverHostApiV1 *pHostApi,
+		const KWrcDriverHostApiV2 *pHostApi,
 		QString *pErrorMessage);
 	void shutdown();
 	bool isLoaded() const;
 
 private:
-	bool validateBuildInfo(const KWrcDriverBuildInfoV1 &buildInfo,
+	bool validateBuildInfo(const KWrcDriverBuildInfoV2 &buildInfo,
 		QString *pErrorMessage) const;
 
 	QLibrary m_library;

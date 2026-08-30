@@ -3,6 +3,18 @@
 
 #include "automation/driver/base/requestrouter.h"
 
-bool RegisterWrcRoutes(KRequestRouter *pRouter, QString *pErrorMessage);
+struct KWrcRouteHandlers
+{
+	KDriverRouteHandler status;
+	KDriverRouteHandler createSession;
+	KDriverRouteHandler deleteSession;
+	KDriverRouteHandler triggerCommand;
+	KDriverRouteHandler stateSnapshot;
+	KDriverRouteHandler eventsSnapshot;
+};
+
+bool RegisterWrcRoutes(KRequestRouter *pRouter,
+	const KWrcRouteHandlers &handlers,
+	QString *pErrorMessage);
 
 #endif // _WINREMOTECONTROL_DRIVER_WRCROUTES_H_

@@ -18,7 +18,8 @@
         "WRC_BUILD_TESTS": "ON",
         "WRC_ENABLE_WEBRTC": "ON",
         "WRC_ENABLE_FFMPEG": "ON",
-        "WRC_ENABLE_WEBVIEW2": "ON"
+        "WRC_ENABLE_WEBVIEW2": "ON",
+        "WRC_BUILD_AUTOMATION_DRIVER": "ON"
       }
     },
     {

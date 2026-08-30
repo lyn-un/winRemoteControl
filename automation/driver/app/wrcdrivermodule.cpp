@@ -21,6 +21,7 @@
 namespace
 {
 	constexpr int kHostCommandTimeoutMs = 5000;
+	constexpr int kHostCallbackGraceMs = 1000;
 	constexpr qint64 kSessionIdleTimeoutMs = 30 * 60 * 1000;
 }
 
@@ -38,16 +39,16 @@ KWrcDriverModule::~KWrcDriverModule()
 	stop();
 }
 
-bool KWrcDriverModule::start(const KWrcDriverHostApiV1 *pHostApi,
+bool KWrcDriverModule::start(const KWrcDriverHostApiV2 *pHostApi,
 	KWrcDriverCallbackGate *pCallbackGate,
 	QString *pErrorMessage)
 {
 	if (m_bStarted)
 		return true;
 	if (pHostApi == nullptr || pCallbackGate == nullptr
-		|| pHostApi->nAbiVersion != KWrcDriverAbiVersion1
+		|| pHostApi->nAbiVersion != KWrcDriverAbiVersion2
 		|| pHostApi->submitCommand == nullptr || pHostApi->requestSnapshot == nullptr
-		|| pHostApi->copyHostValue == nullptr)
+		|| pHostApi->copyHostValue == nullptr || pHostApi->isHostReady == nullptr)
 	{
 		if (pErrorMessage != nullptr)
 			*pErrorMessage = QStringLiteral("Invalid Host API");
@@ -80,9 +81,24 @@ void KWrcDriverModule::stop()
 	if (!m_bStarted)
 		return;
 	m_bStarted = false;
-	m_pHttpServer->stop();
+	const QJsonObject shutdownResponse = DriverErrorResponse(InternalErrorDriverStatus,
+		QStringLiteral("application_shutdown"),
+		QStringLiteral("Application is shutting down"), false, false);
+	for (auto iter = m_pendingHostRequests.begin();
+		iter != m_pendingHostRequests.end(); ++iter)
+	{
+		if (!iter->context.timeout(shutdownResponse))
+			continue;
+		respond(iter->context.nRequestId, shutdownResponse, 503);
+	}
 	m_pendingHostRequests.clear();
+	if (m_pCallbackGate != nullptr)
+	{
+		QMutexLocker locker(&m_pCallbackGate->mutex);
+		m_pCallbackGate->startedRequestIds.clear();
+	}
 	m_sessionManager.clear();
+	m_pHttpServer->stop();
 	m_pHostApi = nullptr;
 	m_pCallbackGate = nullptr;
 }
@@ -107,10 +123,54 @@ void KWrcDriverModule::HostJsonCompleted(void *pCallbackContext,
 		}, Qt::QueuedConnection);
 }
 
+void KWrcDriverModule::HostCommandStarted(void *pCallbackContext,
+	std::uint64_t nRequestId)
+{
+	auto *pGate = static_cast<KWrcDriverCallbackGate *>(pCallbackContext);
+	if (pGate == nullptr)
+		return;
+	QMutexLocker locker(&pGate->mutex);
+	KWrcDriverModule *pModule = pGate->pModule.data();
+	if (pModule == nullptr)
+		return;
+	pGate->startedRequestIds.insert(nRequestId);
+}
+
 void KWrcDriverModule::initializeRoutes()
 {
+	KWrcRouteHandlers handlers;
+	handlers.status = [this](quint64 nRequestId, const auto &, const auto &)
+	{
+		handleStatus(nRequestId);
+	};
+	handlers.createSession = [this](quint64 nRequestId, const auto &, const auto &)
+	{
+		handleCreateSession(nRequestId);
+	};
+	handlers.deleteSession = [this](quint64 nRequestId, const auto &,
+		const QHash<QString, QString> &pathParameters)
+	{
+		handleDeleteSession(nRequestId, pathParameters);
+	};
+	handlers.triggerCommand = [this](quint64 nRequestId,
+		const KParsedDriverRequest &request,
+		const QHash<QString, QString> &pathParameters)
+	{
+		handleTriggerCommand(nRequestId, request, pathParameters);
+	};
+	handlers.stateSnapshot = [this](quint64 nRequestId, const auto &,
+		const QHash<QString, QString> &pathParameters)
+	{
+		handleStateSnapshot(nRequestId, pathParameters);
+	};
+	handlers.eventsSnapshot = [this](quint64 nRequestId,
+		const KParsedDriverRequest &request,
+		const QHash<QString, QString> &pathParameters)
+	{
+		handleEventsSnapshot(nRequestId, request, pathParameters);
+	};
 	QString strError;
-	if (!RegisterWrcRoutes(&m_router, &strError))
+	if (!RegisterWrcRoutes(&m_router, handlers, &strError))
 		qFatal("Unable to register automation routes");
 }
 
@@ -126,130 +186,241 @@ void KWrcDriverModule::handleHttpRequest(quint64 nRequestId,
 		respond(nRequestId, parseError, 400);
 		return;
 	}
-	if (!m_router.route(request))
-	{
-		respond(nRequestId, DriverErrorResponse(UnsupportedOperationDriverStatus,
-			QStringLiteral("unknown_route"), QStringLiteral("Unknown automation route")), 404);
-		return;
-	}
 	m_sessionManager.collectExpired(QDateTime::currentMSecsSinceEpoch(), kSessionIdleTimeoutMs);
-	const QString strPath = request.strPath.section(QLatin1Char('?'), 0, 0);
-	const QStringList segments = strPath.split(QLatin1Char('/'), Qt::SkipEmptyParts);
-
-	if (request.strMethod == QStringLiteral("GET") && strPath == QStringLiteral("/status"))
-	{
-		respond(nRequestId, DriverSuccessResponse(DriverStatusValue(
-			hostValue(QByteArrayLiteral("pid")),
-			hostValue(QByteArrayLiteral("buildId")), m_bStarted)));
-		return;
-	}
-	if (request.strMethod == QStringLiteral("POST") && strPath == QStringLiteral("/session"))
-	{
-		const KDriverSession session = m_sessionManager.createSession(
-			QDateTime::currentMSecsSinceEpoch());
-		respond(nRequestId, DriverSuccessResponse(DriverSessionValue(session,
-			hostValue(QByteArrayLiteral("pid")),
-			hostValue(QByteArrayLiteral("buildId")))));
-		return;
-	}
-	if (segments.size() < 2 || segments.first() != QStringLiteral("session"))
+	if (!m_router.route(nRequestId, request))
 	{
 		respond(nRequestId, DriverErrorResponse(UnsupportedOperationDriverStatus,
 			QStringLiteral("unknown_route"), QStringLiteral("Unknown automation route")), 404);
 		return;
 	}
-	const QString strSessionId = segments.at(1);
-	if (m_sessionManager.session(strSessionId, QDateTime::currentMSecsSinceEpoch()) == nullptr)
+}
+
+void KWrcDriverModule::handleStatus(quint64 nRequestId)
+{
+	const bool bHostReady = m_pHostApi != nullptr
+		&& m_pHostApi->isHostReady != nullptr
+		&& m_pHostApi->isHostReady(m_pHostApi->pHostContext);
+	respond(nRequestId, DriverSuccessResponse(DriverStatusValue(
+		hostValue(QByteArrayLiteral("pid")), hostValue(QByteArrayLiteral("buildId")),
+		m_bStarted, bHostReady)));
+}
+
+void KWrcDriverModule::handleCreateSession(quint64 nRequestId)
+{
+	if (m_pHostApi == nullptr || m_pHostApi->isHostReady == nullptr
+		|| !m_pHostApi->isHostReady(m_pHostApi->pHostContext))
+	{
+		respond(nRequestId, DriverErrorResponse(InternalErrorDriverStatus,
+			QStringLiteral("application_not_ready"),
+			QStringLiteral("Application host is not ready"), true, false), 503);
+		return;
+	}
+	bool bCursorOk = false;
+	bool bGenerationOk = false;
+	const quint64 nEventCursor = hostValue(QByteArrayLiteral("eventCursor"))
+		.toULongLong(&bCursorOk);
+	const quint64 nSessionGeneration = hostValue(
+		QByteArrayLiteral("sessionGeneration")).toULongLong(&bGenerationOk);
+	if (!bCursorOk || !bGenerationOk)
+	{
+		respond(nRequestId, DriverErrorResponse(InternalErrorDriverStatus,
+			QStringLiteral("invalid_host_state"),
+			QStringLiteral("Host did not provide an event cursor and generation")), 500);
+		return;
+	}
+	const KDriverSession session = m_sessionManager.createSession(
+		QDateTime::currentMSecsSinceEpoch(), nEventCursor, nSessionGeneration);
+	respond(nRequestId, DriverSuccessResponse(DriverSessionValue(session,
+		hostValue(QByteArrayLiteral("pid")), hostValue(QByteArrayLiteral("buildId")))));
+}
+
+bool KWrcDriverModule::validateSession(quint64 nRequestId,
+	const QHash<QString, QString> &pathParameters,
+	QString *pSessionId)
+{
+	const QString strSessionId = pathParameters.value(QStringLiteral("sessionId"));
+	if (strSessionId.isEmpty()
+		|| m_sessionManager.session(strSessionId,
+			QDateTime::currentMSecsSinceEpoch()) == nullptr)
+	{
+		respond(nRequestId, DriverErrorResponse(InvalidSessionIdDriverStatus,
+			QStringLiteral("invalid_session_id"), QStringLiteral("Unknown driver session")), 404);
+		return false;
+	}
+	if (pSessionId != nullptr)
+		*pSessionId = strSessionId;
+	return true;
+}
+
+void KWrcDriverModule::handleDeleteSession(quint64 nRequestId,
+	const QHash<QString, QString> &pathParameters)
+{
+	QString strSessionId;
+	if (!validateSession(nRequestId, pathParameters, &strSessionId))
+		return;
+	m_sessionManager.quitSession(strSessionId);
+	respond(nRequestId, DriverSuccessResponse(QJsonObject()));
+}
+
+void KWrcDriverModule::handleTriggerCommand(quint64 nRequestId,
+	const KParsedDriverRequest &request,
+	const QHash<QString, QString> &pathParameters)
+{
+	QString strSessionId;
+	if (!validateSession(nRequestId, pathParameters, &strSessionId))
+		return;
+	const QString strCommandId = request.parameters.value(QStringLiteral("id")).toString();
+	const QJsonValue argumentsValue = request.parameters.value(QStringLiteral("arguments"));
+	const QJsonValue idempotencyValue = request.parameters.value(
+		QStringLiteral("idempotencyKey"));
+	const QString strIdempotencyKey = idempotencyValue.toString();
+	if (strCommandId.isEmpty()
+		|| strCommandId.toUtf8().size() > KRequestParser::kMaximumCommandIdBytes
+		|| (!idempotencyValue.isUndefined()
+			&& (!idempotencyValue.isString() || strIdempotencyKey.isEmpty()))
+		|| strIdempotencyKey.toUtf8().size() > KRequestParser::kMaximumCommandIdBytes
+		|| (!argumentsValue.isUndefined() && !argumentsValue.isObject()))
+	{
+		respond(nRequestId, DriverErrorResponse(InvalidArgumentDriverStatus,
+			QStringLiteral("invalid_argument"),
+			QStringLiteral("Command id and object arguments are required")), 400);
+		return;
+	}
+	const QJsonObject arguments = argumentsValue.isObject()
+		? argumentsValue.toObject() : QJsonObject();
+	KDriverSession *pSession = m_sessionManager.session(strSessionId,
+		QDateTime::currentMSecsSinceEpoch());
+	if (pSession == nullptr)
 	{
 		respond(nRequestId, DriverErrorResponse(InvalidSessionIdDriverStatus,
 			QStringLiteral("invalid_session_id"), QStringLiteral("Unknown driver session")), 404);
 		return;
 	}
-	if (request.strMethod == QStringLiteral("DELETE") && segments.size() == 2)
+	if (!strIdempotencyKey.isEmpty())
 	{
-		m_sessionManager.quitSession(strSessionId);
-		respond(nRequestId, DriverSuccessResponse(QJsonObject()));
-		return;
-	}
-	if (request.strMethod == QStringLiteral("POST") && segments.size() == 4
-		&& segments.at(2) == QStringLiteral("command")
-		&& segments.at(3) == QStringLiteral("trigger"))
-	{
-		const QString strCommandId = request.parameters.value(QStringLiteral("id")).toString();
-		const QJsonValue argumentsValue = request.parameters.value(QStringLiteral("arguments"));
-		if (strCommandId.isEmpty()
-			|| strCommandId.toUtf8().size() > KRequestParser::kMaximumCommandIdBytes
-			|| (!argumentsValue.isUndefined() && !argumentsValue.isObject()))
+		const auto existing = pSession->idempotencyRecords.constFind(strIdempotencyKey);
+		if (existing != pSession->idempotencyRecords.constEnd())
 		{
-			respond(nRequestId, DriverErrorResponse(InvalidArgumentDriverStatus,
-				QStringLiteral("invalid_argument"),
-				QStringLiteral("Command id and object arguments are required")), 400);
+			if (existing->strCommandId != strCommandId || existing->arguments != arguments)
+			{
+				respond(nRequestId, DriverErrorResponse(InvalidArgumentDriverStatus,
+					QStringLiteral("idempotency_key_conflict"),
+					QStringLiteral("Idempotency key was used for a different command")), 400);
+			}
+			else if (existing->bCompleted)
+			{
+				respond(nRequestId, existing->response);
+			}
+			else
+			{
+				respond(nRequestId, DriverErrorResponse(CommandBusyDriverStatus,
+					QStringLiteral("command_busy"),
+					QStringLiteral("Command with this idempotency key is still running"),
+					true, false));
+			}
 			return;
 		}
-		const quint64 nHostRequestId = m_nNextHostRequestId++;
-		KPendingHostRequest pending;
-		pending.context.nRequestId = nRequestId;
-		pending.context.strSessionId = strSessionId;
-		pending.context.pathParameters.insert(QStringLiteral("sessionId"), strSessionId);
-		pending.context.parameters = request.parameters;
-		pending.type = CommandPendingHostRequest;
-		m_pendingHostRequests.insert(nHostRequestId, pending);
-		const QByteArray commandIdUtf8 = strCommandId.toUtf8();
-		const QByteArray argumentsJson = QJsonDocument(
-			argumentsValue.isObject() ? argumentsValue.toObject() : QJsonObject())
-			.toJson(QJsonDocument::Compact);
-		m_pHostApi->submitCommand(m_pHostApi->pHostContext, nHostRequestId,
-			commandIdUtf8.constData(), static_cast<std::uint32_t>(commandIdUtf8.size()),
-			argumentsJson.constData(), static_cast<std::uint32_t>(argumentsJson.size()),
-			&KWrcDriverModule::HostJsonCompleted, m_pCallbackGate);
-		beginHostTimeout(nHostRequestId);
-		return;
-	}
-	if (request.strMethod == QStringLiteral("GET") && segments.size() == 3
-		&& (segments.at(2) == QStringLiteral("state")
-			|| segments.at(2) == QStringLiteral("events")))
-	{
-		const QByteArray kind = segments.at(2) == QStringLiteral("state")
-			? DriverStateSnapshotKind() : DriverEventsSnapshotKind();
-		quint64 nSinceSequence = 0;
-		if (kind == QByteArrayLiteral("events"))
+		if (pSession->idempotencyRecords.size() >= 256)
 		{
-			const QUrlQuery query(QUrl(QStringLiteral("http://localhost") + request.strPath));
-			bool bOk = false;
-			const QString strSince = query.queryItemValue(QStringLiteral("sinceSequence"));
-			if (!strSince.isEmpty())
+			for (auto record = pSession->idempotencyRecords.begin();
+				record != pSession->idempotencyRecords.end(); ++record)
 			{
-				nSinceSequence = strSince.toULongLong(&bOk);
-				if (!bOk)
+				if (record->bCompleted)
 				{
-					respond(nRequestId, DriverErrorResponse(InvalidArgumentDriverStatus,
-						QStringLiteral("invalid_argument"),
-						QStringLiteral("sinceSequence must be an unsigned integer")), 400);
-					return;
+					pSession->idempotencyRecords.erase(record);
+					break;
 				}
 			}
 		}
-		const quint64 nHostRequestId = m_nNextHostRequestId++;
-		KPendingHostRequest pending;
-		pending.context.nRequestId = nRequestId;
-		pending.context.strSessionId = strSessionId;
-		pending.context.pathParameters.insert(QStringLiteral("sessionId"), strSessionId);
-		pending.context.parameters = request.parameters;
-		pending.type = SnapshotPendingHostRequest;
-		m_pendingHostRequests.insert(nHostRequestId, pending);
-		m_pHostApi->requestSnapshot(m_pHostApi->pHostContext, nHostRequestId,
-			kind.constData(), static_cast<std::uint32_t>(kind.size()), nSinceSequence,
-			&KWrcDriverModule::HostJsonCompleted, m_pCallbackGate);
-		beginHostTimeout(nHostRequestId);
-		return;
+		if (pSession->idempotencyRecords.size() >= 256)
+		{
+			respond(nRequestId, DriverErrorResponse(CommandBusyDriverStatus,
+				QStringLiteral("idempotency_cache_full"),
+				QStringLiteral("Too many commands are still pending"), true, false));
+			return;
+		}
+		KDriverIdempotencyRecord record;
+		record.strCommandId = strCommandId;
+		record.arguments = arguments;
+		pSession->idempotencyRecords.insert(strIdempotencyKey, record);
 	}
-	respond(nRequestId, DriverErrorResponse(UnsupportedOperationDriverStatus,
-		QStringLiteral("unknown_route"), QStringLiteral("Unknown automation route")), 404);
+	const quint64 nHostRequestId = m_nNextHostRequestId++;
+	KPendingHostRequest pending;
+	pending.context.nRequestId = nRequestId;
+	pending.context.strSessionId = strSessionId;
+	pending.context.pathParameters = pathParameters;
+	pending.context.parameters = request.parameters;
+	pending.type = CommandPendingHostRequest;
+	pending.strIdempotencyKey = strIdempotencyKey;
+	m_pendingHostRequests.insert(nHostRequestId, pending);
+	const QByteArray commandIdUtf8 = strCommandId.toUtf8();
+	const QByteArray argumentsJson = QJsonDocument(arguments)
+		.toJson(QJsonDocument::Compact);
+	m_pHostApi->submitCommand(m_pHostApi->pHostContext, nHostRequestId,
+		commandIdUtf8.constData(), static_cast<std::uint32_t>(commandIdUtf8.size()),
+		argumentsJson.constData(), static_cast<std::uint32_t>(argumentsJson.size()),
+		kHostCommandTimeoutMs, &KWrcDriverModule::HostCommandStarted,
+		&KWrcDriverModule::HostJsonCompleted, m_pCallbackGate);
+	beginHostTimeout(nHostRequestId, kHostCommandTimeoutMs + kHostCallbackGraceMs);
+}
+
+void KWrcDriverModule::handleStateSnapshot(quint64 nRequestId,
+	const QHash<QString, QString> &pathParameters)
+{
+	QString strSessionId;
+	if (!validateSession(nRequestId, pathParameters, &strSessionId))
+		return;
+	requestHostSnapshot(nRequestId, strSessionId, DriverStateSnapshotKind(), 0);
+}
+
+void KWrcDriverModule::handleEventsSnapshot(quint64 nRequestId,
+	const KParsedDriverRequest &request,
+	const QHash<QString, QString> &pathParameters)
+{
+	QString strSessionId;
+	if (!validateSession(nRequestId, pathParameters, &strSessionId))
+		return;
+	quint64 nSinceSequence = 0;
+	const QUrlQuery query(QUrl(QStringLiteral("http://localhost") + request.strPath));
+	const QString strSince = query.queryItemValue(QStringLiteral("sinceSequence"));
+	if (!strSince.isEmpty())
+	{
+		bool bOk = false;
+		nSinceSequence = strSince.toULongLong(&bOk);
+		if (!bOk)
+		{
+			respond(nRequestId, DriverErrorResponse(InvalidArgumentDriverStatus,
+				QStringLiteral("invalid_argument"),
+				QStringLiteral("sinceSequence must be an unsigned integer")), 400);
+			return;
+		}
+	}
+	requestHostSnapshot(nRequestId, strSessionId,
+		DriverEventsSnapshotKind(), nSinceSequence);
+}
+
+void KWrcDriverModule::requestHostSnapshot(quint64 nRequestId,
+	const QString &strSessionId,
+	const QByteArray &kind,
+	quint64 nSinceSequence)
+{
+	const quint64 nHostRequestId = m_nNextHostRequestId++;
+	KPendingHostRequest pending;
+	pending.context.nRequestId = nRequestId;
+	pending.context.strSessionId = strSessionId;
+	pending.context.pathParameters.insert(QStringLiteral("sessionId"), strSessionId);
+	pending.type = SnapshotPendingHostRequest;
+	m_pendingHostRequests.insert(nHostRequestId, pending);
+	m_pHostApi->requestSnapshot(m_pHostApi->pHostContext, nHostRequestId,
+		kind.constData(), static_cast<std::uint32_t>(kind.size()), nSinceSequence,
+		&KWrcDriverModule::HostJsonCompleted, m_pCallbackGate);
+	beginHostTimeout(nHostRequestId, kHostCommandTimeoutMs);
 }
 
 void KWrcDriverModule::handleHostJsonCompleted(quint64 nRequestId,
 	const QByteArray &jsonUtf8)
 {
+	consumeHostCommandStarted(nRequestId);
 	const auto iter = m_pendingHostRequests.find(nRequestId);
 	if (iter == m_pendingHostRequests.end())
 		return;
@@ -271,6 +442,7 @@ void KWrcDriverModule::handleHostJsonCompleted(quint64 nRequestId,
 	else
 	{
 		response = MapApplicationCommandResponse(document.object());
+		completeIdempotencyRecord(pending, response);
 	}
 	if (!pending.context.complete(response))
 		return;
@@ -279,29 +451,81 @@ void KWrcDriverModule::handleHostJsonCompleted(quint64 nRequestId,
 	respond(nHttpRequestId, response, nStatusCode);
 }
 
-void KWrcDriverModule::beginHostTimeout(quint64 nRequestId)
+bool KWrcDriverModule::consumeHostCommandStarted(quint64 nRequestId)
 {
-	QTimer::singleShot(kHostCommandTimeoutMs, this, [this, nRequestId]()
+	if (m_pCallbackGate == nullptr)
+		return false;
+	QMutexLocker locker(&m_pCallbackGate->mutex);
+	return m_pCallbackGate->startedRequestIds.remove(nRequestId);
+}
+
+void KWrcDriverModule::beginHostTimeout(quint64 nRequestId, int nTimeoutMs)
+{
+	QTimer::singleShot(nTimeoutMs, this, [this, nRequestId]()
 	{
 		const auto iter = m_pendingHostRequests.find(nRequestId);
 		if (iter == m_pendingHostRequests.end())
 			return;
-		const QJsonObject response = DriverErrorResponse(CommandTimeoutDriverStatus,
-			QStringLiteral("command_timeout"),
-			QStringLiteral("Application command timed out"));
+		const bool bExecutionStarted = iter->type == CommandPendingHostRequest
+			&& consumeHostCommandStarted(nRequestId);
+		const QJsonObject response = bExecutionStarted
+			? DriverErrorResponse(CommandExecutionStartedDriverStatus,
+				QStringLiteral("command_execution_started"),
+				QStringLiteral("Command started but did not complete in the response window"),
+				false, true)
+			: DriverErrorResponse(CommandTimeoutDriverStatus,
+				QStringLiteral("command_timeout"),
+				QStringLiteral("Application command timed out"));
 		if (!iter->context.timeout(response))
 			return;
+		if (bExecutionStarted)
+			completeIdempotencyRecord(iter.value(), response);
+		else
+			discardIdempotencyRecord(iter.value());
 		const quint64 nHttpRequestId = iter->context.nRequestId;
 		m_pendingHostRequests.erase(iter);
 		respond(nHttpRequestId, response, 408);
 	});
 }
 
+void KWrcDriverModule::completeIdempotencyRecord(const KPendingHostRequest &pending,
+	const QJsonObject &response)
+{
+	if (pending.strIdempotencyKey.isEmpty())
+		return;
+	KDriverSession *pSession = m_sessionManager.session(pending.context.strSessionId,
+		QDateTime::currentMSecsSinceEpoch());
+	if (pSession == nullptr)
+		return;
+	auto record = pSession->idempotencyRecords.find(pending.strIdempotencyKey);
+	if (record == pSession->idempotencyRecords.end())
+		return;
+	record->response = response;
+	record->bCompleted = true;
+}
+
+void KWrcDriverModule::discardIdempotencyRecord(const KPendingHostRequest &pending)
+{
+	if (pending.strIdempotencyKey.isEmpty())
+		return;
+	KDriverSession *pSession = m_sessionManager.session(pending.context.strSessionId,
+		QDateTime::currentMSecsSinceEpoch());
+	if (pSession != nullptr)
+		pSession->idempotencyRecords.remove(pending.strIdempotencyKey);
+}
+
 void KWrcDriverModule::respond(quint64 nHttpRequestId,
 	const QJsonObject &response,
 	int nStatusCode)
 {
-	m_pHttpServer->sendJsonResponse(nHttpRequestId, nStatusCode, response);
+	QJsonObject enrichedResponse = response;
+	if (!enrichedResponse.value(QStringLiteral("isSuccess")).toBool())
+	{
+		QJsonObject value = enrichedResponse.value(QStringLiteral("value")).toObject();
+		value.insert(QStringLiteral("requestId"), QString::number(nHttpRequestId));
+		enrichedResponse.insert(QStringLiteral("value"), value);
+	}
+	m_pHttpServer->sendJsonResponse(nHttpRequestId, nStatusCode, enrichedResponse);
 }
 
 QString KWrcDriverModule::hostValue(const QByteArray &key) const

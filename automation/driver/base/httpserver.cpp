@@ -126,6 +126,8 @@ void KHttpServer::sendJsonResponse(quint64 nRequestId,
 		+ QByteArrayLiteral("\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n");
 	pSocket->write(header);
 	pSocket->write(body);
+	pSocket->flush();
+	pSocket->waitForBytesWritten(100);
 	pSocket->disconnectFromHost();
 }
 
