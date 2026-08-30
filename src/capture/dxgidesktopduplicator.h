@@ -54,6 +54,7 @@ private:
 	std::vector<unsigned char> m_vecPointerShapeBuffer;
 	quint64 m_nPointerUpdateCount = 0;
 	quint64 m_nPointerOnlyFrameCount = 0;
+	bool m_bComInitialized = false;
 };
 
 #endif // _WINREMOTECONTROL_DXGIDESKTOPDUPLICATOR_H_

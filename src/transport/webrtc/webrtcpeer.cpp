@@ -359,6 +359,11 @@ private:
 };
 
 KWebRtcPeer::KWebRtcPeer(QObject *pParent)
+	: KWebRtcPeer(AutoVideoEncoderPreference, pParent)
+{
+}
+
+KWebRtcPeer::KWebRtcPeer(KVideoEncoderPreference encoderPreference, QObject *pParent)
 	: KRemotePeerTransport(pParent)
 	, m_spCallbackGate(std::make_shared<KWebRtcCallbackGate>())
 	, m_pInputDataChannel(new KWebRtcDataChannel(
@@ -375,6 +380,7 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 	, m_pFileTransferDataDataChannel(new KWebRtcDataChannel(64 * 1024, this))
 	, m_pRemoteFrameProcessor(new KWebRtcRemoteFrameProcessor(this))
 	, m_spLatencyProbe(std::make_unique<KWebRtcLatencyProbe>())
+	, m_encoderPreference(encoderPreference)
 {
 	const KProtocolRouter::Guard allowMessage =
 		[](const KProtocolEnvelope &, const KProtocolRouteContext &) { return true; };
@@ -1835,7 +1841,8 @@ bool KWebRtcPeer::createFactory(QString *pErrorMessage)
 	deps.env = webrtc::CreateEnvironment();
 	deps.audio_encoder_factory = webrtc::CreateBuiltinAudioEncoderFactory();
 	deps.audio_decoder_factory = webrtc::CreateBuiltinAudioDecoderFactory();
-	deps.video_encoder_factory = std::make_unique<KWebRtcH264EncoderFactory>();
+	deps.video_encoder_factory = std::make_unique<KWebRtcH264EncoderFactory>(
+		m_encoderPreference);
 	deps.video_decoder_factory = std::make_unique<KWebRtcH264DecoderFactory>();
 	webrtc::EnableMedia(deps);
 	m_spFactory = webrtc::CreateModularPeerConnectionFactory(std::move(deps));

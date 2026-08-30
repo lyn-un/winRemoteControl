@@ -9,6 +9,7 @@ struct KTraceOptions
 {
 	bool bSessionTraceEnabled = false;
 	bool bLatencyTraceEnabled = false;
+	bool bResourceTraceEnabled = false;
 	QString strLogDirectory;
 	QString strLatencyScenario;
 	QString strValidationError;

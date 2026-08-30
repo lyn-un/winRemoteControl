@@ -6,9 +6,10 @@
 
 | 参数 | 作用 |
 | --- | --- |
-| `--trace` | 同时开启 session trace 和 latency trace |
+| `--trace` | 同时开启 session、latency 和 resource trace |
 | `--session-trace` | 只开启会话、协议和生命周期日志 |
 | `--latency-trace` | 只开启采集、视频、输入反馈等延迟日志 |
+| `--resource-trace` | 只开启进程内存、句柄、线程和 GPU 资源日志 |
 | `--latency-scenario <static\|mouse\|window>` | 启用延迟日志并标记本次基线场景 |
 | `--log-dir <path>` | 指定两类日志目录；相对路径以 exe 目录为基准 |
 | `--help` | 显示命令行帮助 |
@@ -48,6 +49,7 @@ winRemoteControl.exe --trace --latency-scenario window
 ```cmd
 set WRC_SESSION_TRACE=1
 set WRC_LATENCY_TRACE=1
+set WRC_RESOURCE_TRACE=1
 winRemoteControl.exe
 ```
 
@@ -57,6 +59,7 @@ winRemoteControl.exe
 
 - `session_trace_<role>.log`
 - `latency_trace_<side>.log`
+- `resource_trace_<role>.log`
 
 `role/side` 根据进程在当次会话中的实际角色变化，因此同一台电脑曾作为不同角色运行时，日志目录里可能同时保留 `controller`、`controlled` 或 `local` 文件。这不表示日志自动同步到对方电脑；每台机器只写自己的本地文件。
 
@@ -82,6 +85,32 @@ winRemoteControl.exe
 `video_stats` 中的 `jitterTargetEstimateMs` 是 WebRTC 统计出的抖动缓冲目标估计，不应直接解释为当前帧实际等待。判断 0 ms 播放策略是否生效，应查看接收/渲染事件中的 `lowLatencyRender=1`；该字段直接来自 WebRTC 的帧渲染参数。
 
 帧合并分两层统计：`remote_callback_frame_coalesced stage=conversion_queue` 表示 I420→BGRA 转换线程来不及消费，`render_frame_coalesced stage=gui_queue` 表示 GUI 呈现来不及消费。两者的会话结束汇总分别用于区分转换压力与 GUI 排队压力。
+
+## 会话资源诊断
+
+Resource trace 在初始化、Peer Ready、Capture 启停、Streaming、Peer teardown、回到 Idle/Listening，以及结束后 1/5/20 秒记录快照。每条记录包含本机 PID、generation、阶段、Private Bytes、Working Set、句柄、线程以及 DXGI Dedicated/Shared Usage。延迟样本若遇到新会话，会标记 `stale=1`，只用于诊断，不参与旧会话生命周期决策。
+
+开发构建启用 `WRC_BUILD_RESOURCE_DIAGNOSTICS` 后，探针输出到 `build/cmake-release/diagnostics/Release`，不会复制进部署目录：
+
+```powershell
+$env:Path = "$(Resolve-Path .\build\Release);$env:Path"
+.\build\cmake-release\diagnostics\Release\wrc_capture_resource_probe.exe --cycles 20
+.\build\cmake-release\diagnostics\Release\wrc_encoder_resource_probe.exe --cycles 20 --encoder auto
+.\build\cmake-release\diagnostics\Release\wrc_encoder_resource_probe.exe --cycles 5 --encoder h264_mf
+.\build\cmake-release\diagnostics\Release\wrc_webrtc_resource_probe.exe --cycles 20
+```
+
+完整同 PID 双进程验收使用 Python 自动化驱动，不执行输入注入、隐私屏、显示器关闭或锁屏：
+
+```powershell
+python automation\tests\resource_lifecycle.py `
+  --executable build\Release\winRemoteControl.exe `
+  --cycles 20 --encoder auto --validate
+```
+
+JSON 汇总和两端原始资源日志写入 `build/diagnostics/reports`。第一轮作为预热，后续样本计算每轮斜率。
+
+当前机器的隔离结果表明：AMD 的 `h264_mf` 每次销毁后会遗留一个 Event、一个 WaitCompletionPacket 和一个注册表 Key；强制 `h264_mf` 仅保留为诊断入口。`Auto` 在检测到 AMD 显示适配器时使用 `libx264`，其他适配器仍优先 Media Foundation。Desktop Duplication 每次连同 D3D Device 一起重建时，驱动会遗留一个 Mutant 和一个 Section，因此采集适配器只保留进程级 D3D11 Device/Context，仍逐会话释放纹理和 `IDXGIOutputDuplication`，并执行 `ClearState`、`Flush` 和 `Trim`。该平台缓存会保留一组固定的驱动资源，但不得随会话轮次继续增长。
 
 ## 隐私约束
 

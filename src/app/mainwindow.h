@@ -1,6 +1,8 @@
 #ifndef _WINREMOTECONTROL_MAINWINDOW_H_
 #define _WINREMOTECONTROL_MAINWINDOW_H_
 
+#include "core/media/videoencoderpreference.h"
+
 #include <QtCore/QRect>
 #include <QtCore/QString>
 #include <QtWidgets/QMainWindow>
@@ -15,7 +17,8 @@ class KMainWindow : public QMainWindow
 	Q_OBJECT
 
 public:
-	explicit KMainWindow(QWidget *pParent = nullptr);
+	explicit KMainWindow(KVideoEncoderPreference encoderPreference,
+		QWidget *pParent = nullptr);
 	~KMainWindow() override;
 
 	KMainWindow(const KMainWindow &) = delete;

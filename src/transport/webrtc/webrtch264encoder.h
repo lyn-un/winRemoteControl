@@ -17,7 +17,7 @@
 class KWebRtcH264Encoder final : public webrtc::VideoEncoder
 {
 public:
-	KWebRtcH264Encoder();
+	explicit KWebRtcH264Encoder(KVideoEncoderPreference preference);
 	~KWebRtcH264Encoder() override;
 
 	int InitEncode(const webrtc::VideoCodec *pCodecSettings,
@@ -56,6 +56,8 @@ private:
 class KWebRtcH264EncoderFactory final : public webrtc::VideoEncoderFactory
 {
 public:
+	explicit KWebRtcH264EncoderFactory(KVideoEncoderPreference preference);
+
 	std::vector<webrtc::SdpVideoFormat> GetSupportedFormats() const override;
 	webrtc::VideoEncoderFactory::CodecSupport QueryCodecSupport(
 		const webrtc::SdpVideoFormat &format,
@@ -66,6 +68,7 @@ public:
 
 private:
 	static bool isH264Format(const webrtc::SdpVideoFormat &format);
+	KVideoEncoderPreference m_preference = AutoVideoEncoderPreference;
 };
 
 #endif // _WINREMOTECONTROL_WEBRTCH264ENCODER_H_

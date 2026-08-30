@@ -9,9 +9,19 @@
 #include <cstring>
 #include <cmath>
 #include <cstdint>
+#include <mutex>
 
 namespace
 {
+	struct KSharedD3DDevice
+	{
+		std::mutex mutex;
+		Microsoft::WRL::ComPtr<ID3D11Device> spDevice;
+		Microsoft::WRL::ComPtr<ID3D11DeviceContext> spContext;
+	};
+
+	KSharedD3DDevice g_sharedD3DDevice;
+
 float HalfToFloat(unsigned short nValue)
 {
 	const unsigned int nSign = (nValue & 0x8000) << 16;
@@ -187,6 +197,15 @@ KDxgiDesktopDuplicator::~KDxgiDesktopDuplicator()
 bool KDxgiDesktopDuplicator::initialize(QString *pErrorMessage)
 {
 	shutdown();
+	const HRESULT hrCom = ::CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+	if (SUCCEEDED(hrCom))
+		m_bComInitialized = true;
+	else if (hrCom != RPC_E_CHANGED_MODE)
+	{
+		if (pErrorMessage != nullptr)
+			*pErrorMessage = hresultMessage(QStringLiteral("CoInitializeEx failed"), hrCom);
+		return false;
+	}
 
 	const D3D_FEATURE_LEVEL featureLevels[] = {
 		D3D_FEATURE_LEVEL_11_1,
@@ -194,27 +213,37 @@ bool KDxgiDesktopDuplicator::initialize(QString *pErrorMessage)
 	};
 	D3D_FEATURE_LEVEL selectedFeatureLevel = D3D_FEATURE_LEVEL_11_0;
 
-	UINT nFlags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+	UINT nFlags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_SINGLETHREADED;
 #if defined(_DEBUG)
 	nFlags |= D3D11_CREATE_DEVICE_DEBUG;
 #endif
 
-	HRESULT hr = ::D3D11CreateDevice(nullptr,
-		D3D_DRIVER_TYPE_HARDWARE,
-		nullptr,
-		nFlags,
-		featureLevels,
-		2,
-		D3D11_SDK_VERSION,
-		&m_spDevice,
-		&selectedFeatureLevel,
-		&m_spContext);
-	if (FAILED(hr))
 	{
-		if (pErrorMessage != nullptr)
-			*pErrorMessage = hresultMessage(QStringLiteral("D3D11CreateDevice failed"), hr);
-		return false;
+		std::lock_guard<std::mutex> guard(g_sharedD3DDevice.mutex);
+		if (g_sharedD3DDevice.spDevice == nullptr)
+		{
+			const HRESULT hrCreate = ::D3D11CreateDevice(nullptr,
+				D3D_DRIVER_TYPE_HARDWARE,
+				nullptr,
+				nFlags,
+				featureLevels,
+				2,
+				D3D11_SDK_VERSION,
+				&g_sharedD3DDevice.spDevice,
+				&selectedFeatureLevel,
+				&g_sharedD3DDevice.spContext);
+			if (FAILED(hrCreate))
+			{
+				if (pErrorMessage != nullptr)
+					*pErrorMessage = hresultMessage(
+						QStringLiteral("D3D11CreateDevice failed"), hrCreate);
+				return false;
+			}
+		}
+		m_spDevice = g_sharedD3DDevice.spDevice;
+		m_spContext = g_sharedD3DDevice.spContext;
 	}
+	HRESULT hr = S_OK;
 
 	Microsoft::WRL::ComPtr<IDXGIDevice> spDxgiDevice;
 	hr = m_spDevice.As(&spDxgiDevice);
@@ -252,9 +281,18 @@ bool KDxgiDesktopDuplicator::initialize(QString *pErrorMessage)
 
 void KDxgiDesktopDuplicator::shutdown()
 {
+	if (m_spContext != nullptr)
+	{
+		m_spContext->ClearState();
+		m_spContext->Flush();
+	}
+
 	m_spStagingTexture.Reset();
 	m_spLastDesktopTexture.Reset();
 	m_spDuplication.Reset();
+	Microsoft::WRL::ComPtr<IDXGIDevice3> spDxgiDevice;
+	if (m_spDevice != nullptr && SUCCEEDED(m_spDevice.As(&spDxgiDevice)))
+		spDxgiDevice->Trim();
 	m_spContext.Reset();
 	m_spDevice.Reset();
 	m_stagingDesc = {};
@@ -267,6 +305,11 @@ void KDxgiDesktopDuplicator::shutdown()
 	m_vecPointerShapeBuffer.clear();
 	m_nPointerUpdateCount = 0;
 	m_nPointerOnlyFrameCount = 0;
+	if (m_bComInitialized)
+	{
+		::CoUninitialize();
+		m_bComInitialized = false;
+	}
 }
 
 bool KDxgiDesktopDuplicator::detectHdrOutput(const Microsoft::WRL::ComPtr<IDXGIOutput> &spOutput,

@@ -42,6 +42,7 @@ namespace
 	{
 		qunsetenv("WRC_SESSION_TRACE");
 		qunsetenv("WRC_LATENCY_TRACE");
+		qunsetenv("WRC_RESOURCE_TRACE");
 	}
 
 	void TestTraceOptions()
@@ -51,7 +52,8 @@ namespace
 		ClearTraceEnvironment();
 		KTraceOptions options = ParseOptions(
 			{QStringLiteral("winRemoteControl.exe")}, strApplicationDirectory);
-		Check(!options.bSessionTraceEnabled && !options.bLatencyTraceEnabled,
+		Check(!options.bSessionTraceEnabled && !options.bLatencyTraceEnabled
+			&& !options.bResourceTraceEnabled,
 			QStringLiteral("trace logging is disabled by default"));
 		Check(options.strLogDirectory == QDir(strApplicationDirectory).absoluteFilePath(
 			QStringLiteral("logs")), QStringLiteral("default logs directory is beside executable"));
@@ -61,8 +63,9 @@ namespace
 		options = ParseOptions(
 			{QStringLiteral("winRemoteControl.exe"), QStringLiteral("--trace")},
 			strApplicationDirectory);
-		Check(options.bSessionTraceEnabled && options.bLatencyTraceEnabled,
-			QStringLiteral("--trace enables both loggers"));
+		Check(options.bSessionTraceEnabled && options.bLatencyTraceEnabled
+			&& options.bResourceTraceEnabled,
+			QStringLiteral("--trace enables all loggers"));
 
 		options = ParseOptions(
 			{QStringLiteral("winRemoteControl.exe"), QStringLiteral("--session-trace")},
@@ -75,6 +78,13 @@ namespace
 			strApplicationDirectory);
 		Check(!options.bSessionTraceEnabled && options.bLatencyTraceEnabled,
 			QStringLiteral("--latency-trace only enables latency logging"));
+
+		options = ParseOptions(
+			{QStringLiteral("winRemoteControl.exe"), QStringLiteral("--resource-trace")},
+			strApplicationDirectory);
+		Check(!options.bSessionTraceEnabled && !options.bLatencyTraceEnabled
+			&& options.bResourceTraceEnabled,
+			QStringLiteral("--resource-trace only enables resource logging"));
 
 		options = ParseOptions(
 			{QStringLiteral("winRemoteControl.exe"), QStringLiteral("--latency-scenario"),

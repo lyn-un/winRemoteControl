@@ -10,6 +10,7 @@
 #include "session/shutdowncoordinator.h"
 #include "common/latencytracelogger.h"
 #include "common/sessiontracelogger.h"
+#include "common/resourcetracelogger.h"
 #include "core/input/inputinjectorinterface.h"
 #include "core/protocol/accessmessage.h"
 #include "core/protocol/protocolconstraints.h"
@@ -1355,6 +1356,9 @@ void KSessionCoordinator::handlePeerShutdownFinished(quint64 nGeneration)
 	if (nGeneration != m_nStoppingGeneration
 		|| !m_sessionStateMachine.canCompleteShutdown())
 		return;
+	KResourceTraceLogger::write(
+		KSessionStateMachine::roleName(m_sessionStateMachine.role()),
+		QStringLiteral("peer_shutdown_finished"), nGeneration);
 	m_pShutdownCoordinator->completePeer(nGeneration);
 }
 

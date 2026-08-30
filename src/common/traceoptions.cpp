@@ -9,10 +9,12 @@ namespace
 	constexpr char kTraceOptionName[] = "trace";
 	constexpr char kSessionTraceOptionName[] = "session-trace";
 	constexpr char kLatencyTraceOptionName[] = "latency-trace";
+	constexpr char kResourceTraceOptionName[] = "resource-trace";
 	constexpr char kLatencyScenarioOptionName[] = "latency-scenario";
 	constexpr char kLogDirectoryOptionName[] = "log-dir";
 	constexpr char kSessionTraceEnvironmentName[] = "WRC_SESSION_TRACE";
 	constexpr char kLatencyTraceEnvironmentName[] = "WRC_LATENCY_TRACE";
+	constexpr char kResourceTraceEnvironmentName[] = "WRC_RESOURCE_TRACE";
 
 	bool IsEnvironmentEnabled(const char *pName)
 	{
@@ -39,6 +41,8 @@ void KTraceOptionsParser::addOptions(QCommandLineParser *pParser)
 		QStringLiteral("Enable session trace logs.")));
 	pParser->addOption(QCommandLineOption(QString::fromLatin1(kLatencyTraceOptionName),
 		QStringLiteral("Enable latency trace logs.")));
+	pParser->addOption(QCommandLineOption(QString::fromLatin1(kResourceTraceOptionName),
+		QStringLiteral("Enable process resource trace logs.")));
 	pParser->addOption(QCommandLineOption(QString::fromLatin1(kLatencyScenarioOptionName),
 		QStringLiteral("Label a latency run as static, mouse, or window."),
 		QStringLiteral("scenario")));
@@ -68,6 +72,9 @@ KTraceOptions KTraceOptionsParser::options(const QCommandLineParser &parser,
 		|| parser.isSet(QString::fromLatin1(kLatencyTraceOptionName))
 		|| !options.strLatencyScenario.isEmpty()
 		|| IsEnvironmentEnabled(kLatencyTraceEnvironmentName);
+	options.bResourceTraceEnabled = bEnableAll
+		|| parser.isSet(QString::fromLatin1(kResourceTraceOptionName))
+		|| IsEnvironmentEnabled(kResourceTraceEnvironmentName);
 
 	const QString strRequestedDirectory = parser.value(
 		QString::fromLatin1(kLogDirectoryOptionName)).trimmed();

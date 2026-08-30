@@ -18,9 +18,9 @@ namespace
 	constexpr int kResizeBorderDip = 8;
 }
 
-KMainWindow::KMainWindow(QWidget *pParent)
+KMainWindow::KMainWindow(KVideoEncoderPreference encoderPreference, QWidget *pParent)
 	: QMainWindow(pParent)
-	, m_pComposition(new KApplicationComposition(this))
+	, m_pComposition(new KApplicationComposition(encoderPreference, this))
 	, m_pWebViewWidget(new KWebViewWidget(this))
 {
 	setWindowFlags(Qt::FramelessWindowHint | Qt::Window);

@@ -92,19 +92,28 @@ def wait_for_stream_stopped(
 
 
 class TwoProcessSession:
-    def __init__(self, executable: str | Path) -> None:
+    def __init__(
+        self,
+        executable: str | Path,
+        extra_arguments: list[str] | tuple[str, ...] | None = None,
+    ) -> None:
         build_directory = Path(executable).resolve().parents[1]
         self._temporary = tempfile.TemporaryDirectory(
             prefix="wrc-automation-", dir=build_directory
         )
         root = Path(self._temporary.name)
+        self.profile_root = root
         self.host = None
         self.controller = None
         self.host_session = None
         self.controller_session = None
         try:
-            self.host = WrcApplication.launch(executable, root / "host")
-            self.controller = WrcApplication.launch(executable, root / "controller")
+            self.host = WrcApplication.launch(
+                executable, root / "host", extra_arguments=extra_arguments
+            )
+            self.controller = WrcApplication.launch(
+                executable, root / "controller", extra_arguments=extra_arguments
+            )
             self.host_session = self.host.create_session()
             self.controller_session = self.controller.create_session()
         except Exception:
@@ -112,16 +121,23 @@ class TwoProcessSession:
             raise
         self._host_sequence = self.host_session.event_cursor
         self._controller_sequence = self.controller_session.event_cursor
+        self._roles_initialized = False
+        self._server_started = False
 
     def begin_connection(self, timeout: float = 30.0) -> None:
-        self.host_session.trigger_command(
-            "application.set_role", {"role": "controlled"}
-        )
-        self.host_session.trigger_command("signaling.start_server", {"port": 0})
+        if not self._roles_initialized:
+            self.host_session.trigger_command(
+                "application.set_role", {"role": "controlled"}
+            )
+        if not self._server_started:
+            self.host_session.trigger_command("signaling.start_server", {"port": 0})
+            self._server_started = True
         port = self._wait_for_listening_port(timeout)
-        self.controller_session.trigger_command(
-            "application.set_role", {"role": "controller"}
-        )
+        if not self._roles_initialized:
+            self.controller_session.trigger_command(
+                "application.set_role", {"role": "controller"}
+            )
+            self._roles_initialized = True
         self.controller_session.trigger_command(
             "session.connect", {"host": "127.0.0.1", "port": port}
         )
@@ -158,16 +174,20 @@ class TwoProcessSession:
         self.controller_session.trigger_command("stream.stop")
         return wait_for_stream_stopped(self.controller_session, timeout=timeout)
 
-    def disconnect(self) -> None:
+    def disconnect(self, timeout: float = 30.0) -> None:
         if self.controller_session is None:
             return
         try:
             self.controller_session.trigger_command("session.disconnect")
         except Exception:
-            pass
+            return
+        self._wait_for_disconnected(timeout)
 
     def close(self) -> None:
-        self.disconnect()
+        try:
+            self.disconnect()
+        except Exception:
+            pass
         if self.controller is not None:
             self.controller.close()
             self.controller = None
@@ -274,6 +294,26 @@ class TwoProcessSession:
                 return
             time.sleep(0.1)
         raise WaitTimeout("Timed out waiting for both processes to connect")
+
+    def _wait_for_disconnected(self, timeout: float) -> None:
+        deadline = time.monotonic() + timeout
+        host = {}
+        controller = {}
+        while time.monotonic() < deadline:
+            host = self.host_session.get_state()
+            controller = self.controller_session.get_state()
+            if (
+                host.get("sessionState") in {"Listening", "Idle"}
+                and controller.get("sessionState") == "Idle"
+                and host.get("sessionChannelOpen") is not True
+                and controller.get("sessionChannelOpen") is not True
+            ):
+                return
+            time.sleep(0.1)
+        raise WaitTimeout(
+            "Timed out waiting for both processes to finish teardown; "
+            f"host={host!r}; controller={controller!r}"
+        )
 
 
 def e2e_enabled() -> bool:

@@ -91,7 +91,8 @@ namespace
 	}
 }
 
-KWebRtcH264Encoder::KWebRtcH264Encoder()
+KWebRtcH264Encoder::KWebRtcH264Encoder(KVideoEncoderPreference preference)
+	: m_encoder(preference)
 {
 }
 
@@ -532,6 +533,11 @@ bool KWebRtcH264Encoder::isKeyFrame(const QByteArray &encodedData)
 	return false;
 }
 
+KWebRtcH264EncoderFactory::KWebRtcH264EncoderFactory(KVideoEncoderPreference preference)
+	: m_preference(preference)
+{
+}
+
 std::vector<webrtc::SdpVideoFormat> KWebRtcH264EncoderFactory::GetSupportedFormats() const
 {
 	return { h264SdpFormat() };
@@ -554,7 +560,7 @@ std::unique_ptr<webrtc::VideoEncoder> KWebRtcH264EncoderFactory::Create(const we
 	if (!isH264Format(format))
 		return nullptr;
 
-	return std::make_unique<KWebRtcH264Encoder>();
+	return std::make_unique<KWebRtcH264Encoder>(m_preference);
 }
 
 bool KWebRtcH264EncoderFactory::isH264Format(const webrtc::SdpVideoFormat &format)

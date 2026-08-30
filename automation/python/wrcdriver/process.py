@@ -123,14 +123,20 @@ def wait_for_endpoint(pid: int, timeout: float = 15.0) -> DriverEndpoint:
     raise WaitTimeout(f"Timed out waiting for automation driver in process {pid}")
 
 
-def launch_process(executable: str | Path, profile: str | Path) -> subprocess.Popen[bytes]:
+def launch_process(
+    executable: str | Path,
+    profile: str | Path,
+    extra_arguments: list[str] | tuple[str, ...] | None = None,
+) -> subprocess.Popen[bytes]:
+    arguments = [
+        str(Path(executable).resolve()),
+        "--data-dir",
+        str(Path(profile).resolve()),
+        "--automation-test-profile",
+    ]
+    arguments.extend(extra_arguments or ())
     return subprocess.Popen(
-        [
-            str(Path(executable).resolve()),
-            "--data-dir",
-            str(Path(profile).resolve()),
-            "--automation-test-profile",
-        ],
+        arguments,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

@@ -5,6 +5,7 @@
 #include "core/transport/networkstatstracker.h"
 #include "core/transport/outboundmessagequeue.h"
 #include "core/protocol/protocolrouter.h"
+#include "codec/h264encoder.h"
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
@@ -42,6 +43,7 @@ class KWebRtcPeer : public KRemotePeerTransport
 
 public:
 	explicit KWebRtcPeer(QObject *pParent = nullptr);
+	KWebRtcPeer(KVideoEncoderPreference encoderPreference, QObject *pParent);
 	~KWebRtcPeer() override;
 
 	KWebRtcPeer(const KWebRtcPeer &) = delete;
@@ -186,6 +188,7 @@ private:
 	KWebRtcDataChannel *m_pFileTransferDataDataChannel = nullptr;
 	KWebRtcRemoteFrameProcessor *m_pRemoteFrameProcessor = nullptr;
 	std::unique_ptr<KWebRtcLatencyProbe> m_spLatencyProbe;
+	KVideoEncoderPreference m_encoderPreference = AutoVideoEncoderPreference;
 	webrtc::scoped_refptr<KWebRtcVideoSource> m_spVideoSource;
 	webrtc::scoped_refptr<webrtc::RtpSenderInterface> m_spVideoSender;
 	webrtc::scoped_refptr<webrtc::VideoTrackInterface> m_spRemoteVideoTrack;

@@ -1,6 +1,8 @@
 #ifndef _WINREMOTECONTROL_H264ENCODER_H_
 #define _WINREMOTECONTROL_H264ENCODER_H_
 
+#include "core/media/videoencoderpreference.h"
+
 #include <QtCore/QByteArray>
 #include <QtCore/QString>
 
@@ -17,7 +19,8 @@ class KH264Encoder
 public:
 	using DataCallback = std::function<void(const QByteArray &)>;
 
-	KH264Encoder();
+	explicit KH264Encoder(
+		KVideoEncoderPreference preference = AutoVideoEncoderPreference);
 	~KH264Encoder();
 
 	KH264Encoder(const KH264Encoder &) = delete;
@@ -78,6 +81,7 @@ private:
 	QString m_strEncoderName;
 	QString m_strFallbackReason;
 	bool m_bOpen = false;
+	KVideoEncoderPreference m_preference = AutoVideoEncoderPreference;
 };
 
 #endif // _WINREMOTECONTROL_H264ENCODER_H_

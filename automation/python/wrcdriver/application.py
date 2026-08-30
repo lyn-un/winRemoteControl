@@ -28,9 +28,13 @@ class WrcApplication:
 
     @classmethod
     def launch(
-        cls, executable: str | Path, profile: str | Path, role: str | None = None
+        cls,
+        executable: str | Path,
+        profile: str | Path,
+        role: str | None = None,
+        extra_arguments: list[str] | tuple[str, ...] | None = None,
     ) -> "WrcApplication":
-        process = launch_process(executable, profile)
+        process = launch_process(executable, profile, extra_arguments)
         try:
             application = cls(DriverTransport(wait_for_endpoint(process.pid)), process)
             application.wait_until_ready()

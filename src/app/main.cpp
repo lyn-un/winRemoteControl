@@ -2,6 +2,7 @@
 
 #include "core/media/decodedvideoframe.h"
 #include "common/latencytracelogger.h"
+#include "common/resourcetracelogger.h"
 #include "common/applicationpaths.h"
 #include "common/sessiontracelogger.h"
 #include "common/traceoptions.h"
@@ -35,6 +36,9 @@ int main(int nArgc, char *pArgv[])
 		QStringLiteral("path")));
 	parser.addOption(QCommandLineOption(QStringLiteral("automation-test-profile"),
 		QStringLiteral("Delete the temporary CNG identity when this test process exits.")));
+	parser.addOption(QCommandLineOption(QStringLiteral("diagnostic-video-encoder"),
+		QStringLiteral("Force auto, h264_mf, or libx264 for diagnostic runs."),
+		QStringLiteral("encoder"), QStringLiteral("auto")));
 	KTraceOptionsParser::addOptions(&parser);
 	parser.process(app);
 	QString strPathError;
@@ -61,6 +65,8 @@ int main(int nArgc, char *pArgv[])
 		traceOptions.bLatencyTraceEnabled,
 		traceOptions.strLogDirectory,
 		traceOptions.strLatencyScenario);
+	KResourceTraceLogger::configure(
+		traceOptions.bResourceTraceEnabled, traceOptions.strLogDirectory);
 	KLatencyTraceLogger::write(QStringLiteral("app"),
 		QStringLiteral("startup"),
 		QStringLiteral("dir=%1 dataDir=%2")
@@ -72,7 +78,24 @@ int main(int nArgc, char *pArgv[])
 	qRegisterMetaType<KVideoFrame>("KVideoFrame");
 	qRegisterMetaType<KClipboardMessage>("KClipboardMessage");
 
-	KMainWindow mainWindow;
+	const QString strEncoder = parser.value(
+		QStringLiteral("diagnostic-video-encoder")).trimmed().toLower();
+	KVideoEncoderPreference encoderPreference = AutoVideoEncoderPreference;
+	if (strEncoder == QStringLiteral("h264_mf"))
+		encoderPreference = MediaFoundationVideoEncoderPreference;
+	else if (strEncoder == QStringLiteral("libx264"))
+		encoderPreference = LibX264VideoEncoderPreference;
+	else if (strEncoder != QStringLiteral("auto"))
+	{
+		qCritical().noquote() << QStringLiteral(
+			"Invalid diagnostic video encoder '%1'. Expected auto, h264_mf, or libx264.")
+			.arg(strEncoder);
+		KLatencyTraceLogger::shutdown();
+		::CoUninitialize();
+		return 2;
+	}
+
+	KMainWindow mainWindow(encoderPreference);
 	mainWindow.resize(1280, 760);
 	mainWindow.show();
 

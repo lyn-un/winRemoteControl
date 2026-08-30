@@ -41,6 +41,7 @@
 #include "ui_bridge/webviewwidget.h"
 #include "ui_bridge/devicediscoveryviewmodel.h"
 #include "common/sessiontracelogger.h"
+#include "common/resourcetracelogger.h"
 #include "common/applicationpaths.h"
 
 #include <QtCore/QCoreApplication>
@@ -128,14 +129,15 @@ namespace
 	}
 }
 
-KApplicationComposition::KApplicationComposition(QObject *pParent)
+KApplicationComposition::KApplicationComposition(KVideoEncoderPreference encoderPreference,
+	QObject *pParent)
 	: QObject(pParent)
 	, m_pCaptureService(new KCaptureService(this))
 	, m_pApplicationCommandRegistry(new KApplicationCommandRegistry(this))
 	, m_pSessionService(new KSessionCoordinator(
 		std::make_unique<KWindowsDeviceInfoProvider>(),
 		std::make_unique<KWindowsInputInjector>(),
-		std::make_unique<KWebRtcPeer>(),
+		std::make_unique<KWebRtcPeer>(encoderPreference, nullptr),
 		std::make_unique<KTcpSignalingTransport>(),
 		std::make_unique<KWindowsDeviceIdentityProvider>(
 			SecurityDirectoryPath(), KApplicationPaths::isAutomationTestProfile()),
@@ -802,15 +804,75 @@ void KApplicationComposition::wireServices()
 	connect(m_pSessionService, &KSessionCoordinator::sessionStateChanged,
 		this, [this](KSessionState state)
 		{
+			if (KResourceTraceLogger::isEnabled())
+			{
+				const quint64 nGeneration = m_pSessionService->sessionGeneration();
+				const QString strRole = KSessionStateMachine::roleName(
+					m_pSessionService->sessionRole());
+				KResourceTraceLogger::write(strRole,
+					QStringLiteral("session_%1").arg(
+						KSessionStateMachine::stateName(state).toLower()),
+					nGeneration);
+				const bool bCompletedStop = (state == IdleSessionState
+					|| state == ListeningSessionState)
+					&& (m_nLastResourceTraceState == StoppingSessionState
+						|| m_nLastResourceTraceState == ShutdownTimedOutSessionState);
+				if (bCompletedStop)
+				{
+					for (const int nDelayMs : {1000, 5000, 20000})
+					{
+						QTimer::singleShot(nDelayMs, this,
+							[this, strRole, nGeneration, nDelayMs]()
+							{
+								const bool bStale = m_pSessionService->sessionGeneration()
+									!= nGeneration;
+								KResourceTraceLogger::write(strRole,
+									QStringLiteral("post_stop_%1ms").arg(nDelayMs),
+									nGeneration, bStale);
+							});
+					}
+				}
+			}
+			m_nLastResourceTraceState = state;
 			if (m_bShutdown && state == IdleSessionState)
 			{
 				m_bSessionShutdownPending = false;
 				tryFinishShutdown();
 			}
 		});
-	connect(m_pCaptureService, &KCaptureService::captureShutdownFinished,
-		this, [this](quint64)
+	connect(m_pSessionService, &KSessionCoordinator::webRtcStateChanged,
+		this, [this](const QString &strState)
 		{
+			if (!KResourceTraceLogger::isEnabled())
+				return;
+			KResourceTraceLogger::write(
+				KSessionStateMachine::roleName(m_pSessionService->sessionRole()),
+				QStringLiteral("webrtc_%1").arg(strState.toLower()),
+				m_pSessionService->sessionGeneration());
+		});
+	connect(m_pSessionService, &KSessionCoordinator::startCaptureRequested,
+		this, [this](quint64 nGeneration)
+		{
+			KResourceTraceLogger::write(
+				KSessionStateMachine::roleName(m_pSessionService->sessionRole()),
+				QStringLiteral("capture_start_requested"), nGeneration);
+		});
+	connect(m_pCaptureService, &KCaptureService::statusChanged,
+		this, [this](const QString &strStatus)
+		{
+			if (!KResourceTraceLogger::isEnabled())
+				return;
+			KResourceTraceLogger::write(
+				KSessionStateMachine::roleName(m_pSessionService->sessionRole()),
+				QStringLiteral("capture_%1").arg(strStatus.toLower()),
+				m_pSessionService->sessionGeneration());
+		});
+	connect(m_pCaptureService, &KCaptureService::captureShutdownFinished,
+		this, [this](quint64 nGeneration)
+		{
+			KResourceTraceLogger::write(
+				KSessionStateMachine::roleName(m_pSessionService->sessionRole()),
+				QStringLiteral("capture_shutdown_finished"), nGeneration);
 			if (m_bShutdown)
 			{
 				m_bCaptureShutdownPending = false;

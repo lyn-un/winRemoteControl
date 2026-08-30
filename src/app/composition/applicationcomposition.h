@@ -1,6 +1,8 @@
 #ifndef _WINREMOTECONTROL_APPLICATIONCOMPOSITION_H_
 #define _WINREMOTECONTROL_APPLICATIONCOMPOSITION_H_
 
+#include "core/media/videoencoderpreference.h"
+
 #include <QtCore/QObject>
 #include <QtCore/QString>
 
@@ -30,7 +32,8 @@ class KApplicationComposition : public QObject
 	Q_OBJECT
 
 public:
-	explicit KApplicationComposition(QObject *pParent = nullptr);
+	explicit KApplicationComposition(KVideoEncoderPreference encoderPreference,
+		QObject *pParent = nullptr);
 	~KApplicationComposition() override;
 
 	KApplicationComposition(const KApplicationComposition &) = delete;
@@ -78,6 +81,7 @@ private:
 	bool m_bSessionShutdownPending = false;
 	bool m_bCaptureShutdownPending = false;
 	bool m_bFileTransferShutdownPending = false;
+	int m_nLastResourceTraceState = 0;
 };
 
 #endif // _WINREMOTECONTROL_APPLICATIONCOMPOSITION_H_

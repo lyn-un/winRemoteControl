@@ -11,6 +11,9 @@ extern "C" {
 #include <cstdint>
 #include <cstring>
 
+#include <dxgi1_2.h>
+#include <wrl/client.h>
+
 #include <libyuv.h>
 
 namespace
@@ -22,9 +25,32 @@ namespace
 	constexpr int kMfRateControlLowDelayVbr = 4;
 	constexpr char kHardwareEncoderName[] = "h264_mf";
 	constexpr char kSoftwareEncoderName[] = "libx264";
+	constexpr UINT kAmdVendorId = 0x1002;
+
+	bool HasAmdDisplayAdapter()
+	{
+		static const bool bHasAmdAdapter = []()
+		{
+			Microsoft::WRL::ComPtr<IDXGIFactory1> spFactory;
+			if (FAILED(::CreateDXGIFactory1(IID_PPV_ARGS(&spFactory))))
+				return false;
+			for (UINT nIndex = 0; ; ++nIndex)
+			{
+				Microsoft::WRL::ComPtr<IDXGIAdapter1> spAdapter;
+				if (spFactory->EnumAdapters1(nIndex, &spAdapter) == DXGI_ERROR_NOT_FOUND)
+					break;
+				DXGI_ADAPTER_DESC1 desc = {};
+				if (SUCCEEDED(spAdapter->GetDesc1(&desc)) && desc.VendorId == kAmdVendorId)
+					return true;
+			}
+			return false;
+		}();
+		return bHasAmdAdapter;
+	}
 }
 
-KH264Encoder::KH264Encoder()
+KH264Encoder::KH264Encoder(KVideoEncoderPreference preference)
+	: m_preference(preference)
 {
 }
 
@@ -78,8 +104,30 @@ bool KH264Encoder::openStream(int nWidth,
 	m_strFallbackReason.clear();
 
 	QString strHardwareError;
-	if (!openCodec(kHardwareEncoderName, true, &strHardwareError))
+	const bool bAvoidAmdMediaFoundation =
+		m_preference == AutoVideoEncoderPreference && HasAmdDisplayAdapter();
+	if (m_preference == LibX264VideoEncoderPreference || bAvoidAmdMediaFoundation)
 	{
+		if (!openCodec(kSoftwareEncoderName, false, pErrorMessage))
+		{
+			release();
+			return false;
+		}
+		if (bAvoidAmdMediaFoundation)
+		{
+			m_strFallbackReason = QStringLiteral(
+				"AMD Media Foundation encoder disabled after verified per-session handle growth");
+		}
+	}
+	else if (!openCodec(kHardwareEncoderName, true, &strHardwareError))
+	{
+		if (m_preference == MediaFoundationVideoEncoderPreference)
+		{
+			if (pErrorMessage != nullptr)
+				*pErrorMessage = strHardwareError;
+			release();
+			return false;
+		}
 		QString strSoftwareError;
 		if (!openCodec(kSoftwareEncoderName, false, &strSoftwareError))
 		{

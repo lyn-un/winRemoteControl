@@ -25,6 +25,8 @@ option(WRC_ENABLE_FFMPEG "Enable the FFmpeg codec adapter" ON)
 option(WRC_ENABLE_WEBVIEW2 "Enable the WebView2 presentation adapter" ON)
 option(WRC_BUILD_AUTOMATION_DRIVER
 	"Build the optional automation driver DLL" OFF)
+option(WRC_BUILD_RESOURCE_DIAGNOSTICS
+	"Build manual process resource diagnostic probes" OFF)
 
 if(NOT CMAKE_CONFIGURATION_TYPES)
 	set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -69,6 +71,7 @@ target_sources(wrc_foundation INTERFACE
 	src/core/media/networkstats.h
 	src/core/media/streamconfig.h
 	src/core/media/videoframe.h
+	src/core/media/videoencoderpreference.h
 	src/core/privacy/privacytypes.h
 	src/core/settings/applicationsettings.h
 )
@@ -371,6 +374,8 @@ add_library(wrc_diagnostics STATIC
 	src/common/latencytracelogger.h
 	src/common/sessiontracelogger.cpp
 	src/common/sessiontracelogger.h
+	src/common/resourcetracelogger.cpp
+	src/common/resourcetracelogger.h
 	src/common/traceoptions.cpp
 	src/common/traceoptions.h
 )
@@ -382,6 +387,10 @@ target_include_directories(wrc_diagnostics PUBLIC
 target_link_libraries(wrc_diagnostics PUBLIC
 	Qt6::Core
 )
+
+if(WIN32)
+	target_link_libraries(wrc_diagnostics PUBLIC dxgi psapi)
+endif()
 
 add_library(wrc_session_contract STATIC
 	src/session/sessioncontroller.h
@@ -780,6 +789,7 @@ target_link_libraries(wrc_ffmpeg_adapter PUBLIC
 	avcodec
 	avutil
 	swscale
+	dxgi
 	"${WEBRTC_OUT}/obj/webrtc.lib"
 )
 
@@ -861,6 +871,7 @@ target_link_libraries(wrc_windows_capture_adapter PUBLIC
 	d3d11
 	dxgi
 	dxguid
+	ole32
 )
 
 add_library(wrc_capture_application STATIC
@@ -1670,6 +1681,41 @@ add_custom_command(TARGET winRemoteControl POST_BUILD
 		"$<TARGET_FILE:winRemoteControl>"
 	VERBATIM
 )
+
+if(WRC_BUILD_RESOURCE_DIAGNOSTICS)
+	add_executable(wrc_capture_resource_probe
+		tools/diagnostics/captureresourceprobe.cpp
+		tools/diagnostics/resourceprobecommon.h)
+	target_include_directories(wrc_capture_resource_probe PRIVATE
+		"${CMAKE_CURRENT_SOURCE_DIR}")
+	target_link_libraries(wrc_capture_resource_probe PRIVATE
+		wrc_windows_capture_adapter wrc_diagnostics Qt6::Core)
+
+	add_executable(wrc_encoder_resource_probe
+		tools/diagnostics/encoderresourceprobe.cpp
+		tools/diagnostics/resourceprobecommon.h)
+	target_include_directories(wrc_encoder_resource_probe PRIVATE
+		"${CMAKE_CURRENT_SOURCE_DIR}")
+	target_link_libraries(wrc_encoder_resource_probe PRIVATE
+		wrc_ffmpeg_adapter wrc_diagnostics Qt6::Core)
+
+	add_executable(wrc_webrtc_resource_probe
+		tools/diagnostics/webrtcresourceprobe.cpp
+		tools/diagnostics/resourceprobecommon.h)
+	target_include_directories(wrc_webrtc_resource_probe PRIVATE
+		"${CMAKE_CURRENT_SOURCE_DIR}")
+	target_link_libraries(wrc_webrtc_resource_probe PRIVATE
+		wrc_webrtc_adapter wrc_capture_application wrc_diagnostics Qt6::Core)
+
+	foreach(WRC_RESOURCE_PROBE
+		wrc_capture_resource_probe
+		wrc_encoder_resource_probe
+		wrc_webrtc_resource_probe)
+		set_target_properties(${WRC_RESOURCE_PROBE} PROPERTIES
+			RUNTIME_OUTPUT_DIRECTORY_RELEASE
+				"${CMAKE_BINARY_DIR}/diagnostics/Release")
+	endforeach()
+endif()
 if(NOT WRC_BUILD_AUTOMATION_DRIVER)
 	add_custom_target(wrc_remove_stale_automation_driver ALL
 		COMMAND ${CMAKE_COMMAND} -E rm -f

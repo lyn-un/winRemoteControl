@@ -1,0 +1,11 @@
+#ifndef _WINREMOTECONTROL_CORE_MEDIA_VIDEOENCODERPREFERENCE_H_
+#define _WINREMOTECONTROL_CORE_MEDIA_VIDEOENCODERPREFERENCE_H_
+
+enum KVideoEncoderPreference
+{
+	AutoVideoEncoderPreference,
+	MediaFoundationVideoEncoderPreference,
+	LibX264VideoEncoderPreference
+};
+
+#endif // _WINREMOTECONTROL_CORE_MEDIA_VIDEOENCODERPREFERENCE_H_
