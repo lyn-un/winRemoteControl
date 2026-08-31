@@ -3,13 +3,17 @@ name: Core tests
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   core-tests:
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
-      - uses: jurplel/install-qt-action@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: '6.8.3'
           arch: win64_msvc2022_64
@@ -25,8 +29,8 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: jurplel/install-qt-action@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: '6.8.3'
           arch: win64_msvc2022_64
@@ -42,8 +46,8 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: jurplel/install-qt-action@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: '6.8.3'
           arch: win64_msvc2022_64
@@ -59,8 +63,8 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: jurplel/install-qt-action@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: '6.8.3'
           arch: win64_msvc2022_64
@@ -79,11 +83,14 @@ jobs:
           python -m unittest discover -s automation/tests -p 'test_*.py' -v
 
   automation-e2e:
-    if: vars.WRC_ENABLE_AUTOMATION_E2E == '1'
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'lyn-un/winRemoteControl' &&
+      vars.WRC_ENABLE_AUTOMATION_E2E == '1'
     runs-on: [self-hosted, Windows, X64, interactive]
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Build React presentation assets
         run: |
           npm.cmd ci --prefix frontend

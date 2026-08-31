@@ -9,6 +9,12 @@
 *.old
 /recordings/
 
+# Portable runtime settings and authenticated-device metadata
+/settings.ini
+/recent_devices.ini
+/device_security_preferences.ini
+/security/
+
 # Frontend generated/dependency files
 /frontend/node_modules/
 /frontend/dist/
@@ -27,6 +33,9 @@ __pycache__/
 /D3D11_TO_WEBRTC_FLOW.md
 /PROJECT_FLOW.md
 /TODO.md
+/TASKS.md
+/problem.md
+/todolist.md
 /build_webrtc_msvcstl.bat
 /run_release.bat
 
