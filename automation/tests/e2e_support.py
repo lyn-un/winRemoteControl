@@ -96,12 +96,19 @@ class TwoProcessSession:
         self,
         executable: str | Path,
         extra_arguments: list[str] | tuple[str, ...] | None = None,
+        profile_root: str | Path | None = None,
+        automation_test_profile: bool = True,
     ) -> None:
         build_directory = Path(executable).resolve().parents[1]
-        self._temporary = tempfile.TemporaryDirectory(
-            prefix="wrc-automation-", dir=build_directory
-        )
-        root = Path(self._temporary.name)
+        if profile_root is None:
+            self._temporary = tempfile.TemporaryDirectory(
+                prefix="wrc-automation-", dir=build_directory
+            )
+            root = Path(self._temporary.name)
+        else:
+            self._temporary = None
+            root = Path(profile_root).resolve()
+            root.mkdir(parents=True, exist_ok=True)
         self.profile_root = root
         self.host = None
         self.controller = None
@@ -109,10 +116,16 @@ class TwoProcessSession:
         self.controller_session = None
         try:
             self.host = WrcApplication.launch(
-                executable, root / "host", extra_arguments=extra_arguments
+                executable,
+                root / "host",
+                extra_arguments=extra_arguments,
+                automation_test_profile=automation_test_profile,
             )
             self.controller = WrcApplication.launch(
-                executable, root / "controller", extra_arguments=extra_arguments
+                executable,
+                root / "controller",
+                extra_arguments=extra_arguments,
+                automation_test_profile=automation_test_profile,
             )
             self.host_session = self.host.create_session()
             self.controller_session = self.controller.create_session()
@@ -194,7 +207,9 @@ class TwoProcessSession:
         if self.host is not None:
             self.host.close()
             self.host = None
-        self._temporary.cleanup()
+        if self._temporary is not None:
+            self._temporary.cleanup()
+            self._temporary = None
 
     def _wait_for_listening_port(self, timeout: float) -> int:
         deadline = time.monotonic() + timeout
@@ -208,12 +223,13 @@ class TwoProcessSession:
 
     def _events(self, session, sequence_attribute: str):
         sequence = getattr(self, sequence_attribute)
-        snapshot = session.get_events(sequence)
+        snapshot = session.get_events_since(sequence)
         if snapshot.get("hasGap") is True:
             raise EventHistoryLost(
                 sequence,
                 int(snapshot.get("oldestSequence", 0)),
                 int(snapshot.get("nextSequence", 0)),
+                session.session_generation,
                 "connection control event",
             )
         events = snapshot.get("events", [])
@@ -322,3 +338,7 @@ def e2e_enabled() -> bool:
 
 def destructive_e2e_enabled() -> bool:
     return e2e_enabled() and os.environ.get("WRC_RUN_DESTRUCTIVE_AUTOMATION") == "1"
+
+
+def privacy_e2e_enabled() -> bool:
+    return e2e_enabled() and os.environ.get("WRC_RUN_PRIVACY_E2E") == "1"

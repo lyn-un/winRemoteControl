@@ -29,6 +29,7 @@ KWrcDriverModule::KWrcDriverModule(QObject *pParent)
 	: QObject(pParent)
 	, m_pHttpServer(new KHttpServer(this))
 {
+	m_idempotencyClock.start();
 	connect(m_pHttpServer, &KHttpServer::requestReceived,
 		this, &KWrcDriverModule::handleHttpRequest);
 	initializeRoutes();
@@ -92,6 +93,7 @@ void KWrcDriverModule::stop()
 		respond(iter->context.nRequestId, shutdownResponse, 503);
 	}
 	m_pendingHostRequests.clear();
+	m_idempotencyStore.clear();
 	if (m_pCallbackGate != nullptr)
 	{
 		QMutexLocker locker(&m_pCallbackGate->mutex);
@@ -134,6 +136,11 @@ void KWrcDriverModule::HostCommandStarted(void *pCallbackContext,
 	if (pModule == nullptr)
 		return;
 	pGate->startedRequestIds.insert(nRequestId);
+	QMetaObject::invokeMethod(pModule,
+		[pModule, nRequestId]()
+		{
+			pModule->handleHostCommandStarted(nRequestId);
+		}, Qt::QueuedConnection);
 }
 
 void KWrcDriverModule::initializeRoutes()
@@ -296,20 +303,43 @@ void KWrcDriverModule::handleTriggerCommand(quint64 nRequestId,
 			QStringLiteral("invalid_session_id"), QStringLiteral("Unknown driver session")), 404);
 		return;
 	}
+	collectExpiredIdempotencyRecords();
+	const QByteArray canonicalArguments =
+		KDriverIdempotencyStore::canonicalArguments(arguments);
 	if (!strIdempotencyKey.isEmpty())
 	{
-		const auto existing = pSession->idempotencyRecords.constFind(strIdempotencyKey);
-		if (existing != pSession->idempotencyRecords.constEnd())
+		const KDriverIdempotencyRecord *pExisting =
+			m_idempotencyStore.record(strIdempotencyKey);
+		if (pExisting != nullptr)
 		{
-			if (existing->strCommandId != strCommandId || existing->arguments != arguments)
+			if (pExisting->state == PendingDriverIdempotencyState
+				&& consumeHostCommandStarted(pExisting->nHostRequestId))
+			{
+				const auto pending = m_pendingHostRequests.find(pExisting->nHostRequestId);
+				if (pending != m_pendingHostRequests.end())
+					pending->bHostStarted = true;
+				m_idempotencyStore.markStarted(
+					pExisting->nHostRequestId, idempotencyNowMs());
+				pExisting = m_idempotencyStore.record(strIdempotencyKey);
+			}
+			if (pExisting->strCommandId != strCommandId
+				|| pExisting->canonicalArguments != canonicalArguments)
 			{
 				respond(nRequestId, DriverErrorResponse(InvalidArgumentDriverStatus,
 					QStringLiteral("idempotency_key_conflict"),
 					QStringLiteral("Idempotency key was used for a different command")), 400);
 			}
-			else if (existing->bCompleted)
+			else if (pExisting->state == CompletedDriverIdempotencyState)
 			{
-				respond(nRequestId, existing->response);
+				respond(nRequestId, pExisting->response, pExisting->nHttpStatusCode);
+			}
+			else if (pExisting->state == StartedDriverIdempotencyState)
+			{
+				respond(nRequestId,
+					DriverErrorResponse(CommandExecutionStartedDriverStatus,
+						QStringLiteral("command_execution_started"),
+						QStringLiteral("Command started but has not completed"),
+						false, true), 408);
 			}
 			else
 			{
@@ -320,31 +350,17 @@ void KWrcDriverModule::handleTriggerCommand(quint64 nRequestId,
 			}
 			return;
 		}
-		if (pSession->idempotencyRecords.size() >= 256)
-		{
-			for (auto record = pSession->idempotencyRecords.begin();
-				record != pSession->idempotencyRecords.end(); ++record)
-			{
-				if (record->bCompleted)
-				{
-					pSession->idempotencyRecords.erase(record);
-					break;
-				}
-			}
-		}
-		if (pSession->idempotencyRecords.size() >= 256)
-		{
-			respond(nRequestId, DriverErrorResponse(CommandBusyDriverStatus,
-				QStringLiteral("idempotency_cache_full"),
-				QStringLiteral("Too many commands are still pending"), true, false));
-			return;
-		}
-		KDriverIdempotencyRecord record;
-		record.strCommandId = strCommandId;
-		record.arguments = arguments;
-		pSession->idempotencyRecords.insert(strIdempotencyKey, record);
 	}
 	const quint64 nHostRequestId = m_nNextHostRequestId++;
+	if (!strIdempotencyKey.isEmpty()
+		&& !m_idempotencyStore.create(strIdempotencyKey,
+			strCommandId, canonicalArguments, nHostRequestId, idempotencyNowMs()))
+	{
+		respond(nRequestId, DriverErrorResponse(CommandBusyDriverStatus,
+			QStringLiteral("idempotency_cache_full"),
+			QStringLiteral("Too many idempotent commands are active"), true, false));
+		return;
+	}
 	KPendingHostRequest pending;
 	pending.context.nRequestId = nRequestId;
 	pending.context.strSessionId = strSessionId;
@@ -420,11 +436,13 @@ void KWrcDriverModule::requestHostSnapshot(quint64 nRequestId,
 void KWrcDriverModule::handleHostJsonCompleted(quint64 nRequestId,
 	const QByteArray &jsonUtf8)
 {
-	consumeHostCommandStarted(nRequestId);
+	const bool bStartedSignal = consumeHostCommandStarted(nRequestId);
 	const auto iter = m_pendingHostRequests.find(nRequestId);
 	if (iter == m_pendingHostRequests.end())
 		return;
 	KPendingHostRequest &pending = iter.value();
+	if (bStartedSignal || pending.bHostStarted)
+		m_idempotencyStore.markStarted(nRequestId, idempotencyNowMs());
 	const QJsonDocument document = QJsonDocument::fromJson(jsonUtf8);
 	QJsonObject response;
 	int nStatusCode = 200;
@@ -442,13 +460,30 @@ void KWrcDriverModule::handleHostJsonCompleted(quint64 nRequestId,
 	else
 	{
 		response = MapApplicationCommandResponse(document.object());
-		completeIdempotencyRecord(pending, response);
 	}
-	if (!pending.context.complete(response))
-		return;
+	if (pending.type == CommandPendingHostRequest
+		&& !pending.strIdempotencyKey.isEmpty())
+	{
+		m_idempotencyStore.complete(nRequestId,
+			response, nStatusCode, idempotencyNowMs());
+	}
+	const bool bShouldRespond = pending.context.complete(response);
 	const quint64 nHttpRequestId = pending.context.nRequestId;
 	m_pendingHostRequests.erase(iter);
-	respond(nHttpRequestId, response, nStatusCode);
+	if (bShouldRespond)
+		respond(nHttpRequestId, response, nStatusCode);
+}
+
+void KWrcDriverModule::handleHostCommandStarted(quint64 nRequestId)
+{
+	const bool bStartedSignal = consumeHostCommandStarted(nRequestId);
+	const auto iter = m_pendingHostRequests.find(nRequestId);
+	if (iter == m_pendingHostRequests.end())
+		return;
+	if (!bStartedSignal && iter->bHostStarted)
+		return;
+	iter->bHostStarted = true;
+	m_idempotencyStore.markStarted(nRequestId, idempotencyNowMs());
 }
 
 bool KWrcDriverModule::consumeHostCommandStarted(quint64 nRequestId)
@@ -467,7 +502,9 @@ void KWrcDriverModule::beginHostTimeout(quint64 nRequestId, int nTimeoutMs)
 		if (iter == m_pendingHostRequests.end())
 			return;
 		const bool bExecutionStarted = iter->type == CommandPendingHostRequest
-			&& consumeHostCommandStarted(nRequestId);
+			&& (iter->bHostStarted || consumeHostCommandStarted(nRequestId));
+		if (bExecutionStarted)
+			m_idempotencyStore.markStarted(nRequestId, idempotencyNowMs());
 		const QJsonObject response = bExecutionStarted
 			? DriverErrorResponse(CommandExecutionStartedDriverStatus,
 				QStringLiteral("command_execution_started"),
@@ -478,40 +515,47 @@ void KWrcDriverModule::beginHostTimeout(quint64 nRequestId, int nTimeoutMs)
 				QStringLiteral("Application command timed out"));
 		if (!iter->context.timeout(response))
 			return;
-		if (bExecutionStarted)
-			completeIdempotencyRecord(iter.value(), response);
-		else
-			discardIdempotencyRecord(iter.value());
 		const quint64 nHttpRequestId = iter->context.nRequestId;
-		m_pendingHostRequests.erase(iter);
+		const bool bTrackLateCompletion = bExecutionStarted
+			&& !iter->strIdempotencyKey.isEmpty();
+		if (!bTrackLateCompletion)
+		{
+			m_idempotencyStore.removeByHostRequestId(nRequestId);
+			m_pendingHostRequests.erase(iter);
+		}
 		respond(nHttpRequestId, response, 408);
 	});
 }
 
-void KWrcDriverModule::completeIdempotencyRecord(const KPendingHostRequest &pending,
-	const QJsonObject &response)
+void KWrcDriverModule::collectExpiredIdempotencyRecords()
 {
-	if (pending.strIdempotencyKey.isEmpty())
+	const KDriverIdempotencyCleanupResult result =
+		m_idempotencyStore.collectExpired(idempotencyNowMs());
+	for (const quint64 nHostRequestId : result.vecHostRequestIds)
+	{
+		const auto pending = m_pendingHostRequests.find(nHostRequestId);
+		if (pending == m_pendingHostRequests.end() || !pending->context.bTimedOut)
+			continue;
+		consumeHostCommandStarted(nHostRequestId);
+		m_pendingHostRequests.erase(pending);
+	}
+	const int nTotalCount = result.nCompletedCount
+		+ result.nStartedCount + result.nPendingCount;
+	if (nTotalCount == 0 || m_pHostApi == nullptr || m_pHostApi->writeLog == nullptr)
 		return;
-	KDriverSession *pSession = m_sessionManager.session(pending.context.strSessionId,
-		QDateTime::currentMSecsSinceEpoch());
-	if (pSession == nullptr)
-		return;
-	auto record = pSession->idempotencyRecords.find(pending.strIdempotencyKey);
-	if (record == pSession->idempotencyRecords.end())
-		return;
-	record->response = response;
-	record->bCompleted = true;
+	const QByteArray message = QStringLiteral(
+		"Expired idempotency records removed: completed=%1 started=%2 pending=%3")
+		.arg(result.nCompletedCount)
+		.arg(result.nStartedCount)
+		.arg(result.nPendingCount)
+		.toUtf8();
+	m_pHostApi->writeLog(m_pHostApi->pHostContext, 1,
+		message.constData(), static_cast<std::uint32_t>(message.size()));
 }
 
-void KWrcDriverModule::discardIdempotencyRecord(const KPendingHostRequest &pending)
+qint64 KWrcDriverModule::idempotencyNowMs() const
 {
-	if (pending.strIdempotencyKey.isEmpty())
-		return;
-	KDriverSession *pSession = m_sessionManager.session(pending.context.strSessionId,
-		QDateTime::currentMSecsSinceEpoch());
-	if (pSession != nullptr)
-		pSession->idempotencyRecords.remove(pending.strIdempotencyKey);
+	return m_idempotencyClock.elapsed();
 }
 
 void KWrcDriverModule::respond(quint64 nHttpRequestId,

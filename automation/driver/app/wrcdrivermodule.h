@@ -3,11 +3,13 @@
 
 #include "automation/driver/base/commandcontext.h"
 #include "automation/driver/base/httpserver.h"
+#include "automation/driver/base/idempotencystore.h"
 #include "automation/driver/base/requestrouter.h"
 #include "automation/driver/base/sessionmanager.h"
 #include "automation/wrcdriverhostapi.h"
 
 #include <QtCore/QHash>
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QMutex>
 #include <QtCore/QObject>
 #include <QtCore/QPointer>
@@ -47,6 +49,7 @@ private:
 		KDriverCommandContext context;
 		KPendingHostRequestType type = CommandPendingHostRequest;
 		QString strIdempotencyKey;
+		bool bHostStarted = false;
 	};
 
 	static void HostJsonCompleted(void *pCallbackContext,
@@ -80,22 +83,24 @@ private:
 		const QString &strSessionId,
 		const QByteArray &kind,
 		quint64 nSinceSequence);
-	void completeIdempotencyRecord(const KPendingHostRequest &pending,
-		const QJsonObject &response);
-	void discardIdempotencyRecord(const KPendingHostRequest &pending);
 	void handleHostJsonCompleted(quint64 nRequestId, const QByteArray &jsonUtf8);
+	void handleHostCommandStarted(quint64 nRequestId);
 	bool consumeHostCommandStarted(quint64 nRequestId);
 	void beginHostTimeout(quint64 nRequestId, int nTimeoutMs);
+	void collectExpiredIdempotencyRecords();
+	qint64 idempotencyNowMs() const;
 	void respond(quint64 nHttpRequestId, const QJsonObject &response, int nStatusCode = 200);
 	QString hostValue(const QByteArray &key) const;
 
 	KHttpServer *m_pHttpServer = nullptr;
 	KRequestRouter m_router;
 	KDriverSessionManager m_sessionManager;
+	KDriverIdempotencyStore m_idempotencyStore;
 	QHash<quint64, KPendingHostRequest> m_pendingHostRequests;
 	const KWrcDriverHostApiV2 *m_pHostApi = nullptr;
 	KWrcDriverCallbackGate *m_pCallbackGate = nullptr;
 	quint64 m_nNextHostRequestId = 1;
+	QElapsedTimer m_idempotencyClock;
 	bool m_bStarted = false;
 };
 

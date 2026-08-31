@@ -52,6 +52,13 @@ bool KApplicationCommandRegistry::contains(const QString &strCommandId) const
 	return m_commands.contains(strCommandId);
 }
 
+QStringList KApplicationCommandRegistry::commandIds() const
+{
+	QStringList commandIdList = m_commands.keys();
+	commandIdList.sort(Qt::CaseSensitive);
+	return commandIdList;
+}
+
 KApplicationCommandResult KApplicationCommandRegistry::execute(
 	const QString &strCommandId,
 	const QJsonObject &arguments) const

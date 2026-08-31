@@ -44,8 +44,17 @@ ctest --preset automation-tests
 ```
 
 Release DLL 输出到 `build/Release/automation/wrcdriver.dll`。当前开发目录保留该文件，便于
-Python 和 AI 直接连接测试。制作不含自动化能力的正式分发包时，显式配置
-`WRC_BUILD_AUTOMATION_DRIVER=OFF`；该配置还会清理 Release 目录中遗留的驱动 DLL。
+Python 和 AI 直接连接测试。`automation-tests` 使用自己的隔离运行时目录，不会覆盖开发
+Release。制作不含自动化能力的正式分发包使用独立预设：
+
+```powershell
+cmake --preset production-release
+cmake --build --preset production-release
+```
+
+正式运行时输出到 `build/production/Release`。该预设关闭 Driver、测试和资源探针，并在
+构建结束时检查产物；如果发现 `automation/wrcdriver.dll`、Python SDK、测试程序或资源
+探针，构建会直接失败。正式构建不会删除或修改 `build/Release` 中的开发 Driver。
 
 ## 本机传输
 
@@ -75,12 +84,21 @@ SDK 还会核对发现文件中的 PID、进程启动时间、HTTP 协议版本�
 也不会产生副作用；若命令已经进入业务执行但响应窗口耗尽，则返回
 `command_execution_started`、`retryable=false`、`outcomeUnknown=true`，调用方不得自动
 重试。需要安全重试的调用可传入 `idempotencyKey`，相同键、命令和参数只执行一次。
+幂等键在当前 Driver 进程内全局有效，不依赖单个 DriverSession；记录使用单调时钟保留
+30 分钟，容量为1024条。HTTP 等待结束后，已经开始的 Host 命令仍会继续被跟踪；完成
+回调到达后，相同 key 会从 `command_execution_started` 收敛为真实最终结果。相同 key
+用于不同命令或参数时返回 `idempotency_key_conflict`。
 
 事件使用单调递增序号，并分为 Critical、State 和 Telemetry。帧统计主要从 state 读取；
 `frame.progress` 最多每秒产生一条，Telemetry 最多保留 64 条，不会淹没配对、审批和错误
 事件。创建 DriverSession 时会返回当时的 `eventCursor` 与 `sessionGeneration`，因此新会话
 不会消费创建前的旧事件。每个控制事件都携带 `sessionGeneration`；若队列裁剪造成序号
 缺口，响应会设置 `hasGap=true`，Python 立即抛出 `EventHistoryLost`。
+
+Python 中 `poll_events()` 从当前 Session 游标消费新事件并自动推进；`get_events_since(N)`
+用于无副作用的历史查询。兼容入口 `get_events()` 等同 `poll_events()`，显式传入整数时
+等同历史查询。发生 gap 时游标保持不变，调用方读取完整 state 后可通过
+`reset_event_cursor()` 明确选择恢复位置。
 
 命令进入 Host Bridge 时会记录远程会话 generation；如果命令在 GUI 线程执行前已经切换
 到另一个远程会话，就会以 `stale_generation` 拒绝。HTTP 服务的每个 TCP 连接只接受一个
@@ -111,9 +129,46 @@ from wrcdriver import WrcApplication
 application = WrcApplication.attach(pid=12345)
 session = application.create_session()
 print(session.get_state())
+print(session.get_supported_commands())
 session.trigger_command("session.disconnect", idempotency_key="disconnect-once")
 session.quit()
 ```
+
+### 可用业务命令
+
+`get_supported_commands()` 返回当前构建实际注册的命令 ID。AI 不需要识别网页按钮或坐标，
+而是调用与按钮相同的 C++ 业务服务。当前命令按功能分组如下：
+
+| 功能 | 命令 ID | 主要参数 |
+| --- | --- | --- |
+| 角色与连接 | `application.set_role` | `role: controller/controlled` |
+| 启动监听 | `signaling.start_server` | `port` |
+| 直接连接 | `session.connect` | `host`, `port` |
+| 重试/断开 | `session.retry`, `session.disconnect` | 无 |
+| Access/配对审批 | `access.respond`, `pairing.respond` | `requestId`, `accepted`，配对接受时还需 `permissions` |
+| 推流 | `stream.start`, `stream.stop` | 无 |
+| 本地预览 | `capture.preview.start`, `capture.preview.stop` | 无 |
+| 画质 | `desktop.quality.set` | `fps`, `width`, `height`, `bitrateKbps` |
+| 局域网发现 | `discovery.refresh`, `discovery.connect` | 连接时传 `deviceId` |
+| 最近设备 | `recent.list`, `recent.connect`, `recent.remove`, `recent.terminal.open` | 后三者传 `deviceId` |
+| 设置 | `settings.get`, `settings.update`, `settings.theme.set` | 设置字段或 `themeId` |
+| 可信设备 | `trusted.list`, `trusted.update`, `trusted.revoke`, `trusted.repair` | `deviceId`，更新时传 `alias`, `permissions` |
+| 剪贴板 | `clipboard.get`, `clipboard.set_enabled` | `enabled` |
+| 终端 | `terminal.open`, `terminal.respond`, `terminal.input`, `terminal.resize`, `terminal.close`, `terminal.get` | 尺寸、审批信息或 Base64 输入 |
+| 文件传输会话 | `file_transfer.open`, `file_transfer.stop`, `file_transfer.get` | 无 |
+| 文件浏览 | `file_transfer.roots`, `file_transfer.navigate`, `file_transfer.navigate_path`, `file_transfer.up`, `file_transfer.refresh` | `pane` 及 state 返回的不透明 listing/entry ID |
+| 文件任务 | `file_transfer.copy`, `file_transfer.pause`, `file_transfer.resume`, `file_transfer.cancel`, `file_transfer.retry`, `file_transfer.resolve_conflict`, `file_transfer.clear_completed` | state/event 返回的不透明 ID |
+| 安全偏好 | `security.privacy.set`, `security.post_session.set` | `mode` 或 `action` |
+| 窗口 | `window.main.*`, `window.desktop.*`, `window.file_transfer.*` | 最小化、切换最大化或关闭 |
+
+完整 state 还包含 `lanDevices`、`recentDevices`、`trustedDevices`、
+`applicationSettings`、`clipboard`、`terminal`、`fileTransfer`、左右文件栏快照、任务和冲突。
+目录复制只能提交 state/event 返回的 `listingId`、`entryId` 和 `taskId`，不能用 Python
+直接向核心传最终路径或文件内容。终端输出通过 `terminal.output` 事件返回 Base64 数据，
+输入可直接使用 `session.send_terminal_input("命令文本")`。
+
+控制中心菜单、设置页签等纯导航元素没有独立命令；对应业务功能已经由上述语义命令覆盖。
+驱动也不提供任意桌面坐标点击或任意 Shell 路由，避免绕过现有权限与会话状态检查。
 
 SDK 不会根据异常名称盲目重试。所有驱动异常都保存 `error_code`、`driver_status`、
 `request_id`、`retryable` 和 `outcome_unknown`；另外提供 `ApplicationNotReady`、
@@ -146,8 +201,9 @@ python -m unittest discover -s automation/tests -p 'test_*.py' -v
 编排器只有在两端的 TLS Exporter 数字校验码一致后才确认配对，随后使用正常的配对和
 Access 审批命令，不会绕过身份认证或权限检查。
 
-隐私遮罩及可能影响工作站状态的测试还要求显式设置环境变量
-`WRC_RUN_DESTRUCTIVE_AUTOMATION=1`。普通 CI 工作流绝不会启用这些测试。
+隐私遮罩测试还要求显式设置 `WRC_RUN_PRIVACY_E2E=1`；真实锁屏等测试要求更严格的
+`WRC_RUN_DESTRUCTIVE_AUTOMATION=1`。普通 CI 工作流绝不会启用这两类测试。跨进程隐私
+测试会复用隔离 profile 验证设备身份和偏好，再在最终测试进程退出时删除临时 CNG 密钥。
 
 人工验收时可从仓库根目录运行统一脚本。默认会先复制一份不含 Driver 的临时 Release，
 确认主程序存活且没有发现文件，再运行连接、审批、推流和断开的双进程测试；临时副本、
@@ -177,4 +233,4 @@ Runner 定义 `automation-e2e` 任务。只有仓库变量 `WRC_ENABLE_AUTOMATIO
 - 所有路由都不能调用任意 QObject 槽、JavaScript、Shell 或动态库路径。
 - 自动化接口不会通过信令或 WebRTC DataChannel 暴露给远端。
 - 远程配对、Access 审批和权限强制逻辑保持不变。
-- 正式对外分发包应使用 `WRC_BUILD_AUTOMATION_DRIVER=OFF`；开发 Release 目录保留 DLL。
+- 正式对外分发包必须使用 `production-release`；开发 Release 目录保留 DLL。

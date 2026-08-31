@@ -752,7 +752,9 @@ export function DesktopPage() {
   const shutdownTimedOut = state.webrtcState === "ShutdownTimedOut";
   const sessionUnavailable = reconnecting || retrying || sessionEnded || state.webrtcState === "Stopping" || shutdownTimedOut;
   const qualityPresets = {
-    auto: { fps: 30, width: 1280, height: 720, bitrateKbps: 3000 },
+    // Frame rate is an independent setting; presets must not carry "fps" or
+    // they would reset the user's chosen frame rate on every desktop mount.
+    auto: { width: 1280, height: 720, bitrateKbps: 3000 },
   };
 
   const formatElapsed = (seconds) => {

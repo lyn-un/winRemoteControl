@@ -127,13 +127,15 @@ def launch_process(
     executable: str | Path,
     profile: str | Path,
     extra_arguments: list[str] | tuple[str, ...] | None = None,
+    automation_test_profile: bool = True,
 ) -> subprocess.Popen[bytes]:
     arguments = [
         str(Path(executable).resolve()),
         "--data-dir",
         str(Path(profile).resolve()),
-        "--automation-test-profile",
     ]
+    if automation_test_profile:
+        arguments.append("--automation-test-profile")
     arguments.extend(extra_arguments or ())
     return subprocess.Popen(
         arguments,

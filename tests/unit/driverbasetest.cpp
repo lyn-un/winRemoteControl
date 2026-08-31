@@ -1,5 +1,6 @@
 #include "automation/driver/base/commandcontext.h"
 #include "automation/driver/base/httpserver.h"
+#include "automation/driver/base/idempotencystore.h"
 #include "automation/driver/base/requestparser.h"
 #include "automation/driver/base/requestrouter.h"
 #include "automation/driver/base/sessionmanager.h"
@@ -11,6 +12,7 @@
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QEventLoop>
 #include <QtCore/QFileInfo>
+#include <QtCore/QJsonArray>
 #include <QtCore/QTemporaryDir>
 #include <QtCore/QThread>
 #include <QtNetwork/QHostAddress>
@@ -102,7 +104,8 @@ namespace
 		const QList<KDriverStatus> statuses{
 			OkDriverStatus, InvalidArgumentDriverStatus, InvalidSessionIdDriverStatus,
 			UnknownCommandDriverStatus, CommandDisabledDriverStatus, CommandBusyDriverStatus,
-			CommandTimeoutDriverStatus, UnsupportedOperationDriverStatus, InternalErrorDriverStatus
+			CommandTimeoutDriverStatus, CommandExecutionStartedDriverStatus,
+			UnsupportedOperationDriverStatus, InternalErrorDriverStatus
 		};
 		for (const KDriverStatus status : statuses)
 		{
@@ -115,6 +118,102 @@ namespace
 			&& !context.complete(DriverSuccessResponse(QJsonObject()))
 			&& !context.timeout(response),
 			QStringLiteral("command context completes exactly once"));
+	}
+
+	void TestIdempotencyStore()
+	{
+		KDriverIdempotencyStore store;
+		const QJsonObject firstArguments{
+			{QStringLiteral("nested"), QJsonObject{
+				{QStringLiteral("z"), 1}, {QStringLiteral("a"), true}}},
+			{QStringLiteral("value"), 7}
+		};
+		const QJsonObject reorderedArguments{
+			{QStringLiteral("value"), 7},
+			{QStringLiteral("nested"), QJsonObject{
+				{QStringLiteral("a"), true}, {QStringLiteral("z"), 1}}}
+		};
+		const QByteArray canonical =
+			KDriverIdempotencyStore::canonicalArguments(firstArguments);
+		Check(canonical
+			== KDriverIdempotencyStore::canonicalArguments(reorderedArguments),
+			QStringLiteral("canonical arguments ignore object insertion order"));
+		const QJsonObject orderedArray{
+			{QStringLiteral("items"), QJsonArray{1, 2}}
+		};
+		const QJsonObject reversedArray{
+			{QStringLiteral("items"), QJsonArray{2, 1}}
+		};
+		Check(KDriverIdempotencyStore::canonicalArguments(orderedArray)
+			!= KDriverIdempotencyStore::canonicalArguments(reversedArray),
+			QStringLiteral("canonical arguments preserve array order"));
+		Check(store.create(QStringLiteral("operation-1"),
+			QStringLiteral("session.disconnect"), canonical, 41, 1000),
+			QStringLiteral("idempotency record is created"));
+		Check(store.markStarted(41, 1100),
+			QStringLiteral("pending idempotency record enters started state"));
+		const KDriverIdempotencyRecord *pStarted = store.record(
+			QStringLiteral("operation-1"));
+		Check(pStarted != nullptr
+			&& pStarted->state == StartedDriverIdempotencyState,
+			QStringLiteral("started state is queryable independently of a session"));
+		const QJsonObject finalResponse = DriverSuccessResponse(QJsonObject{
+			{QStringLiteral("disconnected"), true}
+		});
+		Check(store.complete(41, finalResponse, 202, 1200),
+			QStringLiteral("late host completion is cached"));
+		const KDriverIdempotencyRecord *pCompleted = store.record(
+			QStringLiteral("operation-1"));
+		Check(pCompleted != nullptr
+			&& pCompleted->state == CompletedDriverIdempotencyState
+			&& pCompleted->response == finalResponse
+			&& pCompleted->nHttpStatusCode == 202,
+			QStringLiteral("completed result retains response and HTTP status"));
+		const KDriverIdempotencyCleanupResult cleanup = store.collectExpired(
+			1200 + KDriverIdempotencyStore::kRecordTtlMs);
+		Check(cleanup.nCompletedCount == 1
+			&& cleanup.vecHostRequestIds == QVector<quint64>{41}
+			&& store.size() == 0,
+			QStringLiteral("completed record expires using monotonic elapsed time"));
+
+		Check(store.create(QStringLiteral("retryable"), QStringLiteral("test"),
+			QByteArrayLiteral("{}"), 42, 2000)
+			&& store.removeByHostRequestId(42)
+			&& store.record(QStringLiteral("retryable")) == nullptr,
+			QStringLiteral("unstarted timeout removes the record for safe retry"));
+
+		KDriverIdempotencyStore capacityStore;
+		for (int nIndex = 0;
+			nIndex < KDriverIdempotencyStore::kMaximumRecordCount; ++nIndex)
+		{
+			Check(capacityStore.create(QStringLiteral("active-%1").arg(nIndex),
+				QStringLiteral("test"), QByteArrayLiteral("{}"),
+				static_cast<quint64>(nIndex + 1), nIndex),
+				QStringLiteral("active idempotency record fits within capacity"));
+		}
+		Check(!capacityStore.create(QStringLiteral("overflow"), QStringLiteral("test"),
+			QByteArrayLiteral("{}"), 2000, 2000),
+			QStringLiteral("capacity never evicts pending records"));
+		Check(capacityStore.complete(1, finalResponse, 200, 2001)
+			&& capacityStore.create(QStringLiteral("replacement"), QStringLiteral("test"),
+				QByteArrayLiteral("{}"), 2001, 2002)
+			&& capacityStore.record(QStringLiteral("active-0")) == nullptr,
+			QStringLiteral("capacity evicts the oldest completed record first"));
+
+		KDriverIdempotencyStore activeExpiryStore;
+		Check(activeExpiryStore.create(QStringLiteral("pending"), QStringLiteral("test"),
+			QByteArrayLiteral("{}"), 3001, 0)
+			&& activeExpiryStore.create(QStringLiteral("started"), QStringLiteral("test"),
+				QByteArrayLiteral("{}"), 3002, 0)
+			&& activeExpiryStore.markStarted(3002, 1),
+			QStringLiteral("active expiry records are prepared"));
+		const KDriverIdempotencyCleanupResult activeCleanup =
+			activeExpiryStore.collectExpired(KDriverIdempotencyStore::kRecordTtlMs + 1);
+		Check(activeCleanup.nPendingCount == 1 && activeCleanup.nStartedCount == 1
+			&& activeCleanup.vecHostRequestIds.contains(3001)
+			&& activeCleanup.vecHostRequestIds.contains(3002)
+			&& activeExpiryStore.size() == 0,
+			QStringLiteral("stuck pending and started records expire only after TTL"));
 	}
 
 	QByteArray SendHttpRequest(quint16 nPort, const QByteArray &request)
@@ -212,6 +311,7 @@ int main(int nArgc, char *pArgv[])
 	QCoreApplication application(nArgc, pArgv);
 	TestParserAndRouter();
 	TestSessionsAndStatus();
+	TestIdempotencyStore();
 	TestHttpServer();
 	if (g_nFailureCount == 0)
 		qInfo() << "All driver base tests passed";

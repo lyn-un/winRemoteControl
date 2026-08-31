@@ -31,7 +31,7 @@ def main() -> int:
             if arguments.operation == "state":
                 result = session.get_state()
             elif arguments.operation == "events":
-                result = session.get_events(arguments.since_sequence)
+                result = session.get_events_since(arguments.since_sequence)
             else:
                 command_arguments = json.loads(arguments.arguments)
                 if not isinstance(command_arguments, dict):

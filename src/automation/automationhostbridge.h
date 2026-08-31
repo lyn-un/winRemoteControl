@@ -5,6 +5,7 @@
 #include "core/privacy/privacytypes.h"
 
 #include <QtCore/QJsonObject>
+#include <QtCore/QJsonArray>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QList>
 #include <QtCore/QObject>
@@ -14,6 +15,13 @@
 
 class KApplicationCommandRegistry;
 class KSessionController;
+class KSessionCoordinator;
+class KDeviceDiscoveryViewModel;
+class KRecentDeviceService;
+class KApplicationSettingsService;
+class KClipboardSyncService;
+class KTerminalSessionService;
+class KFileTransferSessionService;
 struct KNegotiatedCapabilities;
 struct KSessionError;
 
@@ -32,6 +40,13 @@ public:
 	KAutomationHostBridge &operator=(const KAutomationHostBridge &) = delete;
 
 	const KWrcDriverHostApiV2 *hostApi() const;
+	void observeApplicationFeatures(KSessionCoordinator *pSessionCoordinator,
+		KDeviceDiscoveryViewModel *pDiscoveryViewModel,
+		KRecentDeviceService *pRecentDeviceService,
+		KApplicationSettingsService *pSettingsService,
+		KClipboardSyncService *pClipboardService,
+		KTerminalSessionService *pTerminalService,
+		KFileTransferSessionService *pFileTransferService);
 	void setHostReady();
 	void stopAcceptingRequests();
 
@@ -115,6 +130,17 @@ private:
 	QJsonObject m_currentError;
 	QJsonObject m_lastError;
 	QStringList m_negotiatedCapabilities;
+	QJsonArray m_lanDevices;
+	QJsonArray m_recentDevices;
+	QJsonArray m_trustedDevices;
+	QJsonObject m_applicationSettings;
+	QJsonObject m_clipboardState;
+	QJsonObject m_terminalState;
+	QJsonObject m_fileTransferState;
+	QJsonObject m_localFilePane;
+	QJsonObject m_remoteFilePane;
+	QJsonArray m_fileTransferTasks;
+	QJsonObject m_fileTransferConflict;
 	KPrivacyModeStatus m_privacyModeStatus;
 	KPostSessionActionStatus m_postSessionActionStatus;
 	QList<KAutomationEvent> m_events;

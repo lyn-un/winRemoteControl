@@ -90,12 +90,8 @@ jobs:
           npm.cmd run build --prefix frontend
       - name: Configure normal Release application
         run: cmake --preset release
-      - name: Build normal Release without the driver
-        run: cmake --build --preset release --target winRemoteControl
-      - name: Enable and build the optional automation driver
-        run: |
-          cmake --preset release -DWRC_BUILD_AUTOMATION_DRIVER=ON
-          cmake --build --preset release --target wrcdriver
+      - name: Build development Release application and automation driver
+        run: cmake --build --preset release --target winRemoteControl wrcdriver
       - name: Run interactive two-process connection tests
         shell: pwsh
         run: |

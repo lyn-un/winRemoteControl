@@ -33,8 +33,14 @@ class WrcApplication:
         profile: str | Path,
         role: str | None = None,
         extra_arguments: list[str] | tuple[str, ...] | None = None,
+        automation_test_profile: bool = True,
     ) -> "WrcApplication":
-        process = launch_process(executable, profile, extra_arguments)
+        process = launch_process(
+            executable,
+            profile,
+            extra_arguments,
+            automation_test_profile=automation_test_profile,
+        )
         try:
             application = cls(DriverTransport(wait_for_endpoint(process.pid)), process)
             application.wait_until_ready()

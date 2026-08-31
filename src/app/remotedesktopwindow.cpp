@@ -19,24 +19,22 @@ namespace
 {
 	constexpr int kUltraFastWidth = 1280;
 	constexpr int kUltraFastHeight = 720;
-	constexpr int kUltraFastFps = 60;
 	constexpr int kUltraFastBitrateKbps = 4000;
 	constexpr int kAutoWidth = 1280;
 	constexpr int kAutoHeight = 720;
-	constexpr int kAutoFps = 30;
 	constexpr int kAutoBitrateKbps = 3000;
 	constexpr int kOriginalWidth = 0;
 	constexpr int kOriginalHeight = 0;
-	constexpr int kOriginalFps = 30;
 	constexpr int kOriginalBitrateKbps = 12000;
 	constexpr int kHdWidth = 1920;
 	constexpr int kHdHeight = 1080;
-	constexpr int kHdFps = 30;
 	constexpr int kHdBitrateKbps = 6000;
 	constexpr int kSmoothWidth = 1280;
 	constexpr int kSmoothHeight = 720;
-	constexpr int kSmoothFps = 30;
 	constexpr int kSmoothBitrateKbps = 2000;
+	// Offered target frame rates, highest first. Entries above the negotiated
+	// capability limit are disabled in the menu.
+	constexpr int kFrameRateChoices[] = { 144, 120, 90, 60, 30 };
 	constexpr double kMaxInitialWindowScale = 0.9;
 	constexpr int kMinimumWindowWidth = 640;
 	constexpr int kMinimumWindowHeight = 420;
@@ -89,7 +87,12 @@ void KRemoteDesktopWindow::handleFrameReady(int nWidth,
 
 void KRemoteDesktopWindow::handleSessionStateChanged(KSessionState state)
 {
+	// A full disconnect starts the next session from the default configuration;
+	// recovery from Reconnecting keeps the selected settings.
+	const bool bSessionEnded = state == IdleSessionState && m_sessionState != IdleSessionState;
 	m_sessionState = state;
+	if (bSessionEnded)
+		m_streamConfig = KStreamConfig();
 	const bool bAvailable = state == ConnectedSessionState || state == StreamingSessionState;
 	m_bSessionAvailable = bAvailable;
 	if (!m_bSessionAvailable)
@@ -227,6 +230,7 @@ void KRemoteDesktopWindow::updatePreviewRect(const QRect &rect)
 void KRemoteDesktopWindow::showControlCenterMenu(const QPoint &pos)
 {
 	QMenu menu(this);
+	menu.setToolTipsVisible(true);
 	menu.setStyleSheet(QStringLiteral(
 		"QMenu { background: #f7fbfc; color: #25343a; border: 1px solid #c7d9dd; "
 		"border-radius: 7px; padding: 6px; }"
@@ -234,31 +238,62 @@ void KRemoteDesktopWindow::showControlCenterMenu(const QPoint &pos)
 		"QMenu::item:selected { background: #dce8eb; color: #315f6b; }"
 		"QMenu::separator { height: 1px; background: #cfdee2; margin: 5px 8px; }"));
 	QMenu *pQualityMenu = menu.addMenu(QStringLiteral("画质"));
+	// Quality presets only change resolution and bitrate; the frame rate is an
+	// independent setting and must survive preset switches.
 	pQualityMenu->addAction(QStringLiteral("极速"), this,
 		[this]()
 		{
-			applyStreamConfig(kUltraFastWidth, kUltraFastHeight, kUltraFastFps, kUltraFastBitrateKbps);
+			applyQualityPreset(kUltraFastWidth, kUltraFastHeight, kUltraFastBitrateKbps);
 		});
 	pQualityMenu->addAction(QStringLiteral("自动"), this,
 		[this]()
 		{
-			applyStreamConfig(kAutoWidth, kAutoHeight, kAutoFps, kAutoBitrateKbps);
+			applyQualityPreset(kAutoWidth, kAutoHeight, kAutoBitrateKbps);
 		});
 	pQualityMenu->addAction(QStringLiteral("原画"), this,
 		[this]()
 		{
-			applyStreamConfig(kOriginalWidth, kOriginalHeight, kOriginalFps, kOriginalBitrateKbps);
+			applyQualityPreset(kOriginalWidth, kOriginalHeight, kOriginalBitrateKbps);
 		});
 	pQualityMenu->addAction(QStringLiteral("高清"), this,
 		[this]()
 		{
-			applyStreamConfig(kHdWidth, kHdHeight, kHdFps, kHdBitrateKbps);
+			applyQualityPreset(kHdWidth, kHdHeight, kHdBitrateKbps);
 		});
 	pQualityMenu->addAction(QStringLiteral("流畅"), this,
 		[this]()
 		{
-			applyStreamConfig(kSmoothWidth, kSmoothHeight, kSmoothFps, kSmoothBitrateKbps);
+			applyQualityPreset(kSmoothWidth, kSmoothHeight, kSmoothBitrateKbps);
 		});
+	pQualityMenu->addSeparator();
+
+	QMenu *pFrameRateMenu = pQualityMenu->addMenu(QStringLiteral("帧率"));
+	QActionGroup *pFrameRateGroup = new QActionGroup(pFrameRateMenu);
+	pFrameRateGroup->setExclusive(true);
+	const int nNegotiatedFps = m_capabilities.bValid ? m_capabilities.nMaximumFps : 0;
+	for (const int nChoiceFps : kFrameRateChoices)
+	{
+		QAction *pFpsAction = pFrameRateMenu->addAction(QStringLiteral("%1 帧").arg(nChoiceFps));
+		pFpsAction->setCheckable(true);
+		pFpsAction->setChecked(m_streamConfig.nFps == nChoiceFps);
+		if (nNegotiatedFps <= 0)
+		{
+			pFpsAction->setEnabled(false);
+			pFpsAction->setToolTip(QStringLiteral("完成会话能力协商后可选"));
+		}
+		else if (nChoiceFps > nNegotiatedFps)
+		{
+			pFpsAction->setEnabled(false);
+			pFpsAction->setToolTip(QStringLiteral(
+				"受远端能力、显示器刷新率或当前编码路径限制"));
+		}
+		pFrameRateGroup->addAction(pFpsAction);
+		connect(pFpsAction, &QAction::triggered, this,
+			[this, nChoiceFps]()
+			{
+				applyFrameRate(nChoiceFps);
+			});
+	}
 
 	const bool bSecurityAvailable = m_sessionState == StreamingSessionState
 		|| m_sessionState == ReconnectingSessionState;
@@ -359,12 +394,17 @@ void KRemoteDesktopWindow::showSecurityCommandError(const QString &strErrorCode)
 	QToolTip::showText(QCursor::pos(), strMessage, this);
 }
 
-void KRemoteDesktopWindow::applyStreamConfig(int nWidth, int nHeight, int nFps, int nBitrateKbps)
+void KRemoteDesktopWindow::applyQualityPreset(int nWidth, int nHeight, int nBitrateKbps)
 {
 	m_streamConfig.nWidth = nWidth;
 	m_streamConfig.nHeight = nHeight;
-	m_streamConfig.nFps = nFps;
 	m_streamConfig.nBitrateKbps = nBitrateKbps;
+	emit streamConfigRequested(m_streamConfig);
+}
+
+void KRemoteDesktopWindow::applyFrameRate(int nFps)
+{
+	m_streamConfig.nFps = nFps;
 	emit streamConfigRequested(m_streamConfig);
 }
 

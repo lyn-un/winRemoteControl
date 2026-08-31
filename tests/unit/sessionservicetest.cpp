@@ -2,6 +2,7 @@
 #include "adapters/windows/security/windowsdeviceidentityprovider.h"
 #include "core/input/inputinjectorinterface.h"
 #include "core/protocol/accessmessage.h"
+#include "core/protocol/protocolconstraints.h"
 #include "core/session/deviceinfoprovider.h"
 #include "core/transport/remotepeertransport.h"
 #include "session/sessioncoordinator.h"
@@ -108,6 +109,10 @@ namespace
 			info.nScreenHeight = 1080;
 			return info;
 		}
+
+		int maximumFps() override { return nMaximumFps; }
+
+		int nMaximumFps = 0;
 	};
 
 	class KFakeInputInjector final : public IKInputInjector
@@ -453,7 +458,10 @@ namespace
 		KFakeRemotePeerTransport *pTransport = spTransport.get();
 		auto spSignaling = std::make_unique<KTcpSignalingTransport>();
 		KTcpSignalingTransport *pSignaling = spSignaling.get();
-		KSessionCoordinator service(std::make_unique<KFakeDeviceInfoProvider>(),
+		auto spDeviceInfoProvider = std::make_unique<KFakeDeviceInfoProvider>();
+		KFakeDeviceInfoProvider *pDeviceInfoProvider = spDeviceInfoProvider.get();
+		pDeviceInfoProvider->nMaximumFps = 90;
+		KSessionCoordinator service(std::move(spDeviceInfoProvider),
 			std::move(spInputInjector),
 			std::move(spTransport),
 			std::move(spSignaling),
@@ -543,6 +551,13 @@ namespace
 			QStringLiteral("incoming session pauses discovery availability"));
 		pTransport->openSessionChannel();
 		pTransport->deliverDefaultCapabilities();
+		const auto capabilitiesIterator = std::find_if(
+			pTransport->sentSessionMessages.cbegin(), pTransport->sentSessionMessages.cend(),
+			[](const KSessionMessage &message)
+			{ return message.type == CapabilitiesSessionMessageType; });
+		check(capabilitiesIterator != pTransport->sentSessionMessages.cend()
+			&& capabilitiesIterator->capabilities.nMaximumFps == 90,
+			QStringLiteral("local capabilities publish the provider frame rate limit"));
 		check(pTransport->bInputRealtimeEnabled,
 			QStringLiteral("capability negotiation enables realtime pointer input"));
 		pTransport->openInputChannel();
@@ -724,6 +739,14 @@ namespace
 		check(pControllerPeer->nCreateOfferCount == 1,
 			QStringLiteral("duplicate approval does not create another offer"));
 		pControllerPeer->openSessionChannel();
+		const auto controllerCapabilitiesIterator = std::find_if(
+			pControllerPeer->sentSessionMessages.cbegin(), pControllerPeer->sentSessionMessages.cend(),
+			[](const KSessionMessage &message)
+			{ return message.type == CapabilitiesSessionMessageType; });
+		check(controllerCapabilitiesIterator != pControllerPeer->sentSessionMessages.cend()
+			&& controllerCapabilitiesIterator->capabilities.nMaximumFps
+				== KProtocolConstraints::kMaximumStreamFps,
+			QStringLiteral("unknown display refresh rate falls back to the protocol frame rate limit"));
 		pControllerPeer->deliverDefaultCapabilities();
 		pControllerPeer->sessionSendStatus =
 			KRemotePeerTransport::SessionMessageQueueOverflow;

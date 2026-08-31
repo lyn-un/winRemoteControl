@@ -4,6 +4,7 @@
 #include "core/media/videoencoderpreference.h"
 
 #include <QtCore/QObject>
+#include <QtCore/QPointer>
 #include <QtCore/QString>
 
 #include <memory>
@@ -26,6 +27,7 @@ class KClipboardSyncService;
 class KTerminalSessionService;
 class KFileTransferSessionService;
 class QTimer;
+class QWidget;
 
 class KApplicationComposition : public QObject
 {
@@ -72,6 +74,9 @@ private:
 	KClipboardSyncService *m_pClipboardSyncService = nullptr;
 	KTerminalSessionService *m_pTerminalSessionService = nullptr;
 	KFileTransferSessionService *m_pFileTransferSessionService = nullptr;
+	QPointer<QWidget> m_pMainWindow;
+	QPointer<KRemoteDesktopWindow> m_pRemoteDesktopWindow;
+	QPointer<KFileTransferWindow> m_pFileTransferWindow;
 	QTimer *m_pShutdownDeadlineTimer = nullptr;
 	QString m_strFileTransferStatus = QStringLiteral("closed");
 	QString m_strFileTransferDeviceName;

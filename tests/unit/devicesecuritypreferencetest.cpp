@@ -362,7 +362,7 @@ namespace
 			QStringLiteral("service caches actual runtime status for late windows"));
 	}
 
-	void TestProcessRestartAndDeviceIsolation()
+	void TestServiceReconstructionAndDeviceIsolation()
 	{
 		QTemporaryDir temporaryDir;
 		const QString strFilePath = temporaryDir.filePath(
@@ -428,7 +428,7 @@ int main(int nArgc, char *pArgv[])
 	TestAutoApplyAndUserPersistence();
 	TestDeviceGenerationCapabilityAndRevocationBoundaries();
 	TestCachedRuntimeStatus();
-	TestProcessRestartAndDeviceIsolation();
+	TestServiceReconstructionAndDeviceIsolation();
 	if (g_nFailureCount == 0)
 		qInfo() << "All device security preference tests passed";
 	return g_nFailureCount == 0 ? 0 : 1;

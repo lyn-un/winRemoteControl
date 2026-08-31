@@ -302,6 +302,19 @@ namespace
 			&& configDecoded.streamConfig.nBitrateKbps == 5000,
 			QStringLiteral("stream config round-trips"));
 
+		KSessionMessage highFpsSource;
+		highFpsSource.type = StreamConfigSessionMessageType;
+		highFpsSource.strRequestId = configSource.strRequestId;
+		highFpsSource.streamConfig.nFps = KProtocolConstraints::kMaximumStreamFps;
+		highFpsSource.streamConfig.nWidth = 1920;
+		highFpsSource.streamConfig.nHeight = 1080;
+		highFpsSource.streamConfig.nBitrateKbps = 8000;
+		KSessionMessage highFpsDecoded;
+		check(KSessionMessageCodec::decode(KSessionMessageCodec::encode(highFpsSource),
+				&highFpsDecoded, nullptr)
+			&& highFpsDecoded.streamConfig.nFps == KProtocolConstraints::kMaximumStreamFps,
+			QStringLiteral("protocol-maximum stream fps round-trips"));
+
 		KSessionMessage resultSource;
 		resultSource.type = CommandResultSessionMessageType;
 		resultSource.strRequestId = configSource.strRequestId;
@@ -346,10 +359,15 @@ namespace
 			&message, nullptr),
 			QStringLiteral("unsupported session version is rejected"));
 		check(!KSessionMessageCodec::decode(
-			QStringLiteral("{\"version\":1,\"type\":\"streamConfig\",\"fps\":61,"
+			QStringLiteral("{\"version\":1,\"type\":\"streamConfig\",\"fps\":145,"
 				"\"width\":1280,\"height\":720,\"bitrateKbps\":3000}"),
 			&message, nullptr),
 			QStringLiteral("out-of-range stream config is rejected"));
+		check(!KSessionMessageCodec::decode(
+			QStringLiteral("{\"version\":1,\"type\":\"streamConfig\",\"fps\":0,"
+				"\"width\":1280,\"height\":720,\"bitrateKbps\":3000}"),
+			&message, nullptr),
+			QStringLiteral("zero stream fps is rejected"));
 		check(!KSessionMessageCodec::decode(
 			QString(KProtocolConstraints::kMaximumSessionMessageBytes + 1, QLatin1Char('x')),
 			&message, nullptr),
@@ -678,6 +696,7 @@ namespace
 			QStringLiteral("disabled"), QStringLiteral("privacyoverlay")
 		};
 		source.capabilities.bPostSessionLock = true;
+		source.capabilities.nMaximumFps = KProtocolConstraints::kMaximumStreamFps;
 		KMonitorCapability monitor;
 		monitor.strId = QStringLiteral("default");
 		monitor.nWidth = 1920;
@@ -693,6 +712,7 @@ namespace
 			&& decoded.capabilities.supportedPrivacyModes.contains(
 				QStringLiteral("privacyoverlay"))
 			&& decoded.capabilities.bPostSessionLock
+			&& decoded.capabilities.nMaximumFps == KProtocolConstraints::kMaximumStreamFps
 			&& decoded.capabilities.monitorList.size() == 1,
 			QStringLiteral("session capabilities round-trip"));
 

@@ -1,3 +1,4 @@
+import base64
 import json
 import io
 import sys
@@ -119,6 +120,7 @@ class _FakeEventTransport:
         return {
             "events": [event for event in events if int(event["sequence"]) > since],
             "hasGap": False,
+            "nextSequence": "3",
         }
 
 
@@ -130,6 +132,22 @@ class _FakeGapTransport:
             "oldestSequence": "20",
             "nextSequence": "31",
         }
+
+
+class _FakeNextSequenceTransport:
+    def request(self, method, path, body=None):
+        return {"events": [], "hasGap": False, "nextSequence": "5"}
+
+
+class _FakeFeatureTransport:
+    def __init__(self):
+        self.last_body = None
+
+    def request(self, method, path, body=None):
+        if method == "GET":
+            return {"supportedCommands": ["terminal.input", "session.disconnect"]}
+        self.last_body = body
+        return body
 
 
 class _FakeReadyTransport:
@@ -244,6 +262,20 @@ class PythonSdkTests(unittest.TestCase):
         )
         self.assertEqual(result["idempotencyKey"], "operation-1")
 
+    def test_supported_commands_and_terminal_input_helper(self):
+        transport = _FakeFeatureTransport()
+        session = WrcSession(transport, "session-id")
+        self.assertEqual(
+            session.get_supported_commands(),
+            ["terminal.input", "session.disconnect"],
+        )
+        result = session.send_terminal_input("echo 测试\r\n")
+        self.assertEqual(result["id"], "terminal.input")
+        self.assertEqual(
+            result["arguments"]["dataBase64"],
+            base64.b64encode("echo 测试\r\n".encode("utf-8")).decode("ascii"),
+        )
+
     def test_application_waits_until_host_is_ready(self):
         transport = _FakeReadyTransport()
         application = WrcApplication(transport)
@@ -282,19 +314,61 @@ class PythonSdkTests(unittest.TestCase):
     def test_wait_for_event_does_not_return_an_old_event_twice(self):
         session = WrcSession(_FakeEventTransport(), "session-id")
         self.assertEqual(session.wait_for_event("first", timeout=0.1)["sequence"], "1")
-        self.assertEqual(session.wait_for_event("second", timeout=0.1)["sequence"], "2")
+        self.assertEqual(session.event_cursor, 2)
+        with self.assertRaises(WaitTimeout):
+            session.wait_for_event("first", timeout=0.01)
 
     def test_wait_for_event_starts_at_session_baseline(self):
         session = WrcSession(_FakeEventTransport(), "session-id", event_cursor=1)
         self.assertEqual(session.wait_for_event("second", timeout=0.1)["sequence"], "2")
 
     def test_wait_for_event_reports_history_gap(self):
-        session = WrcSession(_FakeGapTransport(), "session-id", event_cursor=10)
+        session = WrcSession(
+            _FakeGapTransport(), "session-id", event_cursor=10, session_generation=7
+        )
         with self.assertRaises(EventHistoryLost) as context:
             session.wait_for_event("pairing.requested", timeout=0.1)
         self.assertEqual(context.exception.requested_cursor, 10)
         self.assertEqual(context.exception.oldest_sequence, 20)
         self.assertEqual(context.exception.next_sequence, 31)
+        self.assertEqual(context.exception.session_generation, 7)
+        self.assertEqual(session.event_cursor, 10)
+
+    def test_default_event_poll_uses_and_advances_session_cursor(self):
+        session = WrcSession(_FakeEventTransport(), "session-id", event_cursor=1)
+        first = session.get_events()
+        self.assertEqual([event["type"] for event in first["events"]], ["second"])
+        self.assertEqual(session.event_cursor, 2)
+        second = session.get_events()
+        self.assertEqual(second["events"], [])
+        self.assertEqual(session.event_cursor, 2)
+
+    def test_explicit_event_query_does_not_change_session_cursor(self):
+        session = WrcSession(_FakeEventTransport(), "session-id", event_cursor=2)
+        history = session.get_events(0)
+        self.assertEqual(len(history["events"]), 2)
+        self.assertEqual(session.event_cursor, 2)
+        session.reset_event_cursor(1)
+        self.assertEqual(session.event_cursor, 1)
+
+    def test_event_poll_uses_next_sequence_minus_one(self):
+        session = WrcSession(_FakeNextSequenceTransport(), "session-id", event_cursor=2)
+        session.poll_events()
+        self.assertEqual(session.event_cursor, 4)
+
+    def test_launch_process_can_preserve_an_isolated_test_identity(self):
+        fake_process = mock.Mock()
+        with mock.patch(
+            "wrcdriver.process.subprocess.Popen", return_value=fake_process
+        ) as popen:
+            process_module.launch_process(
+                "winRemoteControl.exe",
+                "profile",
+                automation_test_profile=False,
+            )
+        arguments = popen.call_args.args[0]
+        self.assertIn("--data-dir", arguments)
+        self.assertNotIn("--automation-test-profile", arguments)
 
     def test_frame_progress_requires_two_distinct_new_samples(self):
         now_ms = int(__import__("time").time() * 1000)

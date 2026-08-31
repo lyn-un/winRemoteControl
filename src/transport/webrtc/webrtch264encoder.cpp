@@ -1,6 +1,7 @@
 #include "transport/webrtc/webrtch264encoder.h"
 
 #include "common/latencytracelogger.h"
+#include "core/protocol/protocolconstraints.h"
 
 #include <QtCore/QDateTime>
 #include <QtCore/QElapsedTimer>
@@ -65,7 +66,9 @@ namespace
 
 	static int clampFps(int nFps)
 	{
-		return std::clamp(nFps, 1, 60);
+		return std::clamp(nFps,
+			KProtocolConstraints::kMinimumStreamFps,
+			KProtocolConstraints::kMaximumStreamFps);
 	}
 
 	static int bitrateKbpsFromCodec(const webrtc::VideoCodec *pCodecSettings)
@@ -317,8 +320,48 @@ void KWebRtcH264Encoder::SetRates(const webrtc::VideoEncoder::RateControlParamet
 		m_encoder.setBitrateKbps(m_nBitrateKbps);
 	}
 
-	if (parameters.framerate_fps > 0.0)
-		m_nFps = clampFps(static_cast<int>(std::round(parameters.framerate_fps)));
+	if (parameters.framerate_fps <= 0.0)
+		return;
+
+	const int nRequestedFps = clampFps(static_cast<int>(std::round(parameters.framerate_fps)));
+	if (nRequestedFps == m_nFps)
+		return;
+
+	if (!m_encoder.isOpen())
+	{
+		// InitEncode will pick up the new frame rate.
+		m_nFps = nRequestedFps;
+		return;
+	}
+
+	// A frame rate change must rebuild the underlying codec: time_base, GOP and
+	// the Media Foundation MFT are all fixed at open time. Encode() installs a
+	// fresh data callback before every frame, so a no-op callback is safe here.
+	QString strError;
+	if (m_encoder.openStream(m_nWidth,
+			m_nHeight,
+			nRequestedFps,
+			m_nBitrateKbps,
+			[](const QByteArray &)
+			{
+			},
+			&strError))
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controlled"),
+			QStringLiteral("h264_encoder_framerate_changed"),
+			QStringLiteral("oldFps=%1 newFps=%2 bitrateKbps=%3")
+				.arg(m_nFps)
+				.arg(nRequestedFps)
+				.arg(m_nBitrateKbps));
+		m_nFps = nRequestedFps;
+		m_bNeedKeyFrame = true;
+	}
+	else
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controlled"),
+			QStringLiteral("h264_encoder_framerate_change_failed"),
+			QStringLiteral("requestedFps=%1 error=%2").arg(nRequestedFps).arg(strError));
+	}
 }
 
 webrtc::VideoEncoder::EncoderInfo KWebRtcH264Encoder::GetEncoderInfo() const

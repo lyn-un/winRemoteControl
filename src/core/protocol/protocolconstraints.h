@@ -23,7 +23,7 @@ public:
 	static constexpr int kMaximumWheelDelta = 12000;
 	static constexpr int kMaximumTextInputBytes = 2048;
 	static constexpr int kMinimumStreamFps = 1;
-	static constexpr int kMaximumStreamFps = 60;
+	static constexpr int kMaximumStreamFps = 144;
 	static constexpr int kMaximumStreamWidth = 7680;
 	static constexpr int kMaximumStreamHeight = 4320;
 	static constexpr int kMinimumStreamBitrateKbps = 500;

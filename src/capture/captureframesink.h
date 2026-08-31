@@ -37,6 +37,8 @@ public:
 	void setStreamConfig(const KStreamConfig &config) override;
 	void setInputTraceState(quint64 nSeq, qint64 nInjectedMs) override;
 
+	KStreamConfig streamConfig() const;
+
 signals:
 	void decodedFrameReady(const KDecodedVideoFrame &frame);
 	void videoFrameReady(const KVideoFrame &frame);
@@ -50,7 +52,6 @@ private:
 		FailedFrameConversionResult
 	};
 
-	KStreamConfig streamConfig() const;
 	void inputTraceState(quint64 *pSeq, qint64 *pInjectedMs) const;
 	bool processRemoteFrame(KCaptureFrame &frame,
 		const KStreamConfig &config,

@@ -37,6 +37,38 @@ namespace
 		return KSessionStateMachine::roleName(role);
 	}
 
+	static int streamFpsLimit(const KCapabilitySessionFlow *pCapabilityFlow)
+	{
+		const KNegotiatedCapabilities &negotiated = pCapabilityFlow->negotiatedCapabilities();
+		return negotiated.bValid
+			? negotiated.nMaximumFps
+			: KProtocolConstraints::kMaximumStreamFps;
+	}
+
+	static void logStreamConfigChange(KSessionRole role,
+		const KStreamConfig &requestedConfig,
+		const KStreamConfig &effectiveConfig,
+		int nLimitFps)
+	{
+		KSessionTraceLogger::write(roleToString(role),
+			QStringLiteral("stream_config"),
+			QStringLiteral("stream_config_requested"),
+			-1,
+			QStringLiteral("width=%1 height=%2 fps=%3 bitrateKbps=%4")
+				.arg(requestedConfig.nWidth)
+				.arg(requestedConfig.nHeight)
+				.arg(requestedConfig.nFps)
+				.arg(requestedConfig.nBitrateKbps));
+		KSessionTraceLogger::write(roleToString(role),
+			QStringLiteral("stream_config"),
+			QStringLiteral("stream_config_applied"),
+			-1,
+			QStringLiteral("requestedFps=%1 effectiveFps=%2 limitFps=%3")
+				.arg(requestedConfig.nFps)
+				.arg(effectiveConfig.nFps)
+				.arg(nLimitFps));
+	}
+
 	static bool shouldTraceInputMessage(const KInputMessage &message)
 	{
 		return message.bTrace
@@ -822,6 +854,10 @@ void KSessionCoordinator::enterRemoteDesktop(const KStreamConfig &config)
 	message.type = StartStreamingSessionMessageType;
 	message.streamConfig = m_pMediaSessionController->constrainedConfig(config);
 	message.bHasStreamConfig = true;
+	logStreamConfigChange(m_sessionStateMachine.role(),
+		config,
+		message.streamConfig,
+		streamFpsLimit(m_pCapabilitySessionFlow));
 	sendSessionMessage(message);
 	m_sessionStateMachine.beginStreaming();
 	publishSessionState();
@@ -1164,6 +1200,10 @@ void KSessionCoordinator::sendStreamConfig(const KStreamConfig &config)
 	KSessionMessage message;
 	message.type = StreamConfigSessionMessageType;
 	message.streamConfig = m_pMediaSessionController->constrainedConfig(config);
+	logStreamConfigChange(m_sessionStateMachine.role(),
+		config,
+		message.streamConfig,
+		streamFpsLimit(m_pCapabilitySessionFlow));
 	sendSessionMessage(message);
 }
 
@@ -2073,7 +2113,15 @@ KSessionCapabilities KSessionCoordinator::localCapabilities() const
 	}
 	capabilities.nMaximumWidth = KProtocolConstraints::kMaximumStreamWidth;
 	capabilities.nMaximumHeight = KProtocolConstraints::kMaximumStreamHeight;
-	capabilities.nMaximumFps = KProtocolConstraints::kMaximumStreamFps;
+	// localMaximumFps = min(implementation limit, monitor refresh rate). The
+	// provider reports the active display refresh rate; 0 means unknown and
+	// falls back to the protocol implementation limit.
+	const int nLocalMaximumFps = m_spDeviceInfoProvider->maximumFps();
+	capabilities.nMaximumFps = nLocalMaximumFps > 0
+		? std::clamp(nLocalMaximumFps,
+			KProtocolConstraints::kMinimumStreamFps,
+			KProtocolConstraints::kMaximumStreamFps)
+		: KProtocolConstraints::kMaximumStreamFps;
 	capabilities.nMaximumBitrateKbps = KProtocolConstraints::kMaximumStreamBitrateKbps;
 	KMonitorCapability monitor;
 	monitor.strId = QStringLiteral("default");

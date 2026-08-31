@@ -30,6 +30,7 @@ class KWebRtcDataChannel;
 class KWebRtcCallbackGate;
 class KWebRtcLatencyProbe;
 class KWebRtcRemoteFrameProcessor;
+class KWebRtcPeerTestAccess;
 namespace webrtc
 {
 class RTCStatsReport;
@@ -211,6 +212,7 @@ private:
 
 	friend class KCreateSessionDescriptionObserver;
 	friend class KStatsCallback;
+	friend class KWebRtcPeerTestAccess;
 };
 
 #endif // _WINREMOTECONTROL_WEBRTCPEER_H_

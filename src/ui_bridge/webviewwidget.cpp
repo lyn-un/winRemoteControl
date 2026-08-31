@@ -1107,7 +1107,10 @@ void KWebViewWidget::handleWebMessage(const QString &strMessage)
 	{
 		const QJsonObject object = document.object();
 		KStreamConfig config;
-		config.nFps = object.value(QStringLiteral("fps")).toInt(config.nFps);
+		// The frame rate is an independent setting; a config without "fps"
+		// (for example a quality preset) keeps the current value, which the
+		// view model resolves from nFps == 0.
+		config.nFps = object.value(QStringLiteral("fps")).toInt(0);
 		config.nWidth = object.value(QStringLiteral("width")).toInt(config.nWidth);
 		config.nHeight = object.value(QStringLiteral("height")).toInt(config.nHeight);
 		config.nBitrateKbps = object.value(QStringLiteral("bitrateKbps")).toInt(config.nBitrateKbps);

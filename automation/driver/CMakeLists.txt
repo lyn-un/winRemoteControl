@@ -3,6 +3,8 @@ add_library(wrc_driver_base STATIC
 	base/commandcontext.h
 	base/httpserver.cpp
 	base/httpserver.h
+	base/idempotencystore.cpp
+	base/idempotencystore.h
 	base/requestparser.cpp
 	base/requestparser.h
 	base/requestrouter.cpp
@@ -67,6 +69,6 @@ if(WRC_BUILD_AUTOMATION_DRIVER)
 	set_target_properties(wrcdriver PROPERTIES
 		OUTPUT_NAME "wrcdriver"
 		RUNTIME_OUTPUT_DIRECTORY_RELEASE
-			"${PROJECT_SOURCE_DIR}/build/Release/automation"
+			"${WRC_RUNTIME_OUTPUT_DIRECTORY}/automation"
 	)
 endif()

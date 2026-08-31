@@ -27,6 +27,11 @@ option(WRC_BUILD_AUTOMATION_DRIVER
 	"Build the optional automation driver DLL" OFF)
 option(WRC_BUILD_RESOURCE_DIAGNOSTICS
 	"Build manual process resource diagnostic probes" OFF)
+option(WRC_VERIFY_PRODUCTION_RUNTIME
+	"Reject development-only files in the runtime output" OFF)
+set(WRC_RUNTIME_OUTPUT_DIRECTORY
+	"${CMAKE_CURRENT_SOURCE_DIR}/build/Release" CACHE PATH
+	"Directory containing deployable application runtime files")
 
 if(NOT CMAKE_CONFIGURATION_TYPES)
 	set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -104,6 +109,11 @@ add_library(wrc_command_application STATIC
 	src/commands/applicationcommandregistry.h
 	src/commands/builtincommands.cpp
 	src/commands/builtincommands.h
+	src/commands/devicebuiltincommands.cpp
+	src/commands/extendedbuiltincommands.cpp
+	src/commands/extendedbuiltincommands.h
+	src/commands/sessionfeaturebuiltincommands.cpp
+	src/commands/windowbuiltincommands.cpp
 )
 
 target_include_directories(wrc_command_application PUBLIC
@@ -182,7 +192,7 @@ add_dependencies(wrc_automation_loader_tests
 )
 add_test(NAME wrc_automation_loader_tests
 	COMMAND wrc_automation_loader_tests
-		"${CMAKE_CURRENT_SOURCE_DIR}/build/Release"
+		"${WRC_RUNTIME_OUTPUT_DIRECTORY}"
 		"${CMAKE_BINARY_DIR}/automation-fixtures/missing-exports"
 		"${CMAKE_BINARY_DIR}/automation-fixtures/bad-abi"
 )
@@ -681,7 +691,7 @@ add_executable(wrcTerminalRelay
 )
 
 set_target_properties(wrcTerminalRelay PROPERTIES
-	RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_SOURCE_DIR}/build/Release"
+	RUNTIME_OUTPUT_DIRECTORY_RELEASE "${WRC_RUNTIME_OUTPUT_DIRECTORY}"
 )
 
 target_compile_definitions(wrcTerminalRelay PRIVATE
@@ -985,7 +995,7 @@ qt_add_resources(winRemoteControl "branding"
 add_dependencies(winRemoteControl wrcTerminalRelay)
 
 set_target_properties(winRemoteControl PROPERTIES
-	RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_SOURCE_DIR}/build/Release"
+	RUNTIME_OUTPUT_DIRECTORY_RELEASE "${WRC_RUNTIME_OUTPUT_DIRECTORY}"
 )
 
 target_compile_definitions(winRemoteControl PRIVATE
@@ -1041,7 +1051,15 @@ if(WRC_BUILD_TESTS)
 		wrc_automation_host
 		wrc_core
 		wrc_session_contract
+		wrc_session_application
+		wrc_qt_presentation
+		wrc_recent_device_application
+		wrc_settings_application
+		wrc_clipboard_application
+		wrc_terminal_application
+		wrc_file_transfer_application
 		Qt6::Core
+		dwmapi
 	)
 	add_test(NAME wrc_automation_host_bridge_tests
 		COMMAND wrc_automation_host_bridge_tests)
@@ -1083,6 +1101,20 @@ if(WRC_BUILD_TESTS)
 	add_test(NAME wrc_application_command_registry_tests
 		COMMAND wrc_application_command_registry_tests)
 	set_tests_properties(wrc_application_command_registry_tests PROPERTIES
+		ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+	)
+
+	add_executable(wrc_extended_application_command_tests
+		tests/unit/extendedbuiltincommandtest.cpp
+	)
+	target_link_libraries(wrc_extended_application_command_tests PRIVATE
+		wrc_command_application
+		wrc_core
+		Qt6::Core
+	)
+	add_test(NAME wrc_extended_application_command_tests
+		COMMAND wrc_extended_application_command_tests)
+	set_tests_properties(wrc_extended_application_command_tests PROPERTIES
 		ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
 	)
 
@@ -1275,6 +1307,16 @@ if(WRC_BUILD_TESTS)
 		Qt6::Core
 	)
 	add_test(NAME wrc_input_injector_tests COMMAND wrc_input_injector_tests)
+
+	add_executable(wrc_windows_device_info_provider_tests
+		tests/unit/windowsdeviceinfoprovidertest.cpp
+	)
+	target_link_libraries(wrc_windows_device_info_provider_tests PRIVATE
+		wrc_windows_adapters
+		Qt6::Core
+	)
+	add_test(NAME wrc_windows_device_info_provider_tests
+		COMMAND wrc_windows_device_info_provider_tests)
 
 	add_executable(wrc_webrtc_peer_initialization_tests
 		tests/unit/webrtcpeerinitializationtest.cpp
@@ -1681,6 +1723,16 @@ add_custom_command(TARGET winRemoteControl POST_BUILD
 		"$<TARGET_FILE:winRemoteControl>"
 	VERBATIM
 )
+
+if(WRC_VERIFY_PRODUCTION_RUNTIME)
+	add_custom_target(wrc_verify_production_runtime ALL
+		COMMAND ${CMAKE_COMMAND}
+			-DWRC_RUNTIME_DIRECTORY=$<TARGET_FILE_DIR:winRemoteControl>
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/verifyproductionruntime.cmake"
+		DEPENDS winRemoteControl
+		VERBATIM
+	)
+endif()
 
 if(WRC_BUILD_RESOURCE_DIAGNOSTICS)
 	add_executable(wrc_capture_resource_probe

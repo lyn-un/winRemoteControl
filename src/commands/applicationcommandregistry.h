@@ -5,6 +5,7 @@
 
 #include <QtCore/QHash>
 #include <QtCore/QObject>
+#include <QtCore/QStringList>
 
 class KApplicationCommandRegistry : public QObject
 {
@@ -17,6 +18,7 @@ public:
 
 	bool registerCommand(const KApplicationCommand &command, QString *pError);
 	bool contains(const QString &strCommandId) const;
+	QStringList commandIds() const;
 	KApplicationCommandResult execute(const QString &strCommandId,
 		const QJsonObject &arguments) const;
 

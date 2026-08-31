@@ -71,18 +71,25 @@ class EventHistoryLost(WrcDriverError):
         requested_cursor: int,
         oldest_sequence: int,
         next_sequence: int,
-        awaited_event_type: str,
+        session_generation: int,
+        awaited_event_type: str = "",
     ) -> None:
+        context = (
+            f" while waiting for {awaited_event_type!r}"
+            if awaited_event_type
+            else ""
+        )
         super().__init__(
-            "Automation event history was lost while waiting for "
-            f"{awaited_event_type!r}: requested={requested_cursor}, "
-            f"oldest={oldest_sequence}, next={next_sequence}",
+            "Automation event history was lost"
+            f"{context}: requested={requested_cursor}, oldest={oldest_sequence}, "
+            f"next={next_sequence}, generation={session_generation}",
             error_code="event_history_lost",
             retryable=False,
         )
         self.requested_cursor = requested_cursor
         self.oldest_sequence = oldest_sequence
         self.next_sequence = next_sequence
+        self.session_generation = session_generation
         self.awaited_event_type = awaited_event_type
 
 

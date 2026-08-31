@@ -45,6 +45,19 @@
       "binaryDir": "${sourceDir}/build/cmake-release"
     },
     {
+      "name": "production-release",
+      "displayName": "Windows production release",
+      "inherits": "release",
+      "binaryDir": "${sourceDir}/build/production-cmake",
+      "cacheVariables": {
+        "WRC_BUILD_TESTS": "OFF",
+        "WRC_BUILD_AUTOMATION_DRIVER": "OFF",
+        "WRC_BUILD_RESOURCE_DIAGNOSTICS": "OFF",
+        "WRC_VERIFY_PRODUCTION_RUNTIME": "ON",
+        "WRC_RUNTIME_OUTPUT_DIRECTORY": "${sourceDir}/build/production/Release"
+      }
+    },
+    {
       "name": "terminal-tests",
       "displayName": "Dependency-light terminal tests",
       "generator": "Visual Studio 17 2022",
@@ -80,7 +93,8 @@
       "inherits": "core-tests",
       "binaryDir": "${sourceDir}/build/automation-tests",
       "cacheVariables": {
-        "WRC_BUILD_AUTOMATION_DRIVER": "ON"
+        "WRC_BUILD_AUTOMATION_DRIVER": "ON",
+        "WRC_RUNTIME_OUTPUT_DIRECTORY": "${sourceDir}/build/automation-tests/runtime/Release"
       }
     }
   ],
@@ -99,6 +113,14 @@
       "name": "release",
       "configurePreset": "release",
       "configuration": "Release"
+    },
+    {
+      "name": "production-release",
+      "configurePreset": "production-release",
+      "configuration": "Release",
+      "targets": [
+        "wrc_verify_production_runtime"
+      ]
     },
     {
       "name": "terminal-tests",

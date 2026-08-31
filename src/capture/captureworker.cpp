@@ -2,6 +2,7 @@
 
 #include "capture/dxgidesktopduplicator.h"
 #include "common/latencytracelogger.h"
+#include "core/protocol/protocolconstraints.h"
 
 #include <QtCore/QElapsedTimer>
 
@@ -12,6 +13,8 @@ namespace
 {
 	constexpr qint64 kImmediateFrameTraceIntervalMs = 500;
 	constexpr quint64 kVideoTraceFrameInterval = 30;
+	constexpr qint64 kMicrosecondsPerSecond = 1000000;
+	constexpr qint64 kNanosecondsPerMicrosecond = 1000;
 }
 
 KCaptureWorker::KCaptureWorker(WorkMode mode, QObject *pParent)
@@ -53,6 +56,11 @@ void KCaptureWorker::startWork()
 	if (m_bRunning.exchange(true))
 		return;
 
+	m_cadenceClock.start();
+	{
+		std::lock_guard<std::mutex> guard(m_waitMutex);
+		m_bCadenceResetPending = true;
+	}
 	emit statusChanged(QStringLiteral("Capturing"));
 	QString strError;
 	if (m_upSource == nullptr || m_upSink == nullptr
@@ -114,8 +122,26 @@ void KCaptureWorker::startWork()
 					.arg(frame.vecBgraBuffer.capacity()));
 		}
 
-		const int nFrameIntervalMs = std::max(1, 1000 / std::max(1, m_nFrameRate.load()));
-		waitForNextFrame(static_cast<qint64>(nFrameIntervalMs) - frameTimer.elapsed());
+		qint64 nWaitUs = 0;
+		{
+			std::lock_guard<std::mutex> guard(m_waitMutex);
+			const qint64 nNowUs = m_cadenceClock.nsecsElapsed() / kNanosecondsPerMicrosecond;
+			if (m_bCadenceResetPending)
+			{
+				m_nNextFrameDeadlineUs = nNowUs + m_nFrameIntervalUs;
+				m_bCadenceResetPending = false;
+			}
+			else
+			{
+				m_nNextFrameDeadlineUs += m_nFrameIntervalUs;
+				// A frame that missed its deadline by more than one full period
+				// resynchronizes from now instead of bursting to catch up.
+				if (nNowUs - m_nNextFrameDeadlineUs >= m_nFrameIntervalUs)
+					m_nNextFrameDeadlineUs = nNowUs + m_nFrameIntervalUs;
+			}
+			nWaitUs = m_nNextFrameDeadlineUs - (m_cadenceClock.nsecsElapsed() / kNanosecondsPerMicrosecond);
+		}
+		waitForNextFrame(nWaitUs);
 	}
 
 	m_upSink->shutdown();
@@ -131,7 +157,21 @@ void KCaptureWorker::stopWork()
 
 void KCaptureWorker::setStreamConfig(const KStreamConfig &config)
 {
-	m_nFrameRate = std::clamp(config.nFps, 1, 60);
+	const int nFps = std::clamp(config.nFps,
+		KProtocolConstraints::kMinimumStreamFps,
+		KProtocolConstraints::kMaximumStreamFps);
+	const qint64 nFrameIntervalUs = kMicrosecondsPerSecond / nFps;
+	{
+		std::lock_guard<std::mutex> guard(m_waitMutex);
+		if (nFrameIntervalUs != m_nFrameIntervalUs || m_bCadenceResetPending)
+		{
+			// Rebuild the cadence from the current time so the old period is
+			// never reused after a frame rate change.
+			m_nFrameIntervalUs = nFrameIntervalUs;
+			m_bCadenceResetPending = true;
+			m_waitCondition.notify_all();
+		}
+	}
 	if (m_upSink != nullptr)
 		m_upSink->setStreamConfig(config);
 }
@@ -159,14 +199,14 @@ void KCaptureWorker::requestImmediateFrame()
 	m_waitCondition.notify_all();
 }
 
-bool KCaptureWorker::waitForNextFrame(qint64 nSleepMs)
+bool KCaptureWorker::waitForNextFrame(qint64 nWaitUs)
 {
-	if (nSleepMs <= 0)
+	if (nWaitUs <= 0)
 		return false;
 
 	std::unique_lock<std::mutex> lock(m_waitMutex);
 	const bool bInterrupted = m_waitCondition.wait_for(lock,
-		std::chrono::milliseconds(nSleepMs),
+		std::chrono::microseconds(nWaitUs),
 		[this]()
 		{
 			return !m_bRunning || m_bImmediateFrameRequested;

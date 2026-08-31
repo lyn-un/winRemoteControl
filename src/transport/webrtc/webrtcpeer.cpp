@@ -104,7 +104,6 @@ namespace
 	constexpr char kFileTransferDataChannelLabel[] = "file-data";
 	constexpr int kStatsPollingIntervalMs = 1000;
 	constexpr int kBitsPerKilobit = 1000;
-	constexpr int kReceiverMaxFrameRateFps = 60;
 	constexpr double kSecondsToMilliseconds = 1000.0;
 	constexpr quint64 kVideoTraceFrameInterval = 30;
 	constexpr quint64 kInputLowWatermarkBytes = 1024;
@@ -449,7 +448,8 @@ KWebRtcPeer::KWebRtcPeer(KVideoEncoderPreference encoderPreference, QObject *pPa
 	for (KTerminalMessageType type : { OpenRequestTerminalMessageType,
 		ApprovalPendingTerminalMessageType, AcceptedTerminalMessageType,
 		RejectedTerminalMessageType, ResizeTerminalMessageType,
-		CloseTerminalMessageType, ExitedTerminalMessageType, ErrorTerminalMessageType })
+		CloseTerminalMessageType, ExitedTerminalMessageType, ErrorTerminalMessageType,
+		CommandResultTerminalMessageType })
 	{
 		m_protocolRouter.registerHandler(SessionProtocolChannel,
 			KTerminalMessageCodec::typeName(type), allowMessage,
@@ -1377,7 +1377,7 @@ void KWebRtcPeer::OnAddTrack(webrtc::scoped_refptr<webrtc::RtpReceiverInterface>
 	m_spRemoteVideoTrack = static_cast<webrtc::VideoTrackInterface *>(receiver->track().get());
 	webrtc::VideoSinkWants wants;
 	wants.black_frames = false;
-	wants.max_framerate_fps = kReceiverMaxFrameRateFps;
+	wants.max_framerate_fps = KProtocolConstraints::kMaximumStreamFps;
 	m_spRemoteVideoTrack->AddOrUpdateSink(this, wants);
 	emit stateChanged(m_nGeneration.load(), QStringLiteral("RemoteVideoTrack"));
 	startStatsPolling(QStringLiteral("remote_video_track"));

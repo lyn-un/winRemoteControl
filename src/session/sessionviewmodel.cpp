@@ -190,11 +190,16 @@ void KSessionViewModel::sendRemoteText(const QString &strText)
 
 void KSessionViewModel::sendStreamConfig(const KStreamConfig &config)
 {
-	if (isSameStreamConfig(m_streamConfig, config))
+	// A preset without an explicit frame rate (nFps <= 0) keeps the current
+	// target FPS; quality and frame rate are independent session settings.
+	KStreamConfig effectiveConfig = config;
+	if (effectiveConfig.nFps <= 0)
+		effectiveConfig.nFps = qMax(1, m_streamConfig.nFps);
+	if (isSameStreamConfig(m_streamConfig, effectiveConfig))
 		return;
 
-	m_streamConfig = config;
-	m_pSessionController->sendStreamConfig(config);
+	m_streamConfig = effectiveConfig;
+	m_pSessionController->sendStreamConfig(effectiveConfig);
 }
 
 void KSessionViewModel::handleCaptureStatusChanged(const QString &strStatus)
@@ -243,6 +248,9 @@ void KSessionViewModel::handleSessionStateChanged(KSessionState state)
 		m_inputFeedbackTracker.reset();
 		m_nPointerInputSequence = 0;
 		m_nReliableInputSequence = 0;
+		// A full disconnect starts the next session from the default stream
+		// configuration; Reconnecting recovery keeps the selected settings.
+		m_streamConfig = KStreamConfig();
 	}
 }
 

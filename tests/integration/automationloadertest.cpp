@@ -22,6 +22,7 @@ namespace
 	QString g_strDataDirectory;
 	std::atomic_bool g_bHostReady{false};
 	std::atomic_int g_nIdempotentExecutionCount{0};
+	std::atomic_int g_nStartedLateExecutionCount{0};
 	std::atomic_bool g_bHoldSnapshots{false};
 
 	void SubmitCommand(void *, std::uint64_t nRequestId,
@@ -31,7 +32,21 @@ namespace
 		KWrcDriverJsonCallback pCallback, void *pCallbackContext)
 	{
 		const QByteArray commandId(pCommandId, static_cast<qsizetype>(nCommandIdBytes));
-		if (commandId == QByteArrayLiteral("test.execution_started")
+		if (commandId == QByteArrayLiteral("test.execution_started_late")
+			&& pStartedCallback != nullptr && pCallback != nullptr)
+		{
+			++g_nStartedLateExecutionCount;
+			pStartedCallback(pCallbackContext, nRequestId);
+			QTimer::singleShot(6200, [pCallbackContext, nRequestId, pCallback]()
+			{
+				const QByteArray response = QByteArrayLiteral(
+					"{\"status\":0,\"value\":{\"lateCompleted\":true},"
+					"\"errorCode\":\"\",\"technicalMessage\":\"\"}");
+				pCallback(pCallbackContext, nRequestId, response.constData(),
+					static_cast<std::uint32_t>(response.size()));
+			});
+		}
+		else if (commandId == QByteArrayLiteral("test.execution_started")
 			&& pStartedCallback != nullptr)
 		{
 			pStartedCallback(pCallbackContext, nRequestId);
@@ -299,6 +314,20 @@ int main(int nArgc, char *pArgv[])
 	{
 		return 13;
 	}
+	const QJsonObject idempotencyConflict = SendRequest(nPort, strToken,
+		QByteArrayLiteral("POST"), triggerPath,
+		QByteArrayLiteral(
+			"{\"id\":\"test.idempotent\",\"arguments\":{\"value\":2},"
+			"\"idempotencyKey\":\"same-operation\"}"),
+		&nHttpStatus);
+	if (nHttpStatus != 400
+		|| idempotencyConflict.value(QStringLiteral("value")).toObject()
+			.value(QStringLiteral("error")).toString()
+			!= QStringLiteral("idempotency_key_conflict")
+		|| g_nIdempotentExecutionCount.load() != 1)
+	{
+		return 13;
+	}
 	const QByteArray statePath = QByteArrayLiteral("/session/")
 		+ strSessionId.toUtf8() + QByteArrayLiteral("/state");
 	const QByteArray eventsPath = QByteArrayLiteral("/session/")
@@ -320,7 +349,7 @@ int main(int nArgc, char *pArgv[])
 	{
 		return 15;
 	}
-	QThread::msleep(400);
+	QThread::msleep(1500);
 	const QJsonObject statusAfterLateCallback = SendRequest(nPort, strToken,
 		QByteArrayLiteral("GET"), QByteArrayLiteral("/status"), QByteArray(),
 		&nHttpStatus);
@@ -333,7 +362,8 @@ int main(int nArgc, char *pArgv[])
 	}
 	const QJsonObject started = SendRequest(nPort, strToken,
 		QByteArrayLiteral("POST"), triggerPath,
-		QByteArrayLiteral("{\"id\":\"test.execution_started\",\"arguments\":{}}"),
+		QByteArrayLiteral("{\"id\":\"test.execution_started_late\","
+			"\"arguments\":{},\"idempotencyKey\":\"late-operation\"}"),
 		&nHttpStatus, 7000);
 	const QJsonObject startedValue = started.value(QStringLiteral("value")).toObject();
 	if (nHttpStatus != 408 || started.value(QStringLiteral("isSuccess")).toBool(true)
@@ -344,6 +374,20 @@ int main(int nArgc, char *pArgv[])
 	{
 		return 17;
 	}
+	const QJsonObject replayedWhileStarted = SendRequest(nPort, strToken,
+		QByteArrayLiteral("POST"), triggerPath,
+		QByteArrayLiteral("{\"id\":\"test.execution_started_late\","
+			"\"arguments\":{},\"idempotencyKey\":\"late-operation\"}"),
+		&nHttpStatus);
+	if (nHttpStatus != 408
+		|| replayedWhileStarted.value(QStringLiteral("value")).toObject()
+			.value(QStringLiteral("error")).toString()
+			!= QStringLiteral("command_execution_started")
+		|| g_nStartedLateExecutionCount.load() != 1)
+	{
+		return 17;
+	}
+	QThread::msleep(400);
 	const QByteArray sessionPath = QByteArrayLiteral("/session/") + strSessionId.toUtf8();
 	const QJsonObject deleted = SendRequest(nPort, strToken,
 		QByteArrayLiteral("DELETE"), sessionPath, QByteArray(), &nHttpStatus);
@@ -358,6 +402,18 @@ int main(int nArgc, char *pArgv[])
 		return 18;
 	const QByteArray shutdownTriggerPath = QByteArrayLiteral("/session/")
 		+ strShutdownSessionId.toUtf8() + QByteArrayLiteral("/command/trigger");
+	const QJsonObject replayedStarted = SendRequest(nPort, strToken,
+		QByteArrayLiteral("POST"), shutdownTriggerPath,
+		QByteArrayLiteral("{\"id\":\"test.execution_started_late\","
+			"\"arguments\":{},\"idempotencyKey\":\"late-operation\"}"),
+		&nHttpStatus);
+	if (nHttpStatus != 200 || !replayedStarted.value(QStringLiteral("isSuccess")).toBool()
+		|| !replayedStarted.value(QStringLiteral("value")).toObject()
+			.value(QStringLiteral("lateCompleted")).toBool()
+		|| g_nStartedLateExecutionCount.load() != 1)
+	{
+		return 18;
+	}
 	QJsonObject shutdownPendingResponse;
 	QJsonObject shutdownStateResponse;
 	int nShutdownHttpStatus = 0;

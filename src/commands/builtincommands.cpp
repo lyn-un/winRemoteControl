@@ -1,6 +1,7 @@
 #include "commands/builtincommands.h"
 
 #include "commands/applicationcommandregistry.h"
+#include "core/protocol/protocolconstraints.h"
 #include "core/session/sessionstatemachine.h"
 #include "core/security/permissionscope.h"
 #include "session/sessioncontroller.h"
@@ -64,7 +65,8 @@ namespace
 bool RegisterBuiltinApplicationCommands(KApplicationCommandRegistry *pRegistry,
 	KSessionViewModel *pSessionViewModel,
 	KSessionController *pSessionController,
-	KDeviceSecurityPreferenceService *pSecurityPreferenceService)
+	KDeviceSecurityPreferenceService *pSecurityPreferenceService,
+	const std::function<void(const QString &)> &roleChanged)
 {
 	if (pRegistry == nullptr || pSessionViewModel == nullptr || pSessionController == nullptr
 		|| pSecurityPreferenceService == nullptr)
@@ -74,13 +76,15 @@ bool RegisterBuiltinApplicationCommands(KApplicationCommandRegistry *pRegistry,
 	KApplicationCommand setRoleCommand;
 	setRoleCommand.strId = QStringLiteral("application.set_role");
 	setRoleCommand.canExecute = [pSessionController]() { return pSessionController->isIdle(); };
-	setRoleCommand.execute = [pSessionViewModel](const QJsonObject &arguments)
+	setRoleCommand.execute = [pSessionViewModel, roleChanged](const QJsonObject &arguments)
 	{
 		const QString strRole = arguments.value(QStringLiteral("role")).toString();
 		KSessionRole role = ControllerSessionRole;
 		if (!KSessionStateMachine::roleFromString(strRole, &role))
 			return InvalidArgumentResult(QStringLiteral("role must be controller or controlled"));
 		pSessionViewModel->setRole(strRole);
+		if (roleChanged)
+			roleChanged(strRole);
 		return SucceededResult(QJsonObject{{QStringLiteral("role"), strRole}});
 	};
 	if (!pRegistry->registerCommand(setRoleCommand, &strError))
@@ -280,10 +284,12 @@ bool RegisterBuiltinApplicationCommands(KApplicationCommandRegistry *pRegistry,
 		config.nHeight = arguments.value(QStringLiteral("height")).toInt(config.nHeight);
 		config.nBitrateKbps = arguments.value(QStringLiteral("bitrateKbps"))
 			.toInt(config.nBitrateKbps);
-		if (config.nFps < 1 || config.nFps > 240
+		if (config.nFps < KProtocolConstraints::kMinimumStreamFps
+			|| config.nFps > KProtocolConstraints::kMaximumStreamFps
 			|| config.nWidth < 320 || config.nWidth > 7680
 			|| config.nHeight < 240 || config.nHeight > 4320
-			|| config.nBitrateKbps < 128 || config.nBitrateKbps > 200000)
+			|| config.nBitrateKbps < KProtocolConstraints::kMinimumStreamBitrateKbps
+			|| config.nBitrateKbps > KProtocolConstraints::kMaximumStreamBitrateKbps)
 		{
 			return InvalidArgumentResult(QStringLiteral("Stream configuration is out of range"));
 		}

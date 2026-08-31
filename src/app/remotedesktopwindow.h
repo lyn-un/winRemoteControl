@@ -60,7 +60,8 @@ private:
 	void updatePreviewRect(const QRect &rect);
 	void showControlCenterMenu(const QPoint &pos);
 	void showSecurityCommandError(const QString &strErrorCode);
-	void applyStreamConfig(int nWidth, int nHeight, int nFps, int nBitrateKbps);
+	void applyQualityPreset(int nWidth, int nHeight, int nBitrateKbps);
+	void applyFrameRate(int nFps);
 	void minimizeWindow();
 	void toggleMaximizeWindow();
 	void beginWindowDrag();

@@ -207,6 +207,12 @@ void TestMediaFlow()
 	Check(constrained.nWidth == 1280 && constrained.nHeight == 720
 		&& constrained.nFps == 30 && constrained.nBitrateKbps == 4000,
 		"media flow constrains stream configuration");
+	capabilities.nMaximumFps = 144;
+	media.setCapabilities(capabilities);
+	requested.nFps = 144;
+	const KStreamConfig highFpsConstrained = media.constrainedConfig(requested);
+	Check(highFpsConstrained.nFps == 144,
+		"media flow keeps a frame rate at the negotiated maximum");
 	int nStartCount = 0;
 	int nStopCount = 0;
 	QObject::connect(&media, &KMediaSessionController::startCaptureRequested,

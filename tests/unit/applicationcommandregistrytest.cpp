@@ -46,6 +46,9 @@ namespace
 			QStringLiteral("duplicate command is rejected"));
 		Check(registry.contains(QStringLiteral("test.echo")),
 			QStringLiteral("registered command can be queried"));
+		Check(registry.commandIds() == QStringList{
+			QStringLiteral("test.echo")},
+			QStringLiteral("command ids are exposed in stable sorted order"));
 		KApplicationCommand invalidCommand;
 		invalidCommand.strId = QStringLiteral("test.invalid_argument");
 		invalidCommand.execute = [](const QJsonObject &)

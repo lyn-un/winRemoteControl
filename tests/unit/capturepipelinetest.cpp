@@ -74,7 +74,12 @@ namespace
 			bShutdown = true;
 		}
 
-		void setStreamConfig(const KStreamConfig &) override {}
+		void setStreamConfig(const KStreamConfig &config) override
+		{
+			lastStreamConfig = config;
+			++nStreamConfigCount;
+		}
+
 		void setInputTraceState(quint64, qint64) override {}
 
 		bool bInitialized = false;
@@ -82,6 +87,8 @@ namespace
 		int nProcessedFrames = 0;
 		int nTimeouts = 0;
 		quint64 nLastFrameIndex = 0;
+		KStreamConfig lastStreamConfig;
+		int nStreamConfigCount = 0;
 	};
 
 	bool require(bool bCondition, const char *pMessage)
@@ -113,11 +120,39 @@ int main(int argc, char *argv[])
 	bSuccess &= require(pSource->bBufferReused,
 		"capture loop reuses the BGRA allocation between equal-sized frames");
 
+	KStreamConfig highFpsConfig;
+	highFpsConfig.nFps = 144;
+	highFpsConfig.nWidth = 1280;
+	highFpsConfig.nHeight = 720;
+	highFpsConfig.nBitrateKbps = 4000;
+	worker.setStreamConfig(highFpsConfig);
+	bSuccess &= require(pSink->nStreamConfigCount == 1
+		&& pSink->lastStreamConfig.nFps == 144,
+		"capture worker forwards stream configs without clamping the frame rate");
+
 	KCaptureFrameSink videoSink(KCaptureFrameSink::RemoteVideoSinkMode);
 	std::vector<std::shared_ptr<KI420FrameBuffer>> vecObservedBuffers;
 	QObject::connect(&videoSink, &KCaptureFrameSink::videoFrameReady,
 		[&](const KVideoFrame &frame) { vecObservedBuffers.push_back(frame.spBuffer); });
 	QString strError;
+
+	KStreamConfig sinkFpsConfig;
+	sinkFpsConfig.nFps = 144;
+	sinkFpsConfig.nWidth = 0;
+	sinkFpsConfig.nHeight = 0;
+	sinkFpsConfig.nBitrateKbps = 500;
+	videoSink.setStreamConfig(sinkFpsConfig);
+	bSuccess &= require(videoSink.streamConfig().nFps == 144,
+		"frame sink keeps the protocol-maximum frame rate");
+	sinkFpsConfig.nFps = 200;
+	videoSink.setStreamConfig(sinkFpsConfig);
+	bSuccess &= require(videoSink.streamConfig().nFps == 144,
+		"frame sink clamps to the shared protocol frame rate limit");
+	sinkFpsConfig.nFps = 0;
+	videoSink.setStreamConfig(sinkFpsConfig);
+	bSuccess &= require(videoSink.streamConfig().nFps == 1,
+		"frame sink clamps to the minimum frame rate");
+
 	bSuccess &= require(videoSink.initialize(&strError),
 		"remote video sink initializes without local codecs");
 	KCaptureFrame videoFrame;

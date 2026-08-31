@@ -4,6 +4,7 @@
 #include "codec/h264encoder.h"
 #include "common/framewatermark.h"
 #include "common/latencytracelogger.h"
+#include "core/protocol/protocolconstraints.h"
 
 #include <QtCore/QDateTime>
 
@@ -404,7 +405,9 @@ qint64 KCaptureFrameSink::framePoolBytes() const
 KStreamConfig KCaptureFrameSink::normalizeStreamConfig(const KStreamConfig &config)
 {
 	KStreamConfig normalizedConfig = config;
-	normalizedConfig.nFps = std::clamp(normalizedConfig.nFps, 1, 60);
+	normalizedConfig.nFps = std::clamp(normalizedConfig.nFps,
+		KProtocolConstraints::kMinimumStreamFps,
+		KProtocolConstraints::kMaximumStreamFps);
 	normalizedConfig.nWidth = std::max(0, normalizedConfig.nWidth);
 	normalizedConfig.nHeight = std::max(0, normalizedConfig.nHeight);
 	normalizedConfig.nBitrateKbps = std::max(500, normalizedConfig.nBitrateKbps);

@@ -21,6 +21,7 @@
 #include "capture/captureservice.h"
 #include "commands/applicationcommandregistry.h"
 #include "commands/builtincommands.h"
+#include "commands/extendedbuiltincommands.h"
 #include "automation/automationhostbridge.h"
 #include "automation/automationpluginloader.h"
 #include "core/discovery/devicediscoverycontroller.h"
@@ -54,6 +55,7 @@
 #include <QtCore/QStandardPaths>
 #include <QtCore/QUuid>
 #include <QtCore/QTimer>
+#include <QtWidgets/QWidget>
 #include <memory>
 
 namespace
@@ -186,9 +188,152 @@ KApplicationComposition::KApplicationComposition(KVideoEncoderPreference encoder
 		m_pApplicationCommandRegistry,
 		m_pSessionViewModel,
 		m_pSessionService,
-		m_pDeviceSecurityPreferenceService))
+		m_pDeviceSecurityPreferenceService,
+		[this](const QString &strRole)
+		{ m_pDiscoveryViewModel->setRole(strRole); }))
 	{
 		qFatal("Failed to register built-in application commands");
+	}
+	KExtendedApplicationCommandCallbacks commandCallbacks;
+	commandCallbacks.startLocalPreview = [this]()
+	{ m_pSessionViewModel->startLocalPreview(); };
+	commandCallbacks.stopLocalPreview = [this]()
+	{ m_pSessionViewModel->stopCapture(); };
+	commandCallbacks.refreshLanDevices = [this]()
+	{ m_pDiscoveryViewModel->refreshLanDevices(); };
+	commandCallbacks.connectLanDevice = [this](const QString &strDeviceId)
+	{ m_pDiscoveryViewModel->connectLanDevice(strDeviceId); };
+	commandCallbacks.requestRecentDevices = [this]()
+	{ m_pRecentDeviceService->requestDevices(); };
+	commandCallbacks.connectRecentDevice = [this](const QString &strDeviceId)
+	{ m_pRecentDeviceService->connectDevice(strDeviceId); };
+	commandCallbacks.removeRecentDevice = [this](const QString &strDeviceId)
+	{ m_pRecentDeviceService->removeDevice(strDeviceId); };
+	commandCallbacks.openRecentDeviceTerminal = [this](const QString &strDeviceId)
+	{ m_pRecentDeviceService->openTerminalDevice(strDeviceId); };
+	commandCallbacks.retryLastConnection = [this]()
+	{ m_pSessionViewModel->retryLastConnection(); };
+	commandCallbacks.applicationSettings = [this]()
+	{ return m_pApplicationSettingsService->settings(); };
+	commandCallbacks.updateApplicationSettings = [this](bool bEnabled,
+		const QString &strApprovalMode, int nTimeoutSeconds, int nPort)
+	{
+		m_pApplicationSettingsService->updateSettings(
+			bEnabled, strApprovalMode, nTimeoutSeconds, nPort);
+	};
+	commandCallbacks.updateApplicationTheme = [this](const QString &strThemeId)
+	{ m_pApplicationSettingsService->updateTheme(strThemeId); };
+	commandCallbacks.requestTrustedDevices = [this]()
+	{ m_pSessionService->requestTrustedDevices(); };
+	commandCallbacks.updateTrustedDevice = [this](const QString &strDeviceId,
+		const QString &strAlias, KPermissionScopes permissions)
+	{ m_pSessionService->updateTrustedDevice(strDeviceId, strAlias, permissions); };
+	commandCallbacks.revokeTrustedDevice = [this](const QString &strDeviceId)
+	{ m_pSessionService->revokeTrustedDevice(strDeviceId); };
+	commandCallbacks.requestRePairDevice = [this](const QString &strDeviceId)
+	{ m_pSessionService->requestRePairDevice(strDeviceId); };
+	commandCallbacks.setClipboardSyncEnabled = [this](bool bEnabled)
+	{ m_pClipboardSyncService->setEnabled(bEnabled); };
+	commandCallbacks.requestClipboardSyncState = [this]()
+	{ m_pClipboardSyncService->requestState(); };
+	commandCallbacks.openCurrentTerminal = [this](int nColumns, int nRows)
+	{ m_pTerminalSessionService->openCurrentTerminal(nColumns, nRows); };
+	commandCallbacks.respondTerminalRequest = [this](const QString &strRequestId,
+		bool bAccepted)
+	{ m_pTerminalSessionService->respondIncomingRequest(strRequestId, bAccepted); };
+	commandCallbacks.sendTerminalInput = [this](const QByteArray &data)
+	{ m_pTerminalSessionService->sendInput(data); };
+	commandCallbacks.resizeTerminal = [this](int nColumns, int nRows)
+	{ m_pTerminalSessionService->resizeTerminal(nColumns, nRows); };
+	commandCallbacks.closeTerminal = [this]()
+	{ m_pTerminalSessionService->closeTerminal(); };
+	commandCallbacks.requestTerminalState = [this]()
+	{ m_pTerminalSessionService->requestState(); };
+	commandCallbacks.isFileTransferAvailable = [this]()
+	{ return m_pFileTransferSessionService->isAvailable(); };
+	commandCallbacks.openFileTransfer = [this]()
+	{ m_pFileTransferSessionService->openCurrentFileTransfer(); };
+	commandCallbacks.stopFileTransfer = [this]()
+	{ m_pFileTransferSessionService->stopCurrentFileTransfer(); };
+	commandCallbacks.requestFileTransferSnapshot = [this]()
+	{ m_pFileTransferSessionService->requestSnapshot(); };
+	commandCallbacks.requestFileTransferPaneRoots = [this](KFileTransferPane pane)
+	{ m_pFileTransferSessionService->requestPaneRoots(pane); };
+	commandCallbacks.navigateFileTransferPane = [this](KFileTransferPane pane,
+		const QString &strListingId, const QString &strEntryId)
+	{ m_pFileTransferSessionService->navigatePane(pane, strListingId, strEntryId); };
+	commandCallbacks.navigateFileTransferPaneByPath = [this](KFileTransferPane pane,
+		const QString &strPath)
+	{ m_pFileTransferSessionService->navigatePaneByPath(pane, strPath); };
+	commandCallbacks.navigateFileTransferPaneUp = [this](KFileTransferPane pane,
+		const QString &strListingId)
+	{ m_pFileTransferSessionService->navigatePaneUp(pane, strListingId); };
+	commandCallbacks.refreshFileTransferPane = [this](KFileTransferPane pane)
+	{ m_pFileTransferSessionService->refreshPane(pane); };
+	commandCallbacks.startFileCopy = [this](KFileTransferPane pane,
+		const QString &strSourceListingId, const QStringList &entryIdList,
+		const QString &strDestinationListingId)
+	{
+		m_pFileTransferSessionService->startCopy(
+			pane, strSourceListingId, entryIdList, strDestinationListingId);
+	};
+	commandCallbacks.pauseFileTransferTask = [this](const QString &strTaskId)
+	{ m_pFileTransferSessionService->pauseTask(strTaskId); };
+	commandCallbacks.resumeFileTransferTask = [this](const QString &strTaskId)
+	{ m_pFileTransferSessionService->resumeTask(strTaskId); };
+	commandCallbacks.cancelFileTransferTask = [this](const QString &strTaskId)
+	{ m_pFileTransferSessionService->cancelTask(strTaskId); };
+	commandCallbacks.retryFileTransferTask = [this](const QString &strTaskId)
+	{ m_pFileTransferSessionService->retryTask(strTaskId); };
+	commandCallbacks.resolveFileTransferConflict = [this](const QString &strConflictId,
+		KFileTransferConflictResolution resolution, bool bApplyToRemaining)
+	{
+		m_pFileTransferSessionService->resolveConflict(
+			strConflictId, resolution, bApplyToRemaining);
+	};
+	commandCallbacks.clearCompletedFileTransferTasks = [this]()
+	{ m_pFileTransferSessionService->clearCompletedTasks(); };
+	auto minimizeWindow = [](const QPointer<QWidget> &pWindow)
+	{
+		if (pWindow.isNull())
+			return false;
+		pWindow->showMinimized();
+		return true;
+	};
+	auto toggleMaximizeWindow = [](const QPointer<QWidget> &pWindow)
+	{
+		if (pWindow.isNull())
+			return false;
+		pWindow->isMaximized() ? pWindow->showNormal() : pWindow->showMaximized();
+		return true;
+	};
+	auto closeWindow = [](const QPointer<QWidget> &pWindow)
+	{
+		if (pWindow.isNull())
+			return false;
+		pWindow->close();
+		return true;
+	};
+	commandCallbacks.minimizeMainWindow = [this, minimizeWindow]()
+	{ return minimizeWindow(m_pMainWindow); };
+	commandCallbacks.closeMainWindow = [this, closeWindow]()
+	{ return closeWindow(m_pMainWindow); };
+	commandCallbacks.minimizeDesktopWindow = [this, minimizeWindow]()
+	{ return minimizeWindow(m_pRemoteDesktopWindow); };
+	commandCallbacks.toggleMaximizeDesktopWindow = [this, toggleMaximizeWindow]()
+	{ return toggleMaximizeWindow(m_pRemoteDesktopWindow); };
+	commandCallbacks.closeDesktopWindow = [this, closeWindow]()
+	{ return closeWindow(m_pRemoteDesktopWindow); };
+	commandCallbacks.minimizeFileTransferWindow = [this, minimizeWindow]()
+	{ return minimizeWindow(m_pFileTransferWindow); };
+	commandCallbacks.toggleMaximizeFileTransferWindow = [this, toggleMaximizeWindow]()
+	{ return toggleMaximizeWindow(m_pFileTransferWindow); };
+	commandCallbacks.closeFileTransferWindow = [this, closeWindow]()
+	{ return closeWindow(m_pFileTransferWindow); };
+	if (!RegisterExtendedBuiltinApplicationCommands(
+		m_pApplicationCommandRegistry, commandCallbacks))
+	{
+		qFatal("Failed to register extended application commands");
 	}
 	m_pSessionService->configurePrivacyServices(
 		std::make_unique<KPrivacyModeService>(
@@ -215,6 +360,14 @@ KApplicationComposition::KApplicationComposition(KVideoEncoderPreference encoder
 		m_pSessionService,
 		KApplicationPaths::dataDirectoryPath(),
 		this);
+	m_pAutomationHostBridge->observeApplicationFeatures(
+		m_pSessionService,
+		m_pDiscoveryViewModel,
+		m_pRecentDeviceService,
+		m_pApplicationSettingsService,
+		m_pClipboardSyncService,
+		m_pTerminalSessionService,
+		m_pFileTransferSessionService);
 	m_spAutomationPluginLoader = std::make_unique<KAutomationPluginLoader>();
 	QString strAutomationError;
 	if (!m_spAutomationPluginLoader->load(QCoreApplication::applicationDirPath(),
@@ -254,6 +407,7 @@ QString KApplicationComposition::applicationThemeId() const
 void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 {
 	Q_ASSERT(pWebViewWidget != nullptr);
+	m_pMainWindow = pWebViewWidget->window();
 	connect(pWebViewWidget, &KWebViewWidget::startCaptureRequested,
 		m_pSessionViewModel, &KSessionViewModel::startLocalPreview);
 	connect(pWebViewWidget, &KWebViewWidget::stopCaptureRequested,
@@ -261,11 +415,9 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 	connect(pWebViewWidget, &KWebViewWidget::setRoleRequested,
 		this, [this](const QString &strRole)
 		{
-			const KApplicationCommandResult result = m_pApplicationCommandRegistry->execute(
+			m_pApplicationCommandRegistry->execute(
 				QStringLiteral("application.set_role"),
 				QJsonObject{{QStringLiteral("role"), strRole}});
-			if (result.status == ApplicationCommandSucceeded)
-				m_pDiscoveryViewModel->setRole(strRole);
 		});
 	connect(pWebViewWidget, &KWebViewWidget::startSignalingServerRequested,
 		m_pSessionViewModel, &KSessionViewModel::startSignalingServer);
@@ -461,6 +613,9 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 void KApplicationComposition::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWindow)
 {
 	Q_ASSERT(pWindow != nullptr);
+	m_pRemoteDesktopWindow = pWindow;
+	connect(pWindow, &QObject::destroyed, this, [this]()
+	{ m_pRemoteDesktopWindow.clear(); });
 	const QSize remoteScreenSize = m_pSessionViewModel->remoteScreenSize();
 	if (!remoteScreenSize.isEmpty())
 		pWindow->setRemoteScreenSize(remoteScreenSize.width(), remoteScreenSize.height());
@@ -568,6 +723,9 @@ void KApplicationComposition::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWin
 void KApplicationComposition::wireFileTransferWindow(KFileTransferWindow *pWindow)
 {
 	Q_ASSERT(pWindow != nullptr);
+	m_pFileTransferWindow = pWindow;
+	connect(pWindow, &QObject::destroyed, this, [this]()
+	{ m_pFileTransferWindow.clear(); });
 	KWebViewWidget *pWebViewWidget = pWindow->webViewWidget();
 	Q_ASSERT(pWebViewWidget != nullptr);
 

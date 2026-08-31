@@ -3,9 +3,25 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QThread>
+#include <QtCore/QUuid>
+#include <QtCore/QVector>
 
 #include <functional>
 #include <iostream>
+
+class KWebRtcPeerTestAccess
+{
+public:
+	static void routeSessionMessage(KWebRtcPeer *pPeer, const QString &strMessage)
+	{
+		pPeer->handleSessionChannelMessage(strMessage);
+	}
+
+	static int invalidSessionMessageCount(const KWebRtcPeer *pPeer)
+	{
+		return pPeer->m_nInvalidSessionMessages.load();
+	}
+};
 
 namespace
 {
@@ -52,6 +68,57 @@ namespace
 		KPeerInitializationStage m_failureStage = NoPeerInitializationStage;
 		mutable bool m_bFailureInjected = false;
 	};
+
+	void TestTerminalCommandResultRouting()
+	{
+		KWebRtcPeer peer;
+		QVector<KTerminalMessage> receivedMessages;
+		int nProtocolViolationCount = 0;
+		QObject::connect(&peer, &KWebRtcPeer::terminalControlMessageReceived,
+			[&receivedMessages](quint64, const KTerminalMessage &message)
+			{
+				receivedMessages.push_back(message);
+			});
+		QObject::connect(&peer, &KWebRtcPeer::protocolViolation,
+			[&nProtocolViolationCount](quint64, const QString &, const QString &)
+			{
+				++nProtocolViolationCount;
+			});
+
+		QVector<KTerminalMessage> expectedMessages;
+		for (int nIndex = 0; nIndex < 3; ++nIndex)
+		{
+			KTerminalMessage message;
+			message.type = CommandResultTerminalMessageType;
+			message.strRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+			message.strCommandId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+			message.bSuccess = true;
+			expectedMessages.push_back(message);
+			KWebRtcPeerTestAccess::routeSessionMessage(
+				&peer, KTerminalMessageCodec::encode(message));
+		}
+		QCoreApplication::processEvents();
+
+		Check(receivedMessages.size() == expectedMessages.size(),
+			QStringLiteral("terminal command results reach the Session router"));
+		for (int nIndex = 0;
+			nIndex < receivedMessages.size() && nIndex < expectedMessages.size();
+			++nIndex)
+		{
+			const KTerminalMessage &actual = receivedMessages.at(nIndex);
+			const KTerminalMessage &expected = expectedMessages.at(nIndex);
+			Check(actual.type == CommandResultTerminalMessageType,
+				QStringLiteral("terminal command result type is preserved"));
+			Check(actual.strRequestId == expected.strRequestId,
+				QStringLiteral("terminal command result request id is preserved"));
+			Check(actual.strCommandId == expected.strCommandId,
+				QStringLiteral("terminal command result command id is preserved"));
+		}
+		Check(KWebRtcPeerTestAccess::invalidSessionMessageCount(&peer) == 0,
+			QStringLiteral("terminal command results do not count as invalid Session messages"));
+		Check(nProtocolViolationCount == 0,
+			QStringLiteral("terminal command results do not trigger a protocol violation"));
+	}
 
 	void TestFailureStage(KPeerInitializationStage stage,
 		KSessionRole role, quint64 nGeneration)
@@ -107,6 +174,7 @@ namespace
 int main(int nArgc, char *pArgv[])
 {
 	QCoreApplication application(nArgc, pArgv);
+	TestTerminalCommandResultRouting();
 	const KPeerInitializationStage controllerStages[] = {
 		ThreadsPeerInitializationStage,
 		FactoryPeerInitializationStage,

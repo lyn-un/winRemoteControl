@@ -48,15 +48,21 @@ signals:
 	void workFinished();
 
 private:
-	bool waitForNextFrame(qint64 nSleepMs);
+	bool waitForNextFrame(qint64 nWaitUs);
 	bool shouldTraceImmediateFrameRequest();
 
 	std::unique_ptr<IKCaptureSource> m_upSource;
 	std::unique_ptr<IKCaptureFrameSink> m_upSink;
 	std::atomic_bool m_bRunning = false;
-	std::atomic_int m_nFrameRate = 30;
 	std::mutex m_waitMutex;
 	std::condition_variable m_waitCondition;
+	// Capture cadence is an absolute monotonic deadline in microseconds so that
+	// high frame rates (90-144 FPS) do not accumulate integer-millisecond drift.
+	// Guarded by m_waitMutex.
+	qint64 m_nFrameIntervalUs = 1000000 / 30;
+	qint64 m_nNextFrameDeadlineUs = 0;
+	bool m_bCadenceResetPending = true;
+	QElapsedTimer m_cadenceClock;
 	bool m_bRemoteVideo = false;
 	bool m_bImmediateFrameRequested = false;
 	bool m_bImmediateFrameTracePending = false;

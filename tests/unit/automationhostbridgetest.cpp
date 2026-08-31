@@ -228,7 +228,9 @@ int main(int nArgc, char *pArgv[])
 		|| snapshot.value(QStringLiteral("privacyModeStatus")).toObject()
 			.value(QStringLiteral("errorCode")).toString()
 			!= QStringLiteral("permission_denied")
-		|| !snapshot.contains(QStringLiteral("postSessionActionStatus")))
+		|| !snapshot.contains(QStringLiteral("postSessionActionStatus"))
+		|| !snapshot.value(QStringLiteral("supportedCommands")).toArray()
+			.contains(QStringLiteral("test.echo")))
 	{
 		return 7;
 	}
