@@ -142,6 +142,12 @@ target_link_libraries(wrc_automation_host PUBLIC
 	Qt6::Core
 )
 
+if(WRC_BUILD_APP)
+	target_sources(wrc_automation_host PRIVATE
+		src/automation/automationhostbridgefeatures.cpp
+	)
+endif()
+
 if(WRC_BUILD_AUTOMATION_DRIVER OR WRC_BUILD_TESTS)
 add_subdirectory(automation/driver)
 endif()
@@ -1051,15 +1057,7 @@ if(WRC_BUILD_TESTS)
 		wrc_automation_host
 		wrc_core
 		wrc_session_contract
-		wrc_session_application
-		wrc_qt_presentation
-		wrc_recent_device_application
-		wrc_settings_application
-		wrc_clipboard_application
-		wrc_terminal_application
-		wrc_file_transfer_application
 		Qt6::Core
-		dwmapi
 	)
 	add_test(NAME wrc_automation_host_bridge_tests
 		COMMAND wrc_automation_host_bridge_tests)
