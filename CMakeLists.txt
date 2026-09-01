@@ -1327,6 +1327,16 @@ if(WRC_BUILD_TESTS)
 	add_test(NAME wrc_webrtc_peer_initialization_tests
 		COMMAND wrc_webrtc_peer_initialization_tests)
 
+	add_executable(wrc_webrtc_h264_encoder_rate_control_tests
+		tests/unit/webrtch264encoderratecontroltest.cpp
+	)
+	target_link_libraries(wrc_webrtc_h264_encoder_rate_control_tests PRIVATE
+		wrc_webrtc_adapter
+		Qt6::Core
+	)
+	add_test(NAME wrc_webrtc_h264_encoder_rate_control_tests
+		COMMAND wrc_webrtc_h264_encoder_rate_control_tests)
+
 	add_executable(wrc_webrtc_remote_frame_processor_tests
 		tests/unit/webrtcremoteframeprocessortest.cpp
 		src/common/framewatermark.cpp
@@ -1747,7 +1757,7 @@ if(WRC_BUILD_RESOURCE_DIAGNOSTICS)
 	target_include_directories(wrc_encoder_resource_probe PRIVATE
 		"${CMAKE_CURRENT_SOURCE_DIR}")
 	target_link_libraries(wrc_encoder_resource_probe PRIVATE
-		wrc_ffmpeg_adapter wrc_diagnostics Qt6::Core)
+		wrc_webrtc_adapter wrc_diagnostics Qt6::Core)
 
 	add_executable(wrc_webrtc_resource_probe
 		tools/diagnostics/webrtcresourceprobe.cpp

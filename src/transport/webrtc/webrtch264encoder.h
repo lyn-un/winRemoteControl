@@ -14,6 +14,8 @@
 #include <memory>
 #include <vector>
 
+class KWebRtcH264EncoderTestAccess;
+
 class KWebRtcH264Encoder final : public webrtc::VideoEncoder
 {
 public:
@@ -30,6 +32,8 @@ public:
 	webrtc::VideoEncoder::EncoderInfo GetEncoderInfo() const override;
 
 private:
+	friend class KWebRtcH264EncoderTestAccess;
+
 	bool shouldForceKeyFrame(const std::vector<webrtc::VideoFrameType> *pFrameTypes) const;
 	bool emitEncodedFrame(const webrtc::VideoFrame &frame,
 		const QByteArray &encodedData,
@@ -45,10 +49,12 @@ private:
 	webrtc::EncodedImageCallback *m_pCallback = nullptr;
 	int m_nWidth = 0;
 	int m_nHeight = 0;
-	int m_nFps = 30;
+	int m_nConfiguredFps = 30;
+	int m_nTargetFps = 30;
 	int m_nBitrateKbps = 3000;
 	quint64 m_nEncodedFrameCount = 0;
 	quint64 m_nNoOutputCount = 0;
+	quint64 m_nRateTargetChangeCount = 0;
 	bool m_bNeedKeyFrame = true;
 	std::optional<webrtc::VideoPlayoutDelay> m_playoutDelay;
 };

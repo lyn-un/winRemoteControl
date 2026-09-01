@@ -30,6 +30,7 @@ namespace
 	constexpr int kDefaultBitrateKbps = 3000;
 	constexpr int kBitsPerKilobit = 1000;
 	constexpr int kVideoTraceFrameInterval = 30;
+	constexpr quint64 kRateTargetTraceInterval = 30;
 	constexpr int kH264NaluTypeMask = 0x1f;
 	constexpr int kH264IdrNaluType = 5;
 	constexpr int kH264SpsNaluType = 7;
@@ -116,12 +117,14 @@ int KWebRtcH264Encoder::InitEncode(const webrtc::VideoCodec *pCodecSettings,
 
 	m_nWidth = static_cast<int>(pCodecSettings->width) & ~1;
 	m_nHeight = static_cast<int>(pCodecSettings->height) & ~1;
-	m_nFps = clampFps(static_cast<int>(pCodecSettings->maxFramerate > 0
+	m_nConfiguredFps = clampFps(static_cast<int>(pCodecSettings->maxFramerate > 0
 			? pCodecSettings->maxFramerate
 			: kDefaultFps));
+	m_nTargetFps = m_nConfiguredFps;
 	m_nBitrateKbps = std::max(1, bitrateKbpsFromCodec(pCodecSettings));
 	m_nEncodedFrameCount = 0;
 	m_nNoOutputCount = 0;
+	m_nRateTargetChangeCount = 0;
 	m_bNeedKeyFrame = true;
 	m_playoutDelay.reset();
 	const QString strPlayoutDelayValue = qEnvironmentVariable(kPlayoutDelayMaxMsEnvName).trimmed();
@@ -163,7 +166,7 @@ int KWebRtcH264Encoder::InitEncode(const webrtc::VideoCodec *pCodecSettings,
 	QString strError;
 	const bool bOpen = m_encoder.openStream(m_nWidth,
 		m_nHeight,
-		m_nFps,
+		m_nConfiguredFps,
 		m_nBitrateKbps,
 		[](const QByteArray &)
 		{
@@ -192,7 +195,7 @@ int KWebRtcH264Encoder::InitEncode(const webrtc::VideoCodec *pCodecSettings,
 			.arg(m_encoder.encoderName())
 			.arg(m_nWidth)
 			.arg(m_nHeight)
-			.arg(m_nFps)
+			.arg(m_nConfiguredFps)
 			.arg(m_nBitrateKbps)
 			.arg(m_encoder.fallbackReason().isEmpty() ? 0 : 1));
 	return WEBRTC_VIDEO_CODEC_OK;
@@ -324,43 +327,21 @@ void KWebRtcH264Encoder::SetRates(const webrtc::VideoEncoder::RateControlParamet
 		return;
 
 	const int nRequestedFps = clampFps(static_cast<int>(std::round(parameters.framerate_fps)));
-	if (nRequestedFps == m_nFps)
+	if (nRequestedFps == m_nTargetFps)
 		return;
 
-	if (!m_encoder.isOpen())
-	{
-		// InitEncode will pick up the new frame rate.
-		m_nFps = nRequestedFps;
-		return;
-	}
-
-	// A frame rate change must rebuild the underlying codec: time_base, GOP and
-	// the Media Foundation MFT are all fixed at open time. Encode() installs a
-	// fresh data callback before every frame, so a no-op callback is safe here.
-	QString strError;
-	if (m_encoder.openStream(m_nWidth,
-			m_nHeight,
-			nRequestedFps,
-			m_nBitrateKbps,
-			[](const QByteArray &)
-			{
-			},
-			&strError))
+	m_nTargetFps = nRequestedFps;
+	++m_nRateTargetChangeCount;
+	if (m_nRateTargetChangeCount == 1
+		|| m_nRateTargetChangeCount % kRateTargetTraceInterval == 0)
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controlled"),
-			QStringLiteral("h264_encoder_framerate_changed"),
-			QStringLiteral("oldFps=%1 newFps=%2 bitrateKbps=%3")
-				.arg(m_nFps)
-				.arg(nRequestedFps)
-				.arg(m_nBitrateKbps));
-		m_nFps = nRequestedFps;
-		m_bNeedKeyFrame = true;
-	}
-	else
-	{
-		KLatencyTraceLogger::write(QStringLiteral("controlled"),
-			QStringLiteral("h264_encoder_framerate_change_failed"),
-			QStringLiteral("requestedFps=%1 error=%2").arg(nRequestedFps).arg(strError));
+			QStringLiteral("h264_rate_target_changed"),
+			QStringLiteral("configuredFps=%1 targetFps=%2 bitrateKbps=%3 changeCount=%4")
+				.arg(m_nConfiguredFps)
+				.arg(m_nTargetFps)
+				.arg(m_nBitrateKbps)
+				.arg(m_nRateTargetChangeCount));
 	}
 }
 
