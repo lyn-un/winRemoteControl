@@ -1,6 +1,7 @@
 #ifndef _WINREMOTECONTROL_WEBRTCPEER_H_
 #define _WINREMOTECONTROL_WEBRTCPEER_H_
 
+#include "core/input/mouseinputroutingstate.h"
 #include "core/transport/remotepeertransport.h"
 #include "core/transport/networkstatstracker.h"
 #include "core/transport/outboundmessagequeue.h"
@@ -73,6 +74,7 @@ public:
 	bool fileTransferBackpressured() const override;
 	KSessionMessageSendStatus sendSessionMessage(const KSessionMessage &message) override;
 	void setInputRealtimeEnabled(bool bEnabled) override;
+	void setOrderedMouseDragEnabled(bool bEnabled) override;
 	void setStreamConfig(const KStreamConfig &config) override;
 
 protected:
@@ -161,7 +163,8 @@ private:
 	void flushRealtimeInputQueue();
 	void flushSessionQueue();
 	void flushClipboardQueue();
-	bool enqueueInputMessage(const QString &strPayload, bool bMouseMove);
+	bool enqueueInputMessage(const QString &strPayload,
+		const QString &strCoalescingKey);
 	static QString rtcErrorMessage(const QString &strPrefix, const webrtc::RTCError &error);
 	KPeerInitializationResult failInitialization(
 		KPeerInitializationStage stage, const QString &strTechnicalMessage);
@@ -204,6 +207,7 @@ private:
 	std::atomic_int m_nInvalidFileTransferDataMessages = 0;
 	std::atomic_bool m_bProtocolTerminationPending = false;
 	std::atomic_bool m_bInputRealtimeEnabled = false;
+	KMouseInputRoutingState m_mouseInputRoutingState;
 	KOutboundMessageQueue m_inputSendQueue { 256, 64 * 1024 };
 	KOutboundMessageQueue m_realtimeInputSendQueue { 2, 4 * 1024 };
 	KOutboundMessageQueue m_sessionSendQueue { 32, 512 * 1024 };

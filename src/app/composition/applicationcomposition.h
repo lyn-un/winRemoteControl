@@ -22,6 +22,8 @@ class KDeviceDiscoveryController;
 class KDeviceDiscoveryViewModel;
 class KRecentDeviceService;
 class KApplicationSettingsService;
+class KKeyboardSettingsService;
+class KRemoteKeyboardRoutingService;
 class KDeviceSecurityPreferenceService;
 class KClipboardSyncService;
 class KTerminalSessionService;
@@ -70,6 +72,8 @@ private:
 	KDeviceDiscoveryViewModel *m_pDiscoveryViewModel = nullptr;
 	KRecentDeviceService *m_pRecentDeviceService = nullptr;
 	KApplicationSettingsService *m_pApplicationSettingsService = nullptr;
+	KKeyboardSettingsService *m_pKeyboardSettingsService = nullptr;
+	KRemoteKeyboardRoutingService *m_pRemoteKeyboardRoutingService = nullptr;
 	KDeviceSecurityPreferenceService *m_pDeviceSecurityPreferenceService = nullptr;
 	KClipboardSyncService *m_pClipboardSyncService = nullptr;
 	KTerminalSessionService *m_pTerminalSessionService = nullptr;

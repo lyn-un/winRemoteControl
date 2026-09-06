@@ -44,6 +44,7 @@ namespace
 	constexpr char kMaximumBitrateKbps[] = "maximumBitrateKbps";
 	constexpr char kClipboardText[] = "clipboardText";
 	constexpr char kInputRealtime[] = "inputRealtime";
+	constexpr char kOrderedMouseDrag[] = "orderedMouseDrag";
 	constexpr char kKeyboard[] = "keyboard";
 	constexpr char kUnicodeText[] = "unicodeText";
 	constexpr char kMouseButtons[] = "mouseButtons";
@@ -290,6 +291,7 @@ QString KSessionMessageCodec::encode(const KSessionMessage &message)
 		object.insert(QString::fromLatin1(kMaximumBitrateKbps), capabilities.nMaximumBitrateKbps);
 		object.insert(QString::fromLatin1(kClipboardText), capabilities.bClipboardText);
 		object.insert(QString::fromLatin1(kInputRealtime), capabilities.bInputRealtime);
+		object.insert(QString::fromLatin1(kOrderedMouseDrag), capabilities.bOrderedMouseDrag);
 		object.insert(QString::fromLatin1(kKeyboard), capabilities.bKeyboard);
 		object.insert(QString::fromLatin1(kUnicodeText), capabilities.bUnicodeText);
 		object.insert(QString::fromLatin1(kMouseButtons), capabilities.bMouseButtons);
@@ -486,6 +488,8 @@ bool KSessionMessageCodec::decode(const KProtocolEnvelope &envelope,
 			|| capabilities.nMaximumBitrateKbps > KProtocolConstraints::kMaximumStreamBitrateKbps
 			|| !readRequiredBool(object, kClipboardText, &capabilities.bClipboardText)
 			|| !readOptionalBool(object, kInputRealtime, &capabilities.bInputRealtime)
+			|| !readOptionalBool(object, kOrderedMouseDrag,
+				&capabilities.bOrderedMouseDrag)
 			|| !readRequiredBool(object, kKeyboard, &capabilities.bKeyboard)
 			|| !readRequiredBool(object, kUnicodeText, &capabilities.bUnicodeText)
 			|| !readRequiredBool(object, kMouseButtons, &capabilities.bMouseButtons)

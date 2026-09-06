@@ -646,6 +646,7 @@ KPeerInitializationResult KWebRtcPeer::initialize(KSessionRole role,
 	m_nGeneration = nGeneration;
 	m_spCallbackGate->open(this, nGeneration);
 	m_bProtocolTerminationPending = false;
+	m_mouseInputRoutingState.setOrderedMouseDragEnabled(false);
 	m_role = role;
 	KPeerInitializationGuard guard(
 		[this, nGeneration]() { requestShutdown(nGeneration); });
@@ -778,6 +779,7 @@ void KWebRtcPeer::requestShutdown(quint64 nGeneration)
 	m_nInvalidFileTransferDataMessages = 0;
 	m_bProtocolTerminationPending = false;
 	m_bInputRealtimeEnabled = false;
+	m_mouseInputRoutingState.setOrderedMouseDragEnabled(false);
 	m_pInputDataChannel->clear();
 	m_pRealtimeInputDataChannel->clear();
 	m_pSessionDataChannel->clear();
@@ -904,9 +906,26 @@ void KWebRtcPeer::sendInputMessage(const KInputMessage &message)
 {
 	const QString strPayload = KInputMessageCodec::encode(message);
 	const bool bMouseMove = message.type == MouseMoveInputMessageType;
-	if (bMouseMove
-		&& m_bInputRealtimeEnabled
-		&& m_pRealtimeInputDataChannel->isOpen())
+	const bool bRealtimeChannelAvailable = m_bInputRealtimeEnabled
+		&& m_pRealtimeInputDataChannel->isOpen();
+	const KMouseInputRouteDecision routeDecision =
+		m_mouseInputRoutingState.prepare(message, bRealtimeChannelAvailable);
+	if (routeDecision.bClearRealtimeQueue)
+		m_realtimeInputSendQueue.clear();
+
+	if (message.bTrace && (bMouseMove || message.type == MouseButtonInputMessageType))
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controller"),
+			QStringLiteral("input_route"),
+			QStringLiteral("seq=%1 type=%2 channel=%3 pressedButtons=%4")
+				.arg(message.nSequence)
+				.arg(KInputMessageCodec::typeName(message.type))
+				.arg(routeDecision.bUseRealtimeChannel
+					? QStringLiteral("realtime") : QStringLiteral("reliable"))
+				.arg(m_mouseInputRoutingState.hasPressedButtons() ? 1 : 0));
+	}
+
+	if (bMouseMove && routeDecision.bUseRealtimeChannel)
 	{
 		KOutboundMessage queuedMessage {
 			strPayload, QStringLiteral("mouseMove"), false
@@ -923,11 +942,11 @@ void KWebRtcPeer::sendInputMessage(const KInputMessage &message)
 	}
 	if (!m_inputSendQueue.isEmpty() || m_pInputDataChannel->isBackpressured())
 	{
-		enqueueInputMessage(strPayload, bMouseMove);
+		enqueueInputMessage(strPayload, routeDecision.strCoalescingKey);
 		return;
 	}
 	if (!m_pInputDataChannel->sendText(strPayload))
-		enqueueInputMessage(strPayload, bMouseMove);
+		enqueueInputMessage(strPayload, routeDecision.strCoalescingKey);
 }
 
 void KWebRtcPeer::setInputRealtimeEnabled(bool bEnabled)
@@ -936,9 +955,15 @@ void KWebRtcPeer::setInputRealtimeEnabled(bool bEnabled)
 	if (!bEnabled)
 	{
 		m_realtimeInputSendQueue.clear();
+		m_mouseInputRoutingState.reset();
 		return;
 	}
 	flushRealtimeInputQueue();
+}
+
+void KWebRtcPeer::setOrderedMouseDragEnabled(bool bEnabled)
+{
+	m_mouseInputRoutingState.setOrderedMouseDragEnabled(bEnabled);
 }
 
 void KWebRtcPeer::sendLatencyPing()
@@ -1066,12 +1091,13 @@ bool KWebRtcPeer::fileTransferBackpressured() const
 		|| m_pFileTransferDataDataChannel->isBackpressured();
 }
 
-bool KWebRtcPeer::enqueueInputMessage(const QString &strPayload, bool bMouseMove)
+bool KWebRtcPeer::enqueueInputMessage(const QString &strPayload,
+	const QString &strCoalescingKey)
 {
 	KOutboundMessage queuedMessage;
 	queuedMessage.strPayload = strPayload;
-	queuedMessage.strCoalescingKey = bMouseMove ? QStringLiteral("mouseMove") : QString();
-	queuedMessage.bReliable = !bMouseMove;
+	queuedMessage.strCoalescingKey = strCoalescingKey;
+	queuedMessage.bReliable = strCoalescingKey.isEmpty();
 	const KOutboundEnqueueResult result = m_inputSendQueue.enqueue(queuedMessage);
 	if (result != OverflowOutboundMessage)
 		return true;
@@ -1533,6 +1559,7 @@ void KWebRtcPeer::handleInputChannelChanged(bool bOpen)
 	else
 	{
 		m_inputSendQueue.clear();
+		m_mouseInputRoutingState.reset();
 	}
 }
 

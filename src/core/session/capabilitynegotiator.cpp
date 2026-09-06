@@ -65,6 +65,9 @@ KCapabilityNegotiationResult KCapabilityNegotiator::negotiate(
 	negotiated.bInputRealtime = localCapabilities.bInputRealtime
 		&& remoteCapabilities.bInputRealtime
 		&& negotiated.channels.contains(QStringLiteral("input-realtime"));
+	negotiated.bOrderedMouseDrag = negotiated.bInputRealtime
+		&& localCapabilities.bOrderedMouseDrag
+		&& remoteCapabilities.bOrderedMouseDrag;
 	negotiated.bKeyboard = localCapabilities.bKeyboard && remoteCapabilities.bKeyboard;
 	negotiated.bUnicodeText = localCapabilities.bUnicodeText && remoteCapabilities.bUnicodeText;
 	negotiated.bMouseButtons = localCapabilities.bMouseButtons && remoteCapabilities.bMouseButtons;

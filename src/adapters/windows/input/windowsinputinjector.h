@@ -5,9 +5,14 @@
 
 #include <QtCore/QSet>
 
+#include <memory>
+
+class KWindowsDesktopInputDiagnostics;
+
 class KWindowsInputInjector final : public IKInputInjector
 {
 public:
+	KWindowsInputInjector();
 	~KWindowsInputInjector() override;
 
 	bool inject(const KInputMessage &message, QString *pErrorMessage) override;
@@ -30,11 +35,11 @@ private:
 		QString *pErrorMessage);
 	bool sendText(const QString &strText, QString *pErrorMessage);
 	void releaseAllMouseButtons(QStringList *pErrorMessages);
-	static int clampToRange(int nValue, int nMinValue, int nMaxValue);
 	static QString lastWin32ErrorMessage(const QString &strPrefix);
 
 	QSet<quint32> m_pressedKeys;
 	QSet<int> m_pressedMouseButtons;
+	std::unique_ptr<KWindowsDesktopInputDiagnostics> m_spDesktopInputDiagnostics;
 };
 
 #endif // _WINREMOTECONTROL_WINDOWSINPUTINJECTOR_H_

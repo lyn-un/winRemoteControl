@@ -692,6 +692,7 @@ namespace
 			QStringLiteral("input-realtime"), QStringLiteral("clipboard")
 		};
 		source.capabilities.bInputRealtime = true;
+		source.capabilities.bOrderedMouseDrag = true;
 		source.capabilities.supportedPrivacyModes = {
 			QStringLiteral("disabled"), QStringLiteral("privacyoverlay")
 		};
@@ -711,10 +712,20 @@ namespace
 			&& decoded.capabilities.supportedCodecs.contains(QStringLiteral("h264"))
 			&& decoded.capabilities.supportedPrivacyModes.contains(
 				QStringLiteral("privacyoverlay"))
+			&& decoded.capabilities.bOrderedMouseDrag
 			&& decoded.capabilities.bPostSessionLock
 			&& decoded.capabilities.nMaximumFps == KProtocolConstraints::kMaximumStreamFps
 			&& decoded.capabilities.monitorList.size() == 1,
 			QStringLiteral("session capabilities round-trip"));
+
+		QJsonObject legacyObject = QJsonDocument::fromJson(
+			KSessionMessageCodec::encode(source).toUtf8()).object();
+		legacyObject.remove(QStringLiteral("orderedMouseDrag"));
+		check(KSessionMessageCodec::decode(
+				QString::fromUtf8(QJsonDocument(legacyObject).toJson(QJsonDocument::Compact)),
+				&decoded, nullptr)
+			&& !decoded.capabilities.bOrderedMouseDrag,
+			QStringLiteral("missing ordered mouse drag capability defaults to disabled"));
 
 		check(!KSessionMessageCodec::decode(
 			QStringLiteral("{\"version\":1,\"type\":\"capabilities\","

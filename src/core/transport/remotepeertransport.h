@@ -62,6 +62,7 @@ public:
 	virtual KSessionMessageSendStatus sendSessionMessage(
 		const KSessionMessage &message) = 0;
 	virtual void setInputRealtimeEnabled(bool bEnabled) = 0;
+	virtual void setOrderedMouseDragEnabled(bool) {}
 	virtual void setStreamConfig(const KStreamConfig &config) = 0;
 
 signals:

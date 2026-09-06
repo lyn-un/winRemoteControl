@@ -1,6 +1,7 @@
 #include "app/mainwindow.h"
 
 #include "core/media/decodedvideoframe.h"
+#include "common/desktopinputtracelogger.h"
 #include "common/latencytracelogger.h"
 #include "common/resourcetracelogger.h"
 #include "common/applicationpaths.h"
@@ -67,6 +68,8 @@ int main(int nArgc, char *pArgv[])
 		traceOptions.strLatencyScenario);
 	KResourceTraceLogger::configure(
 		traceOptions.bResourceTraceEnabled, traceOptions.strLogDirectory);
+	KDesktopInputTraceLogger::configure(
+		traceOptions.bDesktopInputTraceEnabled, traceOptions.strLogDirectory);
 	KLatencyTraceLogger::write(QStringLiteral("app"),
 		QStringLiteral("startup"),
 		QStringLiteral("dir=%1 dataDir=%2")
@@ -91,6 +94,7 @@ int main(int nArgc, char *pArgv[])
 			"Invalid diagnostic video encoder '%1'. Expected auto, h264_mf, or libx264.")
 			.arg(strEncoder);
 		KLatencyTraceLogger::shutdown();
+		KDesktopInputTraceLogger::shutdown();
 		::CoUninitialize();
 		return 2;
 	}
@@ -102,6 +106,7 @@ int main(int nArgc, char *pArgv[])
 	const int nResult = app.exec();
 	KLatencyTraceLogger::write(QStringLiteral("app"), QStringLiteral("shutdown"));
 	KLatencyTraceLogger::shutdown();
+	KDesktopInputTraceLogger::shutdown();
 	::CoUninitialize();
 	return nResult;
 }

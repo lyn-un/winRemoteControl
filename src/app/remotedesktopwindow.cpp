@@ -10,6 +10,7 @@
 #include <QtGui/QActionGroup>
 #include <QtGui/QScreen>
 #include <QtWidgets/QMenu>
+#include <QtWidgets/QLabel>
 #include <QtWidgets/QToolTip>
 
 #include <Windows.h>
@@ -46,11 +47,19 @@ KRemoteDesktopWindow::KRemoteDesktopWindow(QWidget *pParent)
 	: QMainWindow(pParent)
 	, m_pWebViewWidget(new KWebViewWidget(this))
 	, m_pVideoRenderWidget(new KVideoRenderWidget(m_pWebViewWidget))
+	, m_pKeyboardCaptureLabel(new QLabel(m_pVideoRenderWidget))
 {
 	setWindowFlags(Qt::FramelessWindowHint | Qt::Window);
 	setWindowTitle(QStringLiteral("winRemoteControl Desktop"));
 	resize(1280, 760);
 	m_pVideoRenderWidget->hide();
+	m_pKeyboardCaptureLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+	m_pKeyboardCaptureLabel->setAlignment(Qt::AlignCenter);
+	m_pKeyboardCaptureLabel->setStyleSheet(QStringLiteral(
+		"QLabel { color: white; background: rgba(26, 39, 44, 185); "
+		"border: 1px solid rgba(255,255,255,70); border-radius: 8px; "
+		"padding: 7px 12px; font-size: 12px; }"));
+	m_pKeyboardCaptureLabel->hide();
 	setCentralWidget(m_pWebViewWidget);
 	initConnections();
 }
@@ -166,6 +175,40 @@ void KRemoteDesktopWindow::handlePostSessionActionCommandCompleted(const QString
 	showSecurityCommandError(strErrorCode);
 }
 
+void KRemoteDesktopWindow::handleKeyboardCaptureStateChanged(
+	bool bActive,
+	const QString &strMessage)
+{
+	Q_UNUSED(bActive)
+	if (strMessage.isEmpty())
+	{
+		m_pKeyboardCaptureLabel->hide();
+		return;
+	}
+	m_pKeyboardCaptureLabel->setText(strMessage);
+	m_pKeyboardCaptureLabel->adjustSize();
+	const int nX = qMax(8, (m_pVideoRenderWidget->width()
+		- m_pKeyboardCaptureLabel->width()) / 2);
+	m_pKeyboardCaptureLabel->move(nX, 14);
+	m_pKeyboardCaptureLabel->show();
+	m_pKeyboardCaptureLabel->raise();
+}
+
+void KRemoteDesktopWindow::toggleKeyboardFullscreen()
+{
+	if (!m_bKeyboardFullscreen)
+	{
+		m_bWasMaximizedBeforeFullscreen = isMaximized();
+		showFullScreen();
+		m_bKeyboardFullscreen = true;
+		return;
+	}
+	showNormal();
+	if (m_bWasMaximizedBeforeFullscreen)
+		showMaximized();
+	m_bKeyboardFullscreen = false;
+}
+
 void KRemoteDesktopWindow::loadFrontend(
 	const QString &strFrontendPath,
 	const QString &strThemeId)
@@ -182,6 +225,18 @@ void KRemoteDesktopWindow::closeEvent(QCloseEvent *pEvent)
 		emit desktopCloseRequested();
 	}
 	QMainWindow::closeEvent(pEvent);
+}
+
+void KRemoteDesktopWindow::changeEvent(QEvent *pEvent)
+{
+	if (pEvent != nullptr
+		&& (pEvent->type() == QEvent::ActivationChange
+			|| pEvent->type() == QEvent::WindowStateChange)
+		&& (!isActiveWindow() || isMinimized()))
+	{
+		emit keyboardCaptureEligibilityLost();
+	}
+	QMainWindow::changeEvent(pEvent);
 }
 
 bool KRemoteDesktopWindow::nativeEvent(const QByteArray &eventType, void *pMessage, qintptr *pResult)
@@ -225,6 +280,13 @@ void KRemoteDesktopWindow::updatePreviewRect(const QRect &rect)
 	m_pVideoRenderWidget->setGeometry(rect);
 	m_pVideoRenderWidget->show();
 	m_pVideoRenderWidget->raise();
+	if (m_pKeyboardCaptureLabel->isVisible())
+	{
+		m_pKeyboardCaptureLabel->adjustSize();
+		m_pKeyboardCaptureLabel->move(qMax(8,
+			(m_pVideoRenderWidget->width() - m_pKeyboardCaptureLabel->width()) / 2), 14);
+		m_pKeyboardCaptureLabel->raise();
+	}
 }
 
 void KRemoteDesktopWindow::showControlCenterMenu(const QPoint &pos)

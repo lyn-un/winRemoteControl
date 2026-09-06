@@ -1,4 +1,5 @@
 #include "common/traceoptions.h"
+#include "common/desktopinputtracelogger.h"
 #include "common/latencytracelogger.h"
 #include "common/sessiontracelogger.h"
 
@@ -6,9 +7,11 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDebug>
 #include <QtCore/QDir>
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QTemporaryDir>
+#include <QtCore/QThread>
 
 #include <iostream>
 
@@ -53,7 +56,7 @@ namespace
 		KTraceOptions options = ParseOptions(
 			{QStringLiteral("winRemoteControl.exe")}, strApplicationDirectory);
 		Check(!options.bSessionTraceEnabled && !options.bLatencyTraceEnabled
-			&& !options.bResourceTraceEnabled,
+			&& !options.bResourceTraceEnabled && !options.bDesktopInputTraceEnabled,
 			QStringLiteral("trace logging is disabled by default"));
 		Check(options.strLogDirectory == QDir(strApplicationDirectory).absoluteFilePath(
 			QStringLiteral("logs")), QStringLiteral("default logs directory is beside executable"));
@@ -64,7 +67,7 @@ namespace
 			{QStringLiteral("winRemoteControl.exe"), QStringLiteral("--trace")},
 			strApplicationDirectory);
 		Check(options.bSessionTraceEnabled && options.bLatencyTraceEnabled
-			&& options.bResourceTraceEnabled,
+			&& options.bResourceTraceEnabled && options.bDesktopInputTraceEnabled,
 			QStringLiteral("--trace enables all loggers"));
 
 		options = ParseOptions(
@@ -83,8 +86,15 @@ namespace
 			{QStringLiteral("winRemoteControl.exe"), QStringLiteral("--resource-trace")},
 			strApplicationDirectory);
 		Check(!options.bSessionTraceEnabled && !options.bLatencyTraceEnabled
-			&& options.bResourceTraceEnabled,
+			&& options.bResourceTraceEnabled && !options.bDesktopInputTraceEnabled,
 			QStringLiteral("--resource-trace only enables resource logging"));
+
+		options = ParseOptions(
+			{QStringLiteral("winRemoteControl.exe"),
+				QStringLiteral("--desktop-input-trace")}, strApplicationDirectory);
+		Check(!options.bSessionTraceEnabled && !options.bLatencyTraceEnabled
+			&& !options.bResourceTraceEnabled && options.bDesktopInputTraceEnabled,
+			QStringLiteral("--desktop-input-trace only enables desktop input diagnostics"));
 
 		options = ParseOptions(
 			{QStringLiteral("winRemoteControl.exe"), QStringLiteral("--latency-scenario"),
@@ -141,11 +151,34 @@ namespace
 		KSessionTraceLogger::configure(true, temporaryDirectory.path());
 		KLatencyTraceLogger::configure(
 			true, temporaryDirectory.path(), QStringLiteral("mouse"));
+		KDesktopInputTraceLogger::configure(true, temporaryDirectory.path());
 		KSessionTraceLogger::write(QStringLiteral("controlled"),
 			QStringLiteral("test"), QStringLiteral("configured_directory"));
 		KLatencyTraceLogger::write(QStringLiteral("controller"),
 			QStringLiteral("configured_directory"));
+		KDesktopInputTraceLogger::write(
+			QStringLiteral("configured_directory"), QStringLiteral("safe=true"));
+		const QString strDesktopInputPath = QDir(temporaryDirectory.path()).absoluteFilePath(
+			QStringLiteral("desktop_input_trace_controlled.log"));
+		bool bVisibleBeforeShutdown = false;
+		QElapsedTimer visibilityTimer;
+		visibilityTimer.start();
+		while (visibilityTimer.elapsed() < 1000)
+		{
+			QFile desktopInputFile(strDesktopInputPath);
+			if (desktopInputFile.open(QIODevice::ReadOnly | QIODevice::Text)
+				&& QString::fromUtf8(desktopInputFile.readAll()).contains(
+					QStringLiteral("configured_directory")))
+			{
+				bVisibleBeforeShutdown = true;
+				break;
+			}
+			QThread::msleep(20);
+		}
+		Check(bVisibleBeforeShutdown,
+			QStringLiteral("desktop input trace is visible before logger shutdown"));
 		KLatencyTraceLogger::shutdown();
+		KDesktopInputTraceLogger::shutdown();
 
 		Check(QFileInfo::exists(QDir(temporaryDirectory.path()).absoluteFilePath(
 			QStringLiteral("session_trace_controlled.log"))),
@@ -153,6 +186,8 @@ namespace
 		Check(QFileInfo::exists(QDir(temporaryDirectory.path()).absoluteFilePath(
 			QStringLiteral("latency_trace_controller.log"))),
 			QStringLiteral("latency trace keeps the controller role in its file name"));
+		Check(QFileInfo::exists(strDesktopInputPath),
+			QStringLiteral("desktop input trace uses the controlled-side file name"));
 		QFile latencyFile(QDir(temporaryDirectory.path()).absoluteFilePath(
 			QStringLiteral("latency_trace_controller.log")));
 		Check(latencyFile.open(QIODevice::ReadOnly | QIODevice::Text),

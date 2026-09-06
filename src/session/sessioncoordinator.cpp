@@ -83,6 +83,14 @@ namespace
 			.arg(KInputMessageCodec::typeName(message.type));
 		if (message.type == KeyInputMessageType)
 			strExtra += QStringLiteral(" pressed=%1").arg(message.bPressed ? 1 : 0);
+		else if (message.type == MouseButtonInputMessageType)
+		{
+			strExtra += QStringLiteral(" button=%1 pressed=%2 x=%3 y=%4")
+				.arg(KInputMessageCodec::mouseButtonName(message.mouseButton))
+				.arg(message.bPressed ? 1 : 0)
+				.arg(message.nX)
+				.arg(message.nY);
+		}
 		else if (message.type == TextInputMessageType)
 			strExtra += QStringLiteral(" bytes=%1").arg(message.strText.toUtf8().size());
 		return strExtra;
@@ -2006,6 +2014,9 @@ void KSessionCoordinator::completeCapabilityNegotiation(
 		&& capabilities.channels.contains(QStringLiteral("file-data"))
 		&& effectivePermissions.testFlag(FileTransferPermissionScope);
 	m_spRemotePeerTransport->setInputRealtimeEnabled(capabilities.bInputRealtime);
+	m_spRemotePeerTransport->setOrderedMouseDragEnabled(
+		capabilities.bOrderedMouseDrag);
+	m_pInputInjector->setOrderedMouseDragEnabled(capabilities.bOrderedMouseDrag);
 	if (!m_sessionStateMachine.markConnected())
 		return;
 	publishSessionState();
@@ -2061,6 +2072,7 @@ KSessionCapabilities KSessionCoordinator::localCapabilities() const
 {
 	KSessionCapabilities capabilities;
 	capabilities.bInputRealtime = true;
+	capabilities.bOrderedMouseDrag = true;
 	capabilities.supportedCodecs = { QStringLiteral("h264") };
 	capabilities.supportedChannels = {
 		QStringLiteral("video"), QStringLiteral("session"), QStringLiteral("input"),
@@ -2106,6 +2118,7 @@ KSessionCapabilities KSessionCoordinator::localCapabilities() const
 	if (!hasPermission(InputControlPermissionScope))
 	{
 		capabilities.bInputRealtime = false;
+		capabilities.bOrderedMouseDrag = false;
 		capabilities.bKeyboard = false;
 		capabilities.bUnicodeText = false;
 		capabilities.bMouseButtons = false;

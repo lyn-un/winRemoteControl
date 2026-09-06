@@ -311,21 +311,21 @@
 
 :root[data-theme="daylight"] {
   color-scheme: light;
-  --theme-canvas: #f9fbfd;
-  --theme-canvas-deep: #eef3f7;
-  --theme-sidebar: rgba(240, 245, 249, .98);
-  --theme-panel: #ffffff;
-  --theme-panel-solid: #ffffff;
-  --theme-panel-soft: #f6f9fb;
-  --theme-overlay: rgba(249, 251, 253, .98);
+  --theme-canvas: #f3f3f3;
+  --theme-canvas-deep: #eeeeee;
+  --theme-sidebar: #f3f3f3;
+  --theme-panel: #fbfbfb;
+  --theme-panel-solid: #fbfbfb;
+  --theme-panel-soft: #f6f6f6;
+  --theme-overlay: rgba(243, 243, 243, .98);
   --theme-input: #ffffff;
-  --theme-text: #20282f;
-  --theme-text-secondary: #566570;
-  --theme-text-subtle: #788791;
-  --theme-border: #dce4e9;
-  --theme-border-strong: #cbd6dd;
-  --theme-hover: #f4f7f9;
-  --theme-selected: #ffffff;
+  --theme-text: #1a1a1a;
+  --theme-text-secondary: #5c5c5c;
+  --theme-text-subtle: #737373;
+  --theme-border: #e3e3e3;
+  --theme-border-strong: #cecece;
+  --theme-hover: #f0f0f0;
+  --theme-selected: #eeeeee;
   --theme-focus-ring: rgba(63, 116, 128, .2);
   --theme-shadow: 0 16px 44px rgba(37, 55, 67, .08);
   --theme-shadow-strong: 0 30px 80px rgba(29, 45, 56, .16);
@@ -543,6 +543,17 @@ body { color:var(--theme-text);background:var(--theme-canvas); }
 
 /* Appearance cards */
 .appearance-settings-card { min-height:0; }
+.keyboard-settings-stack { position:relative; }
+.keyboard-setting-toolbar,.keyboard-setting-footer { display:flex;align-items:center;justify-content:space-between;gap:12px; }
+.keyboard-setting-toolbar { margin-bottom:14px;color:var(--theme-text-subtle);font-size:12px; }
+.keyboard-setting-footer { justify-content:flex-end;margin-top:16px; }
+.keyboard-shortcut-list { display:grid;gap:8px; }
+.keyboard-shortcut-row { display:flex;align-items:center;gap:12px;min-height:50px;padding:9px 11px;background:var(--theme-hover);border:1px solid var(--theme-border);border-radius:8px; }
+.keyboard-shortcut-row>span:first-child { flex:1; }.keyboard-shortcut-row strong,.keyboard-shortcut-row small { display:block; }.keyboard-shortcut-row small { margin-top:3px;color:var(--theme-text-subtle);font-size:10px; }
+.shortcut-keycaps { flex:0 0 auto!important;padding:6px 9px;color:var(--theme-accent-strong);background:var(--theme-accent-soft);border:1px solid var(--theme-border-strong);border-radius:6px;font:600 11px "Cascadia Mono",Consolas,monospace; }
+.keyboard-shortcut-empty { padding:24px;color:var(--theme-text-subtle);background:var(--theme-hover);border:1px dashed var(--theme-border-strong);border-radius:8px;text-align:center;font-size:12px; }
+.shortcut-recording-banner { position:sticky;bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:13px 15px;color:white;background:var(--theme-accent-strong);border-radius:9px;box-shadow:var(--theme-shadow);font-size:12px; }
+.shortcut-recording-banner button { padding:6px 12px;color:white;background:transparent;border:1px solid rgba(255,255,255,.45);border-radius:6px; }
 .theme-card-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px; }
 .theme-card { position:relative;display:flex;flex-direction:column;min-width:0;padding:10px;color:var(--theme-text);background:var(--theme-panel-soft);border:1px solid var(--theme-border);border-radius:11px;text-align:left;transition:border-color .18s ease,background .18s ease,box-shadow .18s ease,transform .18s ease; }
 .theme-card:hover { background:var(--theme-hover);border-color:var(--theme-border-strong);transform:translateY(-1px); }
@@ -586,3 +597,139 @@ body { color:var(--theme-text);background:var(--theme-canvas); }
 .trusted-device-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .danger-button { border: 1px solid var(--theme-danger-border); border-radius: 9px; padding: 9px 15px; color: var(--theme-danger-strong); background: var(--theme-danger-soft); cursor: pointer; }
 .danger-button:hover { color: var(--theme-text-on-accent); background: var(--theme-danger); }
+
+/* Windows-inspired settings: restrained groups and rows, with existing actions. */
+.settings-windows-style { font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif; font-size: 14px; background: var(--theme-canvas); }
+.settings-windows-style::before { display: none; }
+.settings-windows-style .app-sidebar { backdrop-filter: none; }
+.settings-windows-style .settings-view { animation: none; }
+.settings-windows-style .settings-page-heading h1 { margin: 0; font: 600 28px/1.4 "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif; letter-spacing: normal; }
+.settings-windows-style .settings-pane-heading { min-height: 64px; border: 0; padding: 0 0 12px; }
+.settings-windows-style .settings-pane-heading h2 { margin: 0 0 6px; font: 600 24px/1.4 "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+.settings-windows-style .settings-pane-heading p { font-size: 13px; }
+.settings-windows-style .settings-index { padding: 12px; min-height: 430px; background: var(--theme-panel-solid); border: 1px solid var(--theme-border); border-radius: 8px; box-shadow: none; backdrop-filter: none; }
+.settings-windows-style .settings-index button { grid-template-columns:24px minmax(0,1fr); gap:12px; margin: 0 0 4px; padding:12px; border:0; border-radius:6px; box-shadow:none; }
+.settings-windows-style .settings-index button.active { color:var(--theme-text); background:var(--theme-selected); }
+.settings-windows-style .settings-index button.active::before { left:0; height:20px; border-radius:2px; }
+.settings-windows-style .settings-index button strong { font-size:14px; font-weight:400; }
+.settings-windows-style .settings-index button.active strong { font-weight:600; }
+.settings-windows-style .settings-index button small { font-size:12px; line-height:1.5; color:var(--theme-text-secondary); }
+.settings-windows-style .settings-index-icon { width:24px; height:24px; background:transparent; color:var(--theme-text-secondary); }
+.settings-windows-style .settings-index-icon .ui-icon { width:20px; height:20px; }
+.settings-windows-style .settings-card { padding:22px 24px; border:1px solid var(--theme-border); border-radius:8px; background:var(--theme-panel-solid); box-shadow:none; backdrop-filter:none; }
+.settings-windows-style .settings-content-card { min-height:0; }
+.settings-windows-style .settings-hero { gap:16px; grid-template-columns:28px minmax(0,1fr) auto; }
+.settings-windows-style .settings-hero::after { display:none; }
+.settings-windows-style .settings-icon { width:28px; height:28px; border:0; border-radius:0; background:transparent; color:var(--theme-text); }
+.settings-windows-style .settings-icon .ui-icon { width:24px; height:24px; }
+.settings-windows-style :is(.settings-hero h2,.settings-section-title h2) { margin:0 0 6px; font-size:18px; font-weight:500; line-height:1.4; }
+.settings-windows-style .settings-hero h2 { font-size:15px; }
+.settings-windows-style :is(.settings-hero p,.settings-section-title p) { font-size:13px; line-height:1.6; color:var(--theme-text-secondary); }
+.settings-windows-style .settings-section-title { margin-bottom:18px; }
+.settings-windows-style .approval-options { gap:0; margin:0 -24px; }
+.settings-windows-style .approval-options button { padding:16px 24px; min-height:68px; border:0; border-top:1px solid var(--theme-border); border-radius:0; background:transparent; box-shadow:none; }
+.settings-windows-style .approval-options button.active { background:var(--theme-selected); color:var(--theme-text); }
+.settings-windows-style .approval-options button:hover:not(:disabled) { background:var(--theme-hover); }
+.settings-windows-style .approval-options strong { font-size:14px; font-weight:500; }
+.settings-windows-style .approval-options small { font-size:12px; line-height:1.5; }
+.settings-windows-style .approval-options em { background:transparent; font:400 12px/1.4 "Segoe UI", "Microsoft YaHei UI", sans-serif; color:var(--theme-text-secondary); }
+.settings-windows-style .radio-mark { background:var(--theme-panel-solid); box-shadow:inset 0 0 0 3px var(--theme-panel-solid); }
+.settings-windows-style .approval-options button.active .radio-mark { background:var(--theme-accent); border-color:var(--theme-accent); }
+.settings-windows-style .setting-line { gap:16px; margin:0 -24px -22px; padding:16px 24px; border-color:var(--theme-border); }
+.settings-windows-style .setting-line strong { font-weight:500; }
+.settings-windows-style .switch-control { width:40px; height:22px; padding:3px; flex-shrink:0; }
+.settings-windows-style .switch-control span { width:16px; height:16px; background:var(--theme-panel-solid); box-shadow:none; }
+.settings-windows-style .switch-control.is-on { background:var(--theme-accent); }
+.settings-windows-style .switch-control.is-on span { transform:translateX(18px); background:var(--theme-text-on-accent); }
+.settings-windows-style :is(.outline-button,.primary-button,.danger-button) { min-height:32px; padding:6px 14px; border-radius:5px; font:400 14px/1.4 "Segoe UI", "Microsoft YaHei UI", sans-serif; box-shadow:none; }
+.settings-windows-style .outline-button { background:var(--theme-panel-solid); border-color:var(--theme-border); color:var(--theme-text); }
+.settings-windows-style .primary-button:hover { transform:none; }
+.settings-windows-style :is(.outline-button,.theme-card):hover:not(:disabled) { background:var(--theme-hover); transform:none; }
+.settings-windows-style :is(button,select,input):focus-visible { outline:2px solid var(--theme-accent); outline-offset:2px; }
+.settings-windows-style button:disabled { cursor:default; opacity:.5; }
+.settings-windows-style :is(.outline-button,.settings-index button):active:not(:disabled) { background:var(--theme-selected); }
+.settings-windows-style :is(select,input:not([type="checkbox"])) { min-height:32px; border-radius:5px; font:400 14px "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+.settings-windows-style .theme-card { border-radius:6px; padding:10px; box-shadow:none; }
+.settings-windows-style .theme-card-copy em { display:none; }
+.settings-windows-style .theme-card-copy strong { font-weight:500; }
+.settings-windows-style :is(.keyboard-shortcut-row,.trusted-permissions label) { border-radius:6px; background:var(--theme-panel-soft); }
+.settings-windows-style .keyboard-shortcut-empty { border:1px solid var(--theme-border); border-radius:6px; background:var(--theme-panel-soft); }
+.settings-windows-style .empty-state strong { font:500 18px/1.5 "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+.settings-windows-style .empty-state small { margin-top:8px; line-height:1.6; }
+.settings-windows-style .settings-confirm-dialog { border-radius:8px; background:var(--theme-panel-solid); }
+.settings-windows-style .settings-confirm-dialog::after, .settings-windows-style .settings-confirm-dialog .eyebrow { display:none; }
+.settings-windows-style .settings-confirm-dialog h2 { font:600 22px/1.4 "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+.settings-windows-style .settings-confirm-mark { border:0; background:transparent; box-shadow:none; }
+@media (max-width: 1100px) {
+  .settings-windows-style .settings-workspace { grid-template-columns:180px minmax(0,1fr); }
+}
+@media (max-width: 900px) {
+  .settings-windows-style .settings-workspace { grid-template-columns:minmax(0,1fr); grid-template-areas:"page-heading" "index" "pane-heading" "pane"; }
+  .settings-windows-style .settings-index { position:static; display:flex; flex-wrap:wrap; gap:4px; min-height:0; }
+  .settings-windows-style .settings-index button { width:auto; padding:8px; }
+  .settings-windows-style .settings-index button small { display:none; }
+  .settings-windows-style .settings-card { padding:18px 16px; }
+  .settings-windows-style .approval-options { margin:0 -16px; }
+  .settings-windows-style .approval-options button { padding:14px 16px; }
+  .settings-windows-style .setting-line { margin:0 -16px -18px; padding:14px 16px; flex-wrap:wrap; }
+  .settings-windows-style .settings-confirm-dialog { width:100%; }
+  .settings-windows-style .keyboard-shortcut-row { flex-wrap:wrap; }
+}
+
+/* Device-page visual treatment only; keep the existing navigation and pane layout. */
+.devices-windows-style { font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif; font-size: 14px; background: var(--theme-canvas); }
+.devices-windows-style::before { display: none; }
+.devices-windows-style .app-sidebar { backdrop-filter: none; box-shadow: none; }
+.devices-windows-style .dashboard-main { overflow-y: auto; }
+.devices-windows-style .view-enter { animation: none; }
+.devices-windows-style .page-heading { gap: 16px; align-items: center; }
+.devices-windows-style .page-heading h1 { margin: 0 0 8px; font: 600 28px/1.3 "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif; letter-spacing: normal; }
+.devices-windows-style .page-heading p { line-height: 1.6; }
+.devices-windows-style .page-heading .refresh-button { flex-shrink: 0; }
+.devices-windows-style .empty-state { padding: 48px 24px; }
+.devices-windows-style .device-empty-icon { display: grid; place-items: center; width: 150px; height: 150px; color: var(--theme-text-secondary); }
+.devices-windows-style .device-empty-icon .ui-icon { width: 52px; height: 52px; }
+.devices-windows-style .empty-state strong { font: 600 20px/1.4 "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+.devices-windows-style .empty-state p { font-size: 14px; color: var(--theme-text-secondary); }
+.devices-windows-style :is(.app-nav > button, .settings-nav-button, .sidebar-device-row) { border-radius: 6px; box-shadow: none; }
+.devices-windows-style :is(.app-nav > button.active, .sidebar-device-row.is-selected)::before { box-shadow: none; }
+.devices-windows-style .sidebar-device-row strong { font-size: 14px; font-weight: 600; }
+.devices-windows-style .sidebar-device-row small { font-size: 12px; color: var(--theme-text-secondary); }
+.devices-windows-style :is(.sidebar-device-row > i.is-online, .session-badge i, .discovery-state i) { box-shadow: none; }
+.devices-windows-style :is(.refresh-button, .outline-button, .primary-button) { min-height: 36px; padding: 8px 14px; border-radius: 6px; font: 400 14px/1.4 "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif; box-shadow: none; transition: background-color .12s, border-color .12s; }
+.devices-windows-style :is(.refresh-button, .outline-button) { background: var(--theme-panel-solid); border: 1px solid var(--theme-border); color: var(--theme-text); }
+.devices-windows-style :is(.refresh-button, .outline-button):hover:not(:disabled) { background: var(--theme-hover); border-color: var(--theme-border-strong); }
+.devices-windows-style .primary-button { background: var(--theme-accent); color: var(--theme-text-on-accent); border: 1px solid transparent; }
+.devices-windows-style .primary-button:hover:not(:disabled) { background: var(--theme-accent-strong); transform: none; }
+.devices-windows-style :is(.refresh-button, .outline-button, .app-nav > button, .sidebar-device-row, .settings-nav-button):active:not(:disabled) { background: var(--theme-selected); }
+.devices-windows-style .primary-button:active:not(:disabled) { background: var(--theme-accent-strong); opacity: .85; }
+.devices-windows-style :is(.refresh-button, .outline-button, .primary-button):disabled { opacity: .5; cursor: default; transform: none; }
+.devices-windows-style :is(.app-nav button, .settings-nav-button, .refresh-button, .outline-button, .primary-button, .device-context-menu button):focus-visible { outline: 2px solid var(--theme-accent); outline-offset: 2px; }
+.devices-windows-style .device-context-menu { background: var(--theme-panel-solid); border-radius: 6px; backdrop-filter: none; box-shadow: 0 4px 16px rgba(0,0,0,.14); font-size: 14px; }
+.devices-windows-style .device-context-menu button { color: var(--theme-danger-strong); font-size: 14px; padding: 8px 10px; }
+.devices-windows-style .device-context-menu button:active { background: var(--theme-danger-soft); }
+.devices-windows-style .session-heading { gap: 16px; }
+.devices-windows-style .session-heading > div:first-child { min-width: 0; }
+.devices-windows-style .session-heading h2 { display: block; margin: 10px 0 6px; overflow-wrap: anywhere; font: 600 28px/1.3 "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+.devices-windows-style .session-heading p { margin: 0; overflow-wrap: anywhere; font: 400 14px/1.5 "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+.devices-windows-style .session-ready { flex-shrink: 0; }
+.devices-windows-style .session-ready strong { font: 600 14px/1.5 "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif; letter-spacing: normal; }
+.devices-windows-style .session-badge { border-radius: 6px; color: var(--theme-text); background: var(--theme-panel-soft); border: 1px solid var(--theme-border); }
+.devices-windows-style :is(.desktop-preview-card, .session-details) { background: var(--theme-panel-solid); border: 1px solid var(--theme-border); border-radius: 6px; box-shadow: none; backdrop-filter: none; }
+.devices-windows-style .device-placeholder-preview { background: var(--theme-panel-soft); border-radius: 6px; }
+.devices-windows-style .device-placeholder-preview::before, .devices-windows-style .device-placeholder-preview::after { display: none; }
+.devices-windows-style .device-placeholder-preview .wallpaper-placeholder strong { font: 600 18px/1.4 "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif; color: var(--theme-text); }
+.devices-windows-style .wallpaper-placeholder small { font-size: 12px; }
+.devices-windows-style .session-details h3 { margin: 0 0 20px; font: 600 18px/1.4 "Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+.devices-windows-style .session-details dl div { gap: 12px; font-size: 14px; }
+.devices-windows-style .session-details dt { flex-shrink: 0; }
+.devices-windows-style .session-details dd { min-width: 0; overflow-wrap: anywhere; }
+.devices-windows-style .device-detail-note { background: var(--theme-panel-soft); color: var(--theme-text-secondary); border-radius: 6px; }
+.devices-windows-style .desktop-preview-card footer { gap: 12px; flex-wrap: wrap; }
+.devices-windows-style .desktop-preview-card footer > div { min-width: 0; }
+.devices-windows-style .desktop-preview-card footer i { flex-shrink: 0; }
+.devices-windows-style .desktop-preview-card footer .primary-button { margin-left: auto; flex-shrink: 0; }
+.devices-windows-style .error-stack p { color: var(--theme-danger-strong); background: var(--theme-danger-soft); border-color: var(--theme-danger-border); border-radius: 6px; box-shadow: none; }
+@media (max-width: 980px) {
+  .devices-windows-style .page-heading { flex-wrap: wrap; }
+}

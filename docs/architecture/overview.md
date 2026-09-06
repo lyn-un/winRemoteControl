@@ -41,6 +41,8 @@ flowchart TB
 - `KTerminalSessionService` 与 `KTerminalCommandDispatcher` 管理终端审批、实例序号、可靠命令、流控和状态；控制端由 `KWindowsTerminalFrontend + wrcTerminalRelay.exe` 接入 Windows Terminal，被控端由 `KWindowsPseudoConsole` 托管 ConPTY/Job Object。
 - `KFileTransferSessionService` 管理文件功能握手、双栏目录快照、单文件顺序队列、累计 ACK、冲突和生命周期；`IKFileSystemPort` 隔离文件系统能力，`KWindowsFileSystemAdapter` 负责 Windows 路径校验、源文件快照、临时写入、SHA-256 校验和原子提交。
 - `KFileTransferWindow` 与文件传输 ViewModel 只展示 C++ 发布的目录/任务快照。React 仅保存选择、排序和弹层等界面状态，不持有文件路径映射、文件句柄或正文。
+- `KRemoteKeyboardRoutingService` 管理远控窗口物理键盘捕获、修饰键暂存、本地/功能快捷键和远端按键释放；`KKeyboardSettingsService` 负责校验和持久化，React 只展示设置快照。
+- `KMouseInputRoutingState` 在 WebRTC adapter 内选择空闲实时移动与可靠拖拽；`KInputInjector` 在被控端维护序号和成功注入的按钮状态，Win32 `SendInput()` 细节由 `KWindowsInputInjector` 隔离。
 
 ## 线程模型
 
@@ -50,6 +52,7 @@ flowchart TB
 - Remote frame processor 线程：将控制端 I420 帧转换为 BGRA，只保留最新待处理帧，并用共享像素存储投递到 GUI。
 - teardown 后台任务：异步释放 PeerConnection、Factory 和 WebRTC 线程。
 - latency trace 线程：批量落盘高频延迟事件。
+- desktop input trace 线程：以 100 ms 批次实时追加 Win32 输入诊断；低级键鼠钩子回调保持有界，不执行文件 I/O。
 - File transfer worker：执行目录枚举、文件读取、增量哈希、临时文件写入和清理；完成回调携带 `generation + taskId` 后投递回 Qt 所属线程。
 
 跨线程回调携带 `generation`，并通过 Callback Gate 投递到目标 Qt 线程。停止或对象销毁后 Gate 会拒绝迟到回调。
@@ -63,3 +66,4 @@ flowchart TB
 5. 高频数据必须使用有上限队列、合并或丢弃旧数据的策略，不能无限积压。
 
 文件传输的通道、路径安全与原子提交设计见[双向文件传输](../features/file-transfer.md)。长期演进约束见[项目架构方针](../../PLAN.md)。
+远程键盘捕获、双击锚定和有序拖拽边界见[远程输入](../features/remote-input.md)。

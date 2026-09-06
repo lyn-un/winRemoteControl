@@ -34,6 +34,9 @@ export function useNativeState() {
   const [recentDeviceError, setRecentDeviceError] = useState("");
   const [applicationSettings, setApplicationSettings] = useState(null);
   const [applicationSettingsError, setApplicationSettingsError] = useState("");
+	const [keyboardSettings, setKeyboardSettings] = useState(null);
+	const [keyboardSettingsError, setKeyboardSettingsError] = useState("");
+	const [shortcutRecording, setShortcutRecording] = useState({ recording: false, target: "" });
   const [clipboardSync, setClipboardSync] = useState({
     enabled: true,
     available: false,
@@ -208,6 +211,27 @@ export function useNativeState() {
         return;
       }
 
+		if (message.type === "keyboardSettingsChanged") {
+			setKeyboardSettings({
+				localOnlyShortcuts: Array.isArray(message.localOnlyShortcuts) ? message.localOnlyShortcuts : [],
+				releaseCapture: message.releaseCapture || "Ctrl + Alt + Enter",
+				toggleFullscreen: message.toggleFullscreen || "Ctrl + Alt + F",
+			});
+			setKeyboardSettingsError("");
+			return;
+		}
+
+		if (message.type === "keyboardSettingsError") {
+			setKeyboardSettingsError(message.message || "键盘设置保存失败");
+			return;
+		}
+
+		if (message.type === "shortcutRecordingStateChanged") {
+			setShortcutRecording({ recording: Boolean(message.recording), target: message.target || "" });
+			if (message.error) setKeyboardSettingsError(message.error);
+			return;
+		}
+
       if (message.type === "incomingAccessRequest") {
         setIncomingAccessRequest({
           requestId: message.requestId || "",
@@ -380,6 +404,7 @@ export function useNativeState() {
       sendCommand("requestApplicationSettings");
 	  sendCommand("requestTrustedDevices");
 	  sendCommand("requestTerminalFrontendSupport");
+	  sendCommand("requestKeyboardSettings");
     }
   }, []);
 
@@ -415,6 +440,9 @@ export function useNativeState() {
     recentDeviceError,
     applicationSettings,
     applicationSettingsError,
+		keyboardSettings,
+		keyboardSettingsError,
+		shortcutRecording,
     incomingAccessRequest,
 		pairingRequest,
 		deviceAuthentication,

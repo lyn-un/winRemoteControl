@@ -218,6 +218,7 @@ void KVideoRenderWidget::presentFrame(const KDecodedVideoFrame &frame)
 void KVideoRenderWidget::suspendRemoteInput()
 {
 	cancelPendingMouseMove();
+	m_mouseClickTracker.clear();
 	releaseRemoteKeys();
 }
 
@@ -252,6 +253,8 @@ bool KVideoRenderWidget::event(QEvent *pEvent)
 		QKeyEvent *pKeyEvent = static_cast<QKeyEvent *>(pEvent);
 		if (pKeyEvent->key() == Qt::Key_Tab || pKeyEvent->key() == Qt::Key_Backtab)
 		{
+			if (m_bNativeKeyboardRoutingEnabled)
+				return QWidget::event(pEvent);
 			handleRemoteKeyEvent(pKeyEvent, pEvent->type() == QEvent::KeyPress);
 			return true;
 		}
@@ -307,23 +310,36 @@ void KVideoRenderWidget::showEvent(QShowEvent *pEvent)
 
 void KVideoRenderWidget::hideEvent(QHideEvent *pEvent)
 {
+	m_mouseClickTracker.clear();
 	releaseRemoteKeys();
 	QWidget::hideEvent(pEvent);
 }
 
 void KVideoRenderWidget::focusOutEvent(QFocusEvent *pEvent)
 {
+	m_mouseClickTracker.clear();
 	releaseRemoteKeys();
+	emit keyboardCaptureFocusLost();
 	QWidget::focusOutEvent(pEvent);
 }
 
 void KVideoRenderWidget::keyPressEvent(QKeyEvent *pEvent)
 {
+	if (m_bNativeKeyboardRoutingEnabled)
+	{
+		QWidget::keyPressEvent(pEvent);
+		return;
+	}
 	handleRemoteKeyEvent(pEvent, true);
 }
 
 void KVideoRenderWidget::keyReleaseEvent(QKeyEvent *pEvent)
 {
+	if (m_bNativeKeyboardRoutingEnabled)
+	{
+		QWidget::keyReleaseEvent(pEvent);
+		return;
+	}
 	handleRemoteKeyEvent(pEvent, false);
 }
 
@@ -331,10 +347,22 @@ void KVideoRenderWidget::inputMethodEvent(QInputMethodEvent *pEvent)
 {
 	if (pEvent == nullptr)
 		return;
+	if (m_bNativeKeyboardRoutingEnabled)
+	{
+		QWidget::inputMethodEvent(pEvent);
+		return;
+	}
 	m_bImeComposing = !pEvent->preeditString().isEmpty();
 	if (!pEvent->commitString().isEmpty())
 		emit remoteTextRequested(pEvent->commitString());
 	pEvent->accept();
+}
+
+void KVideoRenderWidget::setNativeKeyboardRoutingEnabled(bool bEnabled)
+{
+	m_bNativeKeyboardRoutingEnabled = bEnabled;
+	if (bEnabled)
+		releaseRemoteKeys();
 }
 
 QPaintEngine *KVideoRenderWidget::paintEngine() const
@@ -344,8 +372,15 @@ QPaintEngine *KVideoRenderWidget::paintEngine() const
 
 void KVideoRenderWidget::setRemoteScreenSize(int nWidth, int nHeight)
 {
-	m_nRemoteScreenWidth = qMax(0, nWidth);
-	m_nRemoteScreenHeight = qMax(0, nHeight);
+	const int nRemoteScreenWidth = qMax(0, nWidth);
+	const int nRemoteScreenHeight = qMax(0, nHeight);
+	if (m_nRemoteScreenWidth != nRemoteScreenWidth
+		|| m_nRemoteScreenHeight != nRemoteScreenHeight)
+	{
+		m_mouseClickTracker.clear();
+	}
+	m_nRemoteScreenWidth = nRemoteScreenWidth;
+	m_nRemoteScreenHeight = nRemoteScreenHeight;
 }
 
 void KVideoRenderWidget::mouseMoveEvent(QMouseEvent *pEvent)
@@ -393,6 +428,8 @@ void KVideoRenderWidget::mousePressEvent(QMouseEvent *pEvent)
 	{
 		cancelPendingMouseMove();
 		setFocus(Qt::MouseFocusReason);
+		emit keyboardCaptureRequested();
+		emit remoteMouseInputAboutToSend();
 		emit remoteMouseButtonRequested(remotePoint.x(), remotePoint.y(), nButton, true);
 		pEvent->accept();
 		return;
@@ -401,14 +438,40 @@ void KVideoRenderWidget::mousePressEvent(QMouseEvent *pEvent)
 	QWidget::mousePressEvent(pEvent);
 }
 
-void KVideoRenderWidget::mouseReleaseEvent(QMouseEvent *pEvent)
+void KVideoRenderWidget::mouseDoubleClickEvent(QMouseEvent *pEvent)
 {
 	const int nButton = pEvent != nullptr ? qtMouseButtonToRemoteButton(pEvent->button()) : 0;
 	QPoint remotePoint;
 	if (nButton != 0 && pEvent != nullptr && mapToRemotePoint(pEvent->position(), &remotePoint))
 	{
+		remotePoint = m_mouseClickTracker.beginDoubleClick(nButton, remotePoint);
 		cancelPendingMouseMove();
+		setFocus(Qt::MouseFocusReason);
+		emit keyboardCaptureRequested();
+		emit remoteMouseInputAboutToSend();
+		emit remoteMouseButtonRequested(remotePoint.x(), remotePoint.y(), nButton, true);
+		pEvent->accept();
+		return;
+	}
+
+	QWidget::mouseDoubleClickEvent(pEvent);
+}
+
+void KVideoRenderWidget::mouseReleaseEvent(QMouseEvent *pEvent)
+{
+	const int nButton = pEvent != nullptr ? qtMouseButtonToRemoteButton(pEvent->button()) : 0;
+	QPoint remotePoint;
+	const bool bAnchoredDoubleClickRelease = nButton != 0
+		&& m_mouseClickTracker.takeDoubleClickReleasePoint(nButton, &remotePoint);
+	if (nButton != 0
+		&& pEvent != nullptr
+		&& (bAnchoredDoubleClickRelease
+			|| mapToRemotePoint(pEvent->position(), &remotePoint)))
+	{
+		cancelPendingMouseMove();
+		emit remoteMouseInputAboutToSend();
 		emit remoteMouseButtonRequested(remotePoint.x(), remotePoint.y(), nButton, false);
+		m_mouseClickTracker.recordCompletedClick(nButton, remotePoint);
 		pEvent->accept();
 		return;
 	}
@@ -425,6 +488,7 @@ void KVideoRenderWidget::wheelEvent(QWheelEvent *pEvent)
 		if (nDelta != 0)
 		{
 			cancelPendingMouseMove();
+			emit remoteMouseInputAboutToSend();
 			emit remoteMouseWheelRequested(remotePoint.x(), remotePoint.y(), nDelta);
 		}
 		pEvent->accept();

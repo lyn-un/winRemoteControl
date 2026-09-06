@@ -12,6 +12,7 @@
 
 class KVideoRenderWidget;
 class KWebViewWidget;
+class QLabel;
 
 class KRemoteDesktopWindow : public QMainWindow
 {
@@ -44,15 +45,19 @@ public slots:
 	void handlePostSessionActionCommandCompleted(const QString &strRequestId,
 		bool bSuccess,
 		const QString &strErrorCode);
+	void handleKeyboardCaptureStateChanged(bool bActive, const QString &strMessage);
+	void toggleKeyboardFullscreen();
 
 signals:
 	void desktopCloseRequested();
 	void streamConfigRequested(const KStreamConfig &config);
 	void privacyModeRequested(KPrivacyMode mode);
 	void postSessionActionRequested(KPostSessionAction action);
+	void keyboardCaptureEligibilityLost();
 
 protected:
 	void closeEvent(QCloseEvent *pEvent) override;
+	void changeEvent(QEvent *pEvent) override;
 	bool nativeEvent(const QByteArray &eventType, void *pMessage, qintptr *pResult) override;
 
 private:
@@ -81,6 +86,9 @@ private:
 	KPostSessionActionStatus m_postSessionActionStatus;
 	KWebViewWidget *m_pWebViewWidget = nullptr;
 	KVideoRenderWidget *m_pVideoRenderWidget = nullptr;
+	QLabel *m_pKeyboardCaptureLabel = nullptr;
+	bool m_bKeyboardFullscreen = false;
+	bool m_bWasMaximizedBeforeFullscreen = false;
 };
 
 #endif // _WINREMOTECONTROL_REMOTEDESKTOPWINDOW_H_

@@ -2,6 +2,7 @@
 #define _WINREMOTECONTROL_VIDEORENDERWIDGET_H_
 
 #include "core/media/latestdecodedframequeue.h"
+#include "render/remotemouseclicktracker.h"
 
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QPoint>
@@ -27,6 +28,7 @@ public:
 
 public slots:
 	void setRemoteScreenSize(int nWidth, int nHeight);
+	void setNativeKeyboardRoutingEnabled(bool bEnabled);
 	void enqueueFrame(const KDecodedVideoFrame &frame);
 	void presentFrame(const KDecodedVideoFrame &frame);
 	void suspendRemoteInput();
@@ -44,6 +46,9 @@ signals:
 		bool bAutoRepeat);
 	void remoteTextRequested(const QString &strText);
 	void inputFeedbackRendered(quint64 nSeq);
+	void keyboardCaptureRequested();
+	void keyboardCaptureFocusLost();
+	void remoteMouseInputAboutToSend();
 
 protected:
 	bool event(QEvent *pEvent) override;
@@ -56,6 +61,7 @@ protected:
 	void inputMethodEvent(QInputMethodEvent *pEvent) override;
 	void mouseMoveEvent(QMouseEvent *pEvent) override;
 	void mousePressEvent(QMouseEvent *pEvent) override;
+	void mouseDoubleClickEvent(QMouseEvent *pEvent) override;
 	void mouseReleaseEvent(QMouseEvent *pEvent) override;
 	void wheelEvent(QWheelEvent *pEvent) override;
 	void leaveEvent(QEvent *pEvent) override;
@@ -94,6 +100,7 @@ private:
 	static QString hresultMessage(const QString &strPrefix, HRESULT hr);
 
 	KLatestDecodedFrameQueue m_frameQueue;
+	KRemoteMouseClickTracker m_mouseClickTracker;
 	QElapsedTimer m_mouseMoveThrottleTimer;
 	QTimer m_mouseMoveFlushTimer;
 	QPoint m_pendingMouseMovePoint;
@@ -101,6 +108,7 @@ private:
 	bool m_bInitialized = false;
 	bool m_bHasPendingMouseMove = false;
 	bool m_bImeComposing = false;
+	bool m_bNativeKeyboardRoutingEnabled = false;
 	quint64 m_nLastRenderedInputSeq = 0;
 	int m_nFrameWidth = 0;
 	int m_nFrameHeight = 0;

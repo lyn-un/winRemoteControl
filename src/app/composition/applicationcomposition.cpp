@@ -13,6 +13,7 @@
 #include "adapters/discovery/udplandiscoverytransport.h"
 #include "adapters/settings/qsettingsrecentdevicestore.h"
 #include "adapters/settings/qsettingsapplicationstore.h"
+#include "adapters/settings/qsettingskeyboardstore.h"
 #include "adapters/settings/qsettingsdevicesecuritypreferencestore.h"
 #include "app/remotedesktopwindow.h"
 #include "app/filetransferwindow.h"
@@ -33,6 +34,8 @@
 #include "transport/webrtc/webrtcpeer.h"
 #include "session/sessioncoordinator.h"
 #include "settings/applicationsettingsservice.h"
+#include "settings/keyboardsettingsservice.h"
+#include "input/remotekeyboardroutingservice.h"
 #include "settings/devicesecuritypreferenceservice.h"
 #include "clipboard/clipboardsyncservice.h"
 #include "terminal/terminalsessionservice.h"
@@ -164,6 +167,11 @@ KApplicationComposition::KApplicationComposition(KVideoEncoderPreference encoder
 	, m_pApplicationSettingsService(new KApplicationSettingsService(
 		std::make_unique<KQSettingsApplicationStore>(ApplicationSettingsFilePath()),
 		this))
+	, m_pKeyboardSettingsService(new KKeyboardSettingsService(
+		std::make_unique<KQSettingsKeyboardStore>(ApplicationSettingsFilePath()),
+		this))
+	, m_pRemoteKeyboardRoutingService(new KRemoteKeyboardRoutingService(
+		m_pKeyboardSettingsService, this))
 	, m_pDeviceSecurityPreferenceService(new KDeviceSecurityPreferenceService(
 		std::make_unique<KQSettingsDeviceSecurityPreferenceStore>(
 			DeviceSecurityPreferencesFilePath()),
@@ -350,6 +358,8 @@ KApplicationComposition::KApplicationComposition(KVideoEncoderPreference encoder
 		this, &KApplicationComposition::handleShutdownDeadline);
 	m_pRecentDeviceService->initialize();
 	m_pApplicationSettingsService->initialize();
+	m_pKeyboardSettingsService->initialize();
+	m_pKeyboardSettingsService->requestSettings();
 	m_pDeviceSecurityPreferenceService->initialize();
 	m_pSessionService->applyApplicationSettings(m_pApplicationSettingsService->settings());
 	m_pTerminalSessionService->setApprovalTimeoutSeconds(
@@ -465,6 +475,18 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		m_pApplicationSettingsService, &KApplicationSettingsService::updateSettings);
 	connect(pWebViewWidget, &KWebViewWidget::updateApplicationThemeRequested,
 		m_pApplicationSettingsService, &KApplicationSettingsService::updateTheme);
+	connect(pWebViewWidget, &KWebViewWidget::requestKeyboardSettingsRequested,
+		m_pKeyboardSettingsService, &KKeyboardSettingsService::requestSettings);
+	connect(pWebViewWidget, &KWebViewWidget::beginKeyboardShortcutRecordingRequested,
+		m_pRemoteKeyboardRoutingService,
+		&KRemoteKeyboardRoutingService::beginShortcutRecording);
+	connect(pWebViewWidget, &KWebViewWidget::cancelKeyboardShortcutRecordingRequested,
+		m_pRemoteKeyboardRoutingService,
+		&KRemoteKeyboardRoutingService::cancelShortcutRecording);
+	connect(pWebViewWidget, &KWebViewWidget::removeLocalKeyboardShortcutRequested,
+		m_pKeyboardSettingsService, &KKeyboardSettingsService::removeLocalShortcut);
+	connect(pWebViewWidget, &KWebViewWidget::restoreDefaultKeyboardShortcutsRequested,
+		m_pKeyboardSettingsService, &KKeyboardSettingsService::restoreDefaults);
 	connect(pWebViewWidget, &KWebViewWidget::respondIncomingAccessRequestRequested,
 		m_pSessionService, &KSessionCoordinator::respondIncomingAccessRequest);
 	connect(pWebViewWidget, &KWebViewWidget::respondPairingRequestRequested,
@@ -518,6 +540,13 @@ void KApplicationComposition::wireDashboard(KWebViewWidget *pWebViewWidget)
 		pWebViewWidget, &KWebViewWidget::sendApplicationSettingsError);
 	connect(m_pApplicationSettingsService, &KApplicationSettingsService::themeError,
 		pWebViewWidget, &KWebViewWidget::sendApplicationThemeError);
+	connect(m_pKeyboardSettingsService, &KKeyboardSettingsService::settingsChanged,
+		pWebViewWidget, &KWebViewWidget::sendKeyboardSettingsChanged);
+	connect(m_pKeyboardSettingsService, &KKeyboardSettingsService::settingsError,
+		pWebViewWidget, &KWebViewWidget::sendKeyboardSettingsError);
+	connect(m_pRemoteKeyboardRoutingService,
+		&KRemoteKeyboardRoutingService::shortcutRecordingStateChanged,
+		pWebViewWidget, &KWebViewWidget::sendShortcutRecordingStateChanged);
 	connect(m_pSessionService, &KSessionCoordinator::incomingAccessRequest,
 		pWebViewWidget, &KWebViewWidget::sendIncomingAccessRequest);
 	connect(m_pSessionService, &KSessionCoordinator::incomingAccessRequestCleared,
@@ -631,6 +660,34 @@ void KApplicationComposition::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWin
 
 	KWebViewWidget *pWebViewWidget = pWindow->webViewWidget();
 	KVideoRenderWidget *pVideoRenderWidget = pWindow->videoRenderWidget();
+	pVideoRenderWidget->setNativeKeyboardRoutingEnabled(true);
+	m_pRemoteKeyboardRoutingService->setRemoteWindowHandles(
+		reinterpret_cast<HWND>(pWindow->winId()),
+		reinterpret_cast<HWND>(pVideoRenderWidget->winId()));
+	connect(pVideoRenderWidget, &KVideoRenderWidget::keyboardCaptureRequested,
+		m_pRemoteKeyboardRoutingService,
+		&KRemoteKeyboardRoutingService::requestCapture);
+	connect(pVideoRenderWidget, &KVideoRenderWidget::keyboardCaptureFocusLost,
+		m_pRemoteKeyboardRoutingService,
+		&KRemoteKeyboardRoutingService::handleVideoFocusLost);
+	connect(pVideoRenderWidget, &KVideoRenderWidget::remoteMouseInputAboutToSend,
+		m_pRemoteKeyboardRoutingService,
+		&KRemoteKeyboardRoutingService::flushPendingModifiers);
+	connect(pWindow, &KRemoteDesktopWindow::keyboardCaptureEligibilityLost,
+		m_pRemoteKeyboardRoutingService,
+		&KRemoteKeyboardRoutingService::handleVideoFocusLost);
+	connect(m_pRemoteKeyboardRoutingService,
+		&KRemoteKeyboardRoutingService::captureStateChanged,
+		pWindow, &KRemoteDesktopWindow::handleKeyboardCaptureStateChanged);
+	connect(m_pRemoteKeyboardRoutingService,
+		&KRemoteKeyboardRoutingService::toggleFullscreenRequested,
+		pWindow, &KRemoteDesktopWindow::toggleKeyboardFullscreen);
+	connect(pWindow, &QObject::destroyed, m_pRemoteKeyboardRoutingService,
+		[this]()
+		{
+			m_pRemoteKeyboardRoutingService->handleVideoFocusLost();
+			m_pRemoteKeyboardRoutingService->setRemoteWindowHandles(nullptr, nullptr);
+		});
 	connect(pWebViewWidget, &KWebViewWidget::retryLastConnectionRequested,
 		m_pSessionViewModel, &KSessionViewModel::retryLastConnection);
 	connect(pWebViewWidget, &KWebViewWidget::setClipboardSyncEnabledRequested,
@@ -959,6 +1016,22 @@ void KApplicationComposition::handleShutdownDeadline()
 
 void KApplicationComposition::wireServices()
 {
+	connect(m_pRemoteKeyboardRoutingService,
+		&KRemoteKeyboardRoutingService::remoteKeyRequested,
+		m_pSessionViewModel, &KSessionViewModel::sendRemoteKey);
+	connect(m_pSessionService, &KSessionCoordinator::sessionStateChanged,
+		m_pRemoteKeyboardRoutingService,
+		[this](KSessionState state)
+		{
+			m_pRemoteKeyboardRoutingService->handleSessionStateChanged(
+				state, m_pSessionService->sessionGeneration());
+		});
+	connect(m_pSessionService, &KSessionCoordinator::sessionCapabilitiesChanged,
+		m_pRemoteKeyboardRoutingService,
+		&KRemoteKeyboardRoutingService::handleCapabilitiesChanged);
+	connect(m_pSessionService, &KSessionCoordinator::sessionPermissionsChanged,
+		m_pRemoteKeyboardRoutingService,
+		&KRemoteKeyboardRoutingService::handlePermissionsChanged);
 	connect(m_pSessionService, &KSessionCoordinator::sessionStateChanged,
 		this, [this](KSessionState state)
 		{

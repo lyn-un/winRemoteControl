@@ -299,6 +299,11 @@ namespace
 			bInputRealtimeEnabled = bEnabled;
 		}
 
+		void setOrderedMouseDragEnabled(bool bEnabled) override
+		{
+			bOrderedMouseDragEnabled = bEnabled;
+		}
+
 		void openSessionChannel()
 		{
 			emit sessionChannelChanged(m_nGeneration, true);
@@ -340,6 +345,7 @@ namespace
 				QStringLiteral("input-realtime"), QStringLiteral("clipboard")
 			};
 			message.capabilities.bInputRealtime = true;
+			message.capabilities.bOrderedMouseDrag = true;
 			message.capabilities.supportedPrivacyModes = {
 				QStringLiteral("disabled"), QStringLiteral("privacyoverlay"),
 				QStringLiteral("displayoff")
@@ -401,6 +407,7 @@ namespace
 		int nStreamConfigCount = 0;
 		KSessionMessageSendStatus sessionSendStatus = SessionMessageAccepted;
 		bool bInputRealtimeEnabled = false;
+		bool bOrderedMouseDragEnabled = false;
 		bool bInitializeSucceeds = true;
 		bool bCompleteShutdownImmediately = true;
 	};
@@ -560,6 +567,8 @@ namespace
 			QStringLiteral("local capabilities publish the provider frame rate limit"));
 		check(pTransport->bInputRealtimeEnabled,
 			QStringLiteral("capability negotiation enables realtime pointer input"));
+		check(pTransport->bOrderedMouseDragEnabled,
+			QStringLiteral("capability negotiation enables ordered mouse drag"));
 		pTransport->openInputChannel();
 
 		KSessionMessage deviceInfoRequest;

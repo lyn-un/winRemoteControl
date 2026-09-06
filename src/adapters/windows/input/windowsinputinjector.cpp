@@ -1,11 +1,50 @@
 #include "adapters/windows/input/windowsinputinjector.h"
 
+#include "adapters/windows/input/windowsdesktopinputdiagnostics.h"
+
 #include <Windows.h>
+
+#include <algorithm>
 
 namespace
 {
 	constexpr quint32 kScanCodeShift = 8;
 	constexpr quint32 kExtendedKeyMask = 0x20000;
+
+	bool BuildAbsoluteMouseMoveInput(int nX,
+		int nY,
+		INPUT *pInput,
+		QString *pErrorMessage)
+	{
+		if (pInput == nullptr)
+			return false;
+
+		const int nScreenWidth = GetSystemMetrics(SM_CXSCREEN);
+		const int nScreenHeight = GetSystemMetrics(SM_CYSCREEN);
+		if (nScreenWidth <= 1 || nScreenHeight <= 1)
+		{
+			if (pErrorMessage != nullptr)
+				*pErrorMessage = QStringLiteral("Invalid primary screen size");
+			return false;
+		}
+
+		const int nClampedX = std::clamp(nX, 0, nScreenWidth - 1);
+		const int nClampedY = std::clamp(nY, 0, nScreenHeight - 1);
+		*pInput = {};
+		pInput->type = INPUT_MOUSE;
+		pInput->mi.dx = static_cast<LONG>(
+			(static_cast<long long>(nClampedX) * 65535) / (nScreenWidth - 1));
+		pInput->mi.dy = static_cast<LONG>(
+			(static_cast<long long>(nClampedY) * 65535) / (nScreenHeight - 1));
+		pInput->mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
+		return true;
+	}
+}
+
+KWindowsInputInjector::KWindowsInputInjector()
+	: m_spDesktopInputDiagnostics(
+		std::make_unique<KWindowsDesktopInputDiagnostics>())
+{
 }
 
 KWindowsInputInjector::~KWindowsInputInjector()
@@ -70,28 +109,27 @@ void KWindowsInputInjector::releaseAllInputs(QStringList *pErrorMessages)
 {
 	releaseAllKeys(pErrorMessages);
 	releaseAllMouseButtons(pErrorMessages);
+	m_spDesktopInputDiagnostics->reset();
 }
 
 bool KWindowsInputInjector::sendMouseMove(int nX, int nY, QString *pErrorMessage)
 {
-	const int nScreenWidth = GetSystemMetrics(SM_CXSCREEN);
-	const int nScreenHeight = GetSystemMetrics(SM_CYSCREEN);
-	if (nScreenWidth <= 1 || nScreenHeight <= 1)
+	const quint64 nDiagnosticEventId = m_spDesktopInputDiagnostics->beginMouseMove(
+		nX, nY, !m_pressedMouseButtons.isEmpty());
+	INPUT input = {};
+	if (!BuildAbsoluteMouseMoveInput(nX, nY, &input, pErrorMessage))
 	{
-		if (pErrorMessage != nullptr)
-			*pErrorMessage = QStringLiteral("Invalid primary screen size");
+		m_spDesktopInputDiagnostics->completeMouseMove(
+			nDiagnosticEventId, 0, GetLastError());
 		return false;
 	}
 
-	const int nClampedX = clampToRange(nX, 0, nScreenWidth - 1);
-	const int nClampedY = clampToRange(nY, 0, nScreenHeight - 1);
-	INPUT input = {};
-	input.type = INPUT_MOUSE;
-	input.mi.dx = static_cast<LONG>((static_cast<long long>(nClampedX) * 65535) / (nScreenWidth - 1));
-	input.mi.dy = static_cast<LONG>((static_cast<long long>(nClampedY) * 65535) / (nScreenHeight - 1));
-	input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
-
-	if (SendInput(1, &input, sizeof(INPUT)) != 1)
+	SetLastError(ERROR_SUCCESS);
+	const UINT nInsertedInputs = SendInput(1, &input, sizeof(INPUT));
+	const DWORD nWin32Error = nInsertedInputs == 1 ? ERROR_SUCCESS : GetLastError();
+	m_spDesktopInputDiagnostics->completeMouseMove(
+		nDiagnosticEventId, nInsertedInputs, nWin32Error);
+	if (nInsertedInputs != 1)
 	{
 		if (pErrorMessage != nullptr)
 			*pErrorMessage = lastWin32ErrorMessage(QStringLiteral("Send mouse move failed"));
@@ -106,12 +144,17 @@ bool KWindowsInputInjector::sendMouseButton(int nX,
 	bool bPressed,
 	QString *pErrorMessage)
 {
-	if (!sendMouseMove(nX, nY, pErrorMessage))
-		return false;
-
 	const int nButtonId = static_cast<int>(button);
-	if (bPressed == m_pressedMouseButtons.contains(nButtonId))
+	const bool bDuplicateState =
+		bPressed == m_pressedMouseButtons.contains(nButtonId);
+	const quint64 nDiagnosticEventId = m_spDesktopInputDiagnostics->beginMouseButton(
+		nX, nY, nButtonId, bPressed, bDuplicateState);
+	if (bDuplicateState)
+	{
+		m_spDesktopInputDiagnostics->completeMouseButton(
+			nDiagnosticEventId, 0, ERROR_SUCCESS);
 		return true;
+	}
 	DWORD dwFlags = 0;
 	DWORD dwMouseData = 0;
 	if (button == LeftRemoteMouseButton)
@@ -126,16 +169,35 @@ bool KWindowsInputInjector::sendMouseButton(int nX,
 		dwMouseData = button == X1RemoteMouseButton ? XBUTTON1 : XBUTTON2;
 	}
 	else
+	{
+		m_spDesktopInputDiagnostics->completeMouseButton(
+			nDiagnosticEventId, 0, ERROR_INVALID_PARAMETER);
 		return false;
+	}
 
-	INPUT input = {};
-	input.type = INPUT_MOUSE;
-	input.mi.dwFlags = dwFlags;
-	input.mi.mouseData = dwMouseData;
-	if (SendInput(1, &input, sizeof(INPUT)) != 1)
+	INPUT inputs[2] = {};
+	if (!BuildAbsoluteMouseMoveInput(nX, nY, &inputs[0], pErrorMessage))
+	{
+		m_spDesktopInputDiagnostics->completeMouseButton(
+			nDiagnosticEventId, 0, GetLastError());
+		return false;
+	}
+	inputs[1].type = INPUT_MOUSE;
+	inputs[1].mi.dwFlags = dwFlags;
+	inputs[1].mi.mouseData = dwMouseData;
+	SetLastError(ERROR_SUCCESS);
+	const UINT nInsertedInputs = SendInput(2, inputs, sizeof(INPUT));
+	const DWORD nWin32Error = nInsertedInputs == 2 ? ERROR_SUCCESS : GetLastError();
+	m_spDesktopInputDiagnostics->completeMouseButton(
+		nDiagnosticEventId, nInsertedInputs, nWin32Error);
+	if (nInsertedInputs != 2)
 	{
 		if (pErrorMessage != nullptr)
-			*pErrorMessage = lastWin32ErrorMessage(QStringLiteral("Send mouse button failed"));
+		{
+			*pErrorMessage = lastWin32ErrorMessage(
+				QStringLiteral("Send mouse button failed (%1 of 2 inputs inserted)")
+					.arg(nInsertedInputs));
+		}
 		return false;
 	}
 
@@ -260,15 +322,6 @@ void KWindowsInputInjector::releaseAllMouseButtons(QStringList *pErrorMessages)
 				lastWin32ErrorMessage(QStringLiteral("Release mouse button failed")));
 		}
 	}
-}
-
-int KWindowsInputInjector::clampToRange(int nValue, int nMinValue, int nMaxValue)
-{
-	if (nValue < nMinValue)
-		return nMinValue;
-	if (nValue > nMaxValue)
-		return nMaxValue;
-	return nValue;
 }
 
 QString KWindowsInputInjector::lastWin32ErrorMessage(const QString &strPrefix)

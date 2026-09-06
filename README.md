@@ -22,7 +22,7 @@ winRemoteControl 允许两台 Windows 电脑在局域网内建立经过认证的
 | 身份与权限 | Schannel TLS 1.2/1.3、设备证书、六位配对码、按功能划分的可信权限 |
 | 远程桌面 | DXGI Desktop Duplication、H.264 WebRTC、D3D11 渲染、显示器切换 |
 | 画质 | 画质与帧率独立设置；按显示器和双方能力支持 30/60/90/120/144 FPS |
-| 远程输入 | 鼠标、物理键盘、Unicode/IME 文本输入和常用系统组合键 |
+| 远程输入 | 鼠标、双击与有序拖拽、物理键盘独占、Unicode 文本协议和本地快捷键路由；原生捕获模式的 IME 待回归 |
 | 会话工具 | 双向纯文本剪贴板、受控 PowerShell 终端、双栏双向文件传输 |
 | 安全控制 | 隐私屏、断开后锁屏、按认证设备保存偏好、物理紧急恢复快捷键 |
 | 可维护性 | 异步停止、失败回滚、资源生命周期追踪、浅色/深色主题、自动化 Driver |
@@ -130,6 +130,7 @@ build\Release\winRemoteControl.exe --trace --log-dir "D:\wrc_logs"
 - [帧率设置与高帧率方案](docs/plans/frame-rate-settings.md)
 - [远程终端](docs/features/remote-terminal.md)
 - [双向文件传输](docs/features/file-transfer.md)
+- [远程输入、键盘捕获与有序拖拽](docs/features/remote-input.md)
 - [远程会话安全控制](docs/features/session-security-controls.md)
 
 ### 开发与测试

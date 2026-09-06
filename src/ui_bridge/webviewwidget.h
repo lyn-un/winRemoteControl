@@ -6,6 +6,7 @@
 #include "core/discovery/discovereddevice.h"
 #include "core/devices/recentdevice.h"
 #include "core/settings/applicationsettings.h"
+#include "core/settings/keyboardsettings.h"
 #include "core/session/sessionerror.h"
 #include "core/protocol/sessionmessage.h"
 #include "core/terminal/terminalstate.h"
@@ -64,6 +65,11 @@ public slots:
 	void sendApplicationSettingsChanged(const KApplicationSettings &settings);
 	void sendApplicationSettingsError(const QString &strError);
 	void sendApplicationThemeError(const QString &strError);
+	void sendKeyboardSettingsChanged(const KKeyboardSettings &settings);
+	void sendKeyboardSettingsError(const QString &strError);
+	void sendShortcutRecordingStateChanged(bool bRecording,
+		const QString &strTarget,
+		const QString &strError);
 	void sendIncomingAccessRequest(const QString &strRequestId,
 		const QString &strDeviceName,
 		const QString &strSourceAddress,
@@ -153,6 +159,11 @@ signals:
 		int nApprovalTimeoutSeconds,
 		int nDefaultListenPort);
 	void updateApplicationThemeRequested(const QString &strThemeId);
+	void requestKeyboardSettingsRequested();
+	void beginKeyboardShortcutRecordingRequested(const QString &strTarget);
+	void cancelKeyboardShortcutRecordingRequested();
+	void removeLocalKeyboardShortcutRequested(const QString &strShortcut);
+	void restoreDefaultKeyboardShortcutsRequested();
 	void respondIncomingAccessRequestRequested(const QString &strRequestId, bool bAccepted);
 	void respondPairingRequestRequested(const QString &strRequestId,
 		bool bAccepted,

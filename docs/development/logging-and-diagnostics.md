@@ -6,12 +6,13 @@
 
 | 参数 | 作用 |
 | --- | --- |
-| `--trace` | 同时开启 session、latency 和 resource trace |
+| `--trace` | 同时开启 session、latency、resource 和 desktop input trace |
 | `--session-trace` | 只开启会话、协议和生命周期日志 |
 | `--latency-trace` | 只开启采集、视频、输入反馈等延迟日志 |
 | `--resource-trace` | 只开启进程内存、句柄、线程和 GPU 资源日志 |
+| `--desktop-input-trace` | 只开启 Windows 被控端桌面输入、目标窗口和低级鼠标钩子诊断 |
 | `--latency-scenario <static\|mouse\|window>` | 启用延迟日志并标记本次基线场景 |
-| `--log-dir <path>` | 指定两类日志目录；相对路径以 exe 目录为基准 |
+| `--log-dir <path>` | 指定所有 trace 日志目录；相对路径以 exe 目录为基准 |
 | `--help` | 显示命令行帮助 |
 
 示例：
@@ -21,6 +22,7 @@ winRemoteControl.exe --trace
 winRemoteControl.exe --session-trace
 winRemoteControl.exe --latency-trace
 winRemoteControl.exe --latency-scenario mouse
+winRemoteControl.exe --desktop-input-trace
 winRemoteControl.exe --trace --log-dir "D:\wrc_logs"
 ```
 
@@ -60,10 +62,13 @@ winRemoteControl.exe
 - `session_trace_<role>.log`
 - `latency_trace_<side>.log`
 - `resource_trace_<role>.log`
+- `desktop_input_trace_controlled.log`
 
 `role/side` 根据进程在当次会话中的实际角色变化，因此同一台电脑曾作为不同角色运行时，日志目录里可能同时保留 `controller`、`controlled` 或 `local` 文件。这不表示日志自动同步到对方电脑；每台机器只写自己的本地文件。
 
 单个日志达到 5 MiB 后轮转为同名 `.old`，再创建新文件。Latency trace 使用后台线程批量写入，队列有上限；Session trace 适合低频生命周期事件。
+
+Desktop input trace 使用独立的 4096 行有界队列和 100 ms 批次。每批采用“打开追加、写入、flush、关闭”，因此进程运行期间即可读取最新记录；队列溢出会写入 `logger_overflow` 和丢弃数量。它只在首次实际鼠标注入时延迟安装观察器，避免未使用输入功能时引入额外系统钩子。
 
 ## 常见诊断事件
 
@@ -75,7 +80,7 @@ winRemoteControl.exe
 | 初始化 | WebRTC initialization stage、rollback start/finished/timeout |
 | 会话 | `session_recovery_start/success/failed`、`session_end`、`signaling_closed_after_session_end`、shutdown pending components |
 | 视频 | capture、`initial_frame_retry`、`h264_encode_no_output`、decode/render、frame coalesced summary；`render_end` 的 `lowLatencyRender` 用于确认 WebRTC 实际渲染模式，`callbackToConvertMs`、`convertToEnqueueMs`、`enqueueToPresentMs`、`callbackToPresentMs` 用于定位控制端阶段 |
-| 输入 | `input_send/recv`、`inject_begin/end`、`input_roundtrip`、每 30 个样本的 `input_roundtrip_stats`、会话结束的 `input_roundtrip_summary` |
+| 输入 | `input_send/recv`、`input_route`、`inject_begin/end`、`input_drop`、`input_roundtrip`、每 30 个样本的 `input_roundtrip_stats`、会话结束的 `input_roundtrip_summary` |
 | 剪贴板 | channel、send/receive/apply/drop；只记录 UUID、大小、序号和原因 |
 | 终端 | `terminal_open_requested`、`terminal_approval_pending`、`terminal_started`、`terminal_exited`、`terminal_host_error`、writer cancellation/isolation、`terminal_relay_launch/connected/input/focus/closed` |
 | 会话安全控制 | `privacy_mode_command`、`privacy_mode_state`、`privacy_mode_restore`、`post_session_action`；记录 generation、requestId、模式、动作和稳定错误码 |
@@ -112,6 +117,28 @@ JSON 汇总和两端原始资源日志写入 `build/diagnostics/reports`。第�
 
 当前机器的隔离结果表明：AMD 的 `h264_mf` 每次销毁后会遗留一个 Event、一个 WaitCompletionPacket 和一个注册表 Key；强制 `h264_mf` 仅保留为诊断入口。`Auto` 在检测到 AMD 显示适配器时使用 `libx264`，其他适配器仍优先 Media Foundation。Desktop Duplication 每次连同 D3D Device 一起重建时，驱动会遗留一个 Mutant 和一个 Section，因此采集适配器只保留进程级 D3D11 Device/Context，仍逐会话释放纹理和 `IDXGIOutputDuplication`，并执行 `ClearState`、`Flush` 和 `Trim`。该平台缓存会保留一组固定的驱动资源，但不得随会话轮次继续增长。
 
+## Windows 桌面输入诊断
+
+`--desktop-input-trace` 用于区分“控制端没有发送”“DataChannel 顺序错误”“`SendInput()` 插入失败”和“Windows/第三方钩子没有继续传递”。日志只在本机被控端产生。
+
+主要阶段：
+
+| 事件 | 含义 |
+| --- | --- |
+| `observer_start` | `WH_MOUSE_LL` 与 Explorer WinEvent 观察器安装结果，以及进程完整性摘要 |
+| `button_before/after` | 按钮注入前后坐标、目标窗口链、GUI 线程状态、`SendInput()` 插入数量和错误码 |
+| `drag_first_before/after`、`drag_last` | 一段拖拽的首个和最后一个采样移动 |
+| `hook_enter` | 调用 `CallNextHookEx()` 前观察到的低级鼠标事件 |
+| `hook_exit` | 同一 `hookSequence` 的下游返回值和耗时 |
+| `explorer_event` | Explorer 桌面 ListView 的焦点或选择状态变化 |
+| `input_reset` | 会话或输入生命周期清理诊断状态 |
+
+`hook_enter` 记录消息、坐标、`LLMHF_INJECTED` 和 `LLMHF_LOWER_IL_INJECTED`；`hook_exit` 使用相同 `hookSequence`，用于判断事件是否阻塞在下游钩子。观察器始终原样返回 `CallNextHookEx()` 的结果，不主动吞掉或重新注入事件。移动事件按 25 ms 节流，按钮事件不采样。
+
+`button_after inserted=2 error=0` 只证明 `SendInput()` 接受了“绝对移动 + 按钮”两个 `INPUT`，不能证明 Explorer 或其他目标窗口最终处理了按钮事件。排查时必须把 `button_before/after`、对应 `hookSequence`、目标窗口状态和应用实际表现一起判断。
+
+诊断会记录 HWND、PID、窗口类、进程文件名、坐标、完整性级别和 GUI 线程句柄状态；不记录窗口标题、用户名、桌面文件名、完整路径或画面内容。高频诊断本身可能改变钩子时序，结论应使用相同构建的启用/关闭 A/B 结果交叉验证。
+
 ## 隐私约束
 
 - 键盘日志不记录虚拟键值、扫描码对应字符或 Unicode 正文。
@@ -120,3 +147,4 @@ JSON 汇总和两端原始资源日志写入 `build/diagnostics/reports`。第�
 - 发现与最近设备日志不记录设备名称。
 - TLS 与配对日志只记录验证方法、协议版本、密码套件、证书校验结果、短设备标识和失败原因；不记录私钥、TLS Exporter、六位配对码、完整证书、完整指纹或信令正文。
 - 高频事件应采样或聚合，避免诊断本身明显增加延迟。
+- Desktop input trace 不记录窗口标题、用户名、桌面文件名或进程完整路径；仅保留诊断所需的类名、文件名、句柄、PID 和坐标。

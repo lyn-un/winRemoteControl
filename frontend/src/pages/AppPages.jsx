@@ -17,7 +17,8 @@ function Icon({ name }) {
     settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.09A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.14.37.35.7.6 1 .3.28.68.42 1.1.4h.09v4h-.09A1.7 1.7 0 0 0 19.4 15Z" /></>,
     shield: <><path d="M12 3 5 6v5c0 4.6 2.8 8.2 7 10 4.2-1.8 7-5.4 7-10V6l-7-3Z" /><path d="m9 12 2 2 4-4" /></>,
 		terminal: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></>,
-		fileTransfer: <><path d="M3 7h7l2 2h9v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /><path d="M8 14h8M13 11l3 3-3 3" /></>,
+    fileTransfer: <><path d="M3 7h7l2 2h9v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /><path d="M8 14h8M13 11l3 3-3 3" /></>,
+		keyboard: <><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M7 10h.01M10 10h.01M13 10h.01M16 10h.01M7 13h.01M10 13h.01M13 13h4M7 16h10" /></>,
     chevron: <path d="m8 10 4 4 4-4" />,
   };
   return <svg className="ui-icon" viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>;
@@ -121,12 +122,11 @@ function DeviceDetails({ device, busy, onConnect }) {
           <h2>{device.name || "Windows 设备"}</h2>
           <p>{device.host}:{device.port} · {status}</p>
         </div>
-        <div className="session-ready"><small>设备状态</small><strong>{device.online ? "ONLINE" : "RECENT"}</strong></div>
+        <div className="session-ready"><small>设备状态</small><strong>{status}</strong></div>
       </header>
       <div className="session-layout">
         <article className="desktop-preview-card">
           <div className="wallpaper-preview device-placeholder-preview">
-            <span className="device-mist-rings" />
             <span className="wallpaper-placeholder"><Icon name="monitor" /><strong>设备桌面</strong><small>建立连接后获取桌面入口</small></span>
           </div>
           <footer>
@@ -135,7 +135,6 @@ function DeviceDetails({ device, busy, onConnect }) {
           </footer>
         </article>
         <aside className="session-details">
-          <span className="eyebrow">DEVICE / {device.online ? "ONLINE" : "RECENT"}</span>
           <h3>设备详情</h3>
           <dl>
             <div><dt>设备名称</dt><dd>{device.name || "Windows 设备"}</dd></div>
@@ -157,11 +156,11 @@ function DevicesPage({ selectedDevice, busy, connectDevice }) {
   return (
     <section className="content-view view-enter">
       <header className="page-heading">
-        <div><span className="eyebrow">LOCAL DEVICES / 01</span><h1>我的设备</h1><p>发现同一网络中的电脑，也可以重新连接曾经使用过的设备。</p></div>
+        <div><h1>我的设备</h1><p>发现同一网络中的电脑，也可以重新连接曾经使用过的设备。</p></div>
         <button className="refresh-button" onClick={() => sendCommand("refreshLanDevices")}><Icon name="refresh" />刷新设备</button>
       </header>
       <div className="empty-state">
-        <div className="discovery-orbit"><span /><span /><span /><b>W</b></div>
+        <div className="device-empty-icon"><Icon name="monitor" /></div>
         <strong>从左侧选择一台设备</strong>
         <p>设备列表会合并局域网发现和最近连接记录。未发现设备时，也可以前往“远程协助”通过 IP 地址连接。</p>
         <button className="outline-button" onClick={() => sendCommand("refreshLanDevices")}><Icon name="refresh" />重新扫描</button>
@@ -263,6 +262,7 @@ function SettingsPage({ state }) {
     { id: "security", icon: "shield", title: "连接与安全", detail: "远程接入和审批策略" },
     { id: "trusted", icon: "monitor", title: "可信设备", detail: "配对身份与权限上限" },
     { id: "network", icon: "signal", title: "网络与传输", detail: "监听端口与连接方式" },
+		{ id: "keyboard", icon: "keyboard", title: "键盘", detail: "远控按键与本地快捷键" },
     { id: "appearance", icon: "appearance", title: "外观设置", detail: "主题与界面显示" },
   ];
   const active = sections.find((section) => section.id === activeSection) || sections[0];
@@ -310,11 +310,11 @@ function SettingsPage({ state }) {
         <div className="settings-content-stack">
           <article className="settings-card settings-hero settings-hero-contained">
             <div className="settings-icon"><Icon name="shield" /></div>
-            <div><span className="eyebrow">REMOTE ACCESS</span><h2>允许远程控制</h2><p>关闭后将停止监听和局域网响应，其他设备无法再请求控制本机。</p></div>
-            <button className={`switch-control ${settings.remoteAccessEnabled ? "is-on" : ""}`} role="switch" aria-checked={settings.remoteAccessEnabled} onClick={changeRemoteAccess}><span /></button>
+            <div><h2>允许远程控制</h2><p>关闭后将停止监听和局域网响应，其他设备无法再请求控制本机。</p></div>
+            <button className={`switch-control ${settings.remoteAccessEnabled ? "is-on" : ""}`} role="switch" aria-label="允许远程控制" aria-checked={settings.remoteAccessEnabled} onClick={changeRemoteAccess}><span /></button>
           </article>
           <article className={`settings-card settings-content-card ${settings.remoteAccessEnabled ? "" : "is-disabled"}`}>
-            <div className="settings-section-title"><span>01</span><div><h2>连接审批</h2><p>收到新的控制请求时，选择本机采取的动作。</p></div></div>
+            <div className="settings-section-title"><div><h2>连接审批</h2><p>收到新的控制请求时，选择本机采取的动作。</p></div></div>
             <div className="approval-options">
               {[
                 ["ask", "每次询问", "由本机用户确认后才开始协商", "推荐"],
@@ -335,7 +335,7 @@ function SettingsPage({ state }) {
     if (activeSection === "network") {
       return (
         <article className="settings-card settings-content-card">
-          <div className="settings-section-title"><span>02</span><div><h2>本机监听</h2><p>配置被控端下一次开始监听时使用的 TCP 信令端口。</p></div></div>
+          <div className="settings-section-title"><div><h2>本机监听</h2><p>配置被控端下一次开始监听时使用的 TCP 信令端口。</p></div></div>
           <div className="settings-fields settings-fields-wide">
             <label><span>默认监听端口</span><input key={settings.defaultListenPort} defaultValue={settings.defaultListenPort} inputMode="numeric" onBlur={(event) => changeDefaultPort(event.target.value)} /><small>有效范围为 1～65535；已经开始的监听不会自动重启。</small></label>
           </div>
@@ -345,7 +345,7 @@ function SettingsPage({ state }) {
     if (activeSection === "appearance") {
       return (
         <article className="settings-card settings-content-card appearance-settings-card">
-          <div className="settings-section-title"><span>04</span><div><h2>界面主题</h2><p>选择适合当前环境的界面明暗与色彩层次。</p></div></div>
+          <div className="settings-section-title"><div><h2>界面主题</h2><p>选择适合当前环境的界面明暗与色彩层次。</p></div></div>
           <div className="theme-card-grid" role="radiogroup" aria-label="界面主题">
             {theme.themes.map((item, index) => {
               const selected = theme.themeId === item.id;
@@ -379,6 +379,45 @@ function SettingsPage({ state }) {
         </article>
       );
     }
+		if (activeSection === "keyboard") {
+			const keyboard = state.keyboardSettings;
+			const recording = state.shortcutRecording?.recording;
+			const recordingTarget = state.shortcutRecording?.target;
+			if (!keyboard) {
+				return <article className="settings-card settings-content-card"><div className="empty-state"><strong>正在读取键盘设置</strong></div></article>;
+			}
+			const record = (target) => sendCommand("beginKeyboardShortcutRecording", { target });
+			return (
+				<div className="settings-content-stack keyboard-settings-stack">
+					<article className="settings-card settings-content-card">
+						<div className="settings-section-title"><div><h2>仅控制端响应</h2><p>这些组合只在控制端执行，不会发送给被控端。</p></div></div>
+						<div className="keyboard-setting-toolbar">
+							<span>{keyboard.localOnlyShortcuts.length}/32 个快捷键</span>
+							<button className="outline-button" disabled={recording || keyboard.localOnlyShortcuts.length >= 32} onClick={() => record("localOnly")}>{recording && recordingTarget === "localOnly" ? "请按下快捷键…" : "添加快捷键"}</button>
+						</div>
+						{keyboard.localOnlyShortcuts.length === 0 ? (
+							<div className="keyboard-shortcut-empty">当前暂无配置</div>
+						) : (
+							<div className="keyboard-shortcut-list">
+								{keyboard.localOnlyShortcuts.map((shortcut) => (
+									<div className="keyboard-shortcut-row" key={shortcut.value}><span className="shortcut-keycaps">{shortcut.display}</span><button className="outline-button" onClick={() => sendCommand("removeLocalKeyboardShortcut", { shortcut: shortcut.value })}>删除</button></div>
+								))}
+							</div>
+						)}
+					</article>
+					<article className="settings-card settings-content-card">
+						<div className="settings-section-title"><div><h2>功能快捷键</h2><p>只触发控制端功能，不作为原始按键发送。</p></div></div>
+						<div className="keyboard-shortcut-list">
+							<div className="keyboard-shortcut-row"><span><strong>释放键盘捕获</strong><small>固定安全快捷键</small></span><span className="shortcut-keycaps">{keyboard.releaseCapture}</span></div>
+							<div className="keyboard-shortcut-row"><span><strong>切换全屏</strong><small>在全屏和原窗口状态间切换</small></span><span className="shortcut-keycaps">{keyboard.toggleFullscreen}</span><button className="outline-button" disabled={recording} onClick={() => record("toggleFullscreen")}>{recording && recordingTarget === "toggleFullscreen" ? "请按下快捷键…" : "修改"}</button></div>
+						</div>
+						<div className="keyboard-setting-footer"><button className="outline-button" onClick={() => sendCommand("restoreDefaultKeyboardShortcuts")}>恢复默认快捷键</button></div>
+					</article>
+					{recording && <div className="shortcut-recording-banner"><span>请按下包含 Ctrl、Alt、Shift 或 Win 的快捷键，Esc 取消</span><button onClick={() => sendCommand("cancelKeyboardShortcutRecording")}>取消</button></div>}
+					{state.keyboardSettingsError && <p className="form-error">{state.keyboardSettingsError}</p>}
+				</div>
+			);
+		}
     if (activeSection === "trusted") {
       const permissionLabels = { viewScreen: "查看画面", inputControl: "键鼠控制", clipboard: "剪贴板", terminal: "终端", fileTransfer: "文件传输" };
       const updateTrusted = (device, patch) => sendCommand("updateTrustedDevice", {
@@ -417,13 +456,11 @@ function SettingsPage({ state }) {
   return (
     <section className="content-view settings-view view-enter">
       <div className="settings-workspace">
-        <header className="page-heading settings-page-heading"><div><span className="eyebrow">PREFERENCES / 04</span><h1>设置</h1></div></header>
-        <header className="settings-pane-heading"><div><span className="eyebrow">AVAILABLE NOW</span><h2>{active.title}</h2><p>{active.detail}</p></div><span className="settings-pane-index">{String(sections.indexOf(active) + 1).padStart(2, "0")}</span></header>
+        <header className="page-heading settings-page-heading"><div><h1>设置</h1></div></header>
+        <header className="settings-pane-heading"><div><h2>{active.title}</h2><p>{active.detail}</p></div></header>
         <nav className="settings-index" aria-label="设置分类">
-          <div className="settings-index-heading"><span>设置目录</span><small>SETTINGS INDEX</small></div>
-          {sections.map((section, index) => (
+          {sections.map((section) => (
             <button key={section.id} className={activeSection === section.id ? "active" : ""} onClick={() => { setActiveSection(section.id); if (section.id === "trusted") sendCommand("requestTrustedDevices"); }}>
-              <span className="settings-index-number">{String(index + 1).padStart(2, "0")}</span>
               <span className="settings-index-icon"><Icon name={section.icon} /></span>
               <span><strong>{section.title}</strong><small>{section.detail}</small></span>
             </button>
@@ -661,15 +698,15 @@ export function DashboardPage() {
     event.preventDefault();
     setDeviceContextMenu({
       deviceId: device.recentId,
-      x: Math.min(event.clientX, window.innerWidth - 180),
-      y: Math.min(event.clientY, window.innerHeight - 54),
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 180)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 54)),
     });
   };
 
-  const errors = [state.error, state.recentDeviceError, state.applicationSettingsError, state.fileTransferError].filter(Boolean);
+  const errors = [state.error, state.recentDeviceError, state.applicationSettingsError, state.keyboardSettingsError, state.fileTransferError].filter(Boolean);
 
   return (
-    <main className="dashboard-shell">
+    <main className={`dashboard-shell${activePage === "devices" && !remoteOnline ? " devices-windows-style" : ""}${activePage === "settings" ? " settings-windows-style" : ""}`}>
       <aside className="app-sidebar">
         <div className="app-brand"><img src="/app-icon.png" alt="" /><div><strong>winRemote</strong><small>Control</small></div></div>
         <nav className="app-nav">
@@ -735,9 +772,9 @@ export function DashboardPage() {
 		{state.incomingTerminalRequest && <TerminalRequestModal request={state.incomingTerminalRequest} />}
 		{state.terminalState.state === "Running" && state.role === "controlled" && <div className="terminal-running-banner"><Icon name="terminal" /><div><strong>远程终端正在运行</strong><small>PowerShell 使用当前登录用户权限</small></div><button onClick={() => sendCommand("closeTerminal")}>停止终端</button></div>}
 		{["Ready", "Reconnecting"].includes(state.fileTransferState.state) && state.role === "controlled" && <div className="terminal-running-banner file-transfer-running-banner"><Icon name="fileTransfer" /><div><strong>{state.fileTransferState.state === "Reconnecting" ? "文件传输已暂停" : "文件传输正在进行"}</strong><small>{state.fileTransferState.activeTasks > 0 ? `${state.fileTransferState.activeTasks} 个活动任务` : "控制端可以浏览并复制已授权会话中的文件"}</small></div><button onClick={() => sendCommand("stopCurrentFileTransfer")}>停止传输</button></div>}
-        {deviceContextMenu && <div className="device-context-menu" style={{ left: deviceContextMenu.x, top: deviceContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { sendCommand("removeRecentDevice", { deviceId: deviceContextMenu.deviceId }); setDeviceContextMenu(null); }}><Icon name="trash" />移除最近记录</button></div>}
         {errors.length > 0 && <div className="error-stack">{errors.map((error, index) => <p key={`${index}-${error}`}>{error}</p>)}</div>}
       </div>
+      {deviceContextMenu && <div className="device-context-menu" style={{ left: deviceContextMenu.x, top: deviceContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button onClick={() => { sendCommand("removeRecentDevice", { deviceId: deviceContextMenu.deviceId }); setDeviceContextMenu(null); }}><Icon name="trash" />移除最近记录</button></div>}
     </main>
   );
 }

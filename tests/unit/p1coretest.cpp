@@ -122,6 +122,22 @@ namespace
 		Check(reliableQueue.enqueue({ QStringLiteral("key-down"), QString(), true })
 			== EnqueuedOutboundMessage,
 			QStringLiteral("realtime pointer pressure does not block reliable input"));
+
+		KOutboundMessageQueue dragQueue(6, 128);
+		dragQueue.enqueue({ QStringLiteral("left-down"), QString(), true });
+		dragQueue.enqueue({ QStringLiteral("drag-1"), QStringLiteral("drag:1"), false });
+		dragQueue.enqueue({ QStringLiteral("drag-2"), QStringLiteral("drag:1"), false });
+		dragQueue.enqueue({ QStringLiteral("right-down"), QString(), true });
+		dragQueue.enqueue({ QStringLiteral("drag-3"), QStringLiteral("drag:2"), false });
+		Check(dragQueue.takeFirst(&message)
+				&& message.strPayload == QStringLiteral("left-down")
+			&& dragQueue.takeFirst(&message)
+				&& message.strPayload == QStringLiteral("drag-2")
+			&& dragQueue.takeFirst(&message)
+				&& message.strPayload == QStringLiteral("right-down")
+			&& dragQueue.takeFirst(&message)
+				&& message.strPayload == QStringLiteral("drag-3"),
+			QStringLiteral("drag coalescing keys preserve mouse button barriers"));
 	}
 
 	void TestProtocolEnvelopeValidationAndSingleParse()
@@ -195,6 +211,7 @@ namespace
 			QStringLiteral("input-realtime"), QStringLiteral("clipboard")
 		};
 		local.bInputRealtime = true;
+		local.bOrderedMouseDrag = true;
 		local.supportedPrivacyModes = {
 			QStringLiteral("disabled"), QStringLiteral("privacyoverlay"),
 			QStringLiteral("futuremode")
@@ -211,11 +228,20 @@ namespace
 		Check(compatible.succeeded()
 			&& compatible.capabilities.nMaximumWidth == 1280
 			&& compatible.capabilities.bInputRealtime
+			&& compatible.capabilities.bOrderedMouseDrag
 			&& compatible.capabilities.bPostSessionLock
 			&& compatible.capabilities.supportedPrivacyModes
 				== QStringList({ QStringLiteral("disabled"),
 					QStringLiteral("privacyoverlay") }),
 			QStringLiteral("capability negotiator returns the bounded intersection"));
+
+		remote.bOrderedMouseDrag = false;
+		const KCapabilityNegotiationResult legacyCompatible =
+			KCapabilityNegotiator::negotiate(local, remote);
+		Check(legacyCompatible.succeeded()
+			&& legacyCompatible.capabilities.bInputRealtime
+			&& !legacyCompatible.capabilities.bOrderedMouseDrag,
+			QStringLiteral("ordered mouse drag requires support from both peers"));
 
 		remote.supportedCodecs = { QStringLiteral("vp9") };
 		const KCapabilityNegotiationResult incompatible =

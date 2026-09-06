@@ -278,6 +278,10 @@ add_library(wrc_core STATIC
 	src/core/discovery/discovereddevice.h
 	src/core/discovery/landiscoverytransport.h
 	src/core/input/inputinjectorinterface.h
+	src/core/input/mouseinputroutingstate.cpp
+	src/core/input/mouseinputroutingstate.h
+	src/core/input/keyboardshortcut.cpp
+	src/core/input/keyboardshortcut.h
 	src/core/file_transfer/filesystemport.h
 	src/core/file_transfer/filetransfertypes.h
 	src/core/media/captureframe.h
@@ -296,6 +300,9 @@ add_library(wrc_core STATIC
 	src/core/session/sessionstatemachine.h
 	src/core/settings/applicationsettings.cpp
 	src/core/settings/applicationsettingsstore.h
+	src/core/settings/keyboardsettings.cpp
+	src/core/settings/keyboardsettings.h
+	src/core/settings/keyboardsettingsstore.h
 	src/core/settings/devicesecuritypreference.cpp
 	src/core/settings/devicesecuritypreference.h
 	src/core/settings/devicesecuritypreferencestore.h
@@ -386,6 +393,8 @@ target_link_libraries(wrc_windows_file_transfer_adapter PUBLIC
 endif()
 
 add_library(wrc_diagnostics STATIC
+	src/common/desktopinputtracelogger.cpp
+	src/common/desktopinputtracelogger.h
 	src/common/latencytracelogger.cpp
 	src/common/latencytracelogger.h
 	src/common/sessiontracelogger.cpp
@@ -499,6 +508,8 @@ add_library(wrc_windows_adapters STATIC
 	src/adapters/clipboard/qtclipboardadapter.h
 	src/adapters/windows/device/windowsdeviceinfoprovider.cpp
 	src/adapters/windows/device/windowsdeviceinfoprovider.h
+	src/adapters/windows/input/windowsdesktopinputdiagnostics.cpp
+	src/adapters/windows/input/windowsdesktopinputdiagnostics.h
 	src/adapters/windows/input/windowsinputinjector.cpp
 	src/adapters/windows/input/windowsinputinjector.h
 )
@@ -615,6 +626,8 @@ add_library(wrc_recent_device_application STATIC
 add_library(wrc_settings_application STATIC
 	src/settings/applicationsettingsservice.cpp
 	src/settings/applicationsettingsservice.h
+	src/settings/keyboardsettingsservice.cpp
+	src/settings/keyboardsettingsservice.h
 	src/settings/devicesecuritypreferenceservice.cpp
 	src/settings/devicesecuritypreferenceservice.h
 )
@@ -746,6 +759,8 @@ target_link_libraries(wrc_recent_device_application PUBLIC
 add_library(wrc_settings_adapter STATIC
 	src/adapters/settings/qsettingsapplicationstore.cpp
 	src/adapters/settings/qsettingsapplicationstore.h
+	src/adapters/settings/qsettingskeyboardstore.cpp
+	src/adapters/settings/qsettingskeyboardstore.h
 	src/adapters/settings/qsettingsdevicesecuritypreferencestore.cpp
 	src/adapters/settings/qsettingsdevicesecuritypreferencestore.h
 	src/adapters/settings/qsettingsrecentdevicestore.cpp
@@ -929,12 +944,18 @@ target_link_libraries(wrc_capture_application PUBLIC
 )
 
 add_library(wrc_qt_presentation STATIC
+	src/adapters/windows/input/windowsremotekeyboardcaptureadapter.cpp
+	src/adapters/windows/input/windowsremotekeyboardcaptureadapter.h
 	src/app/filetransferwindow.cpp
 	src/app/filetransferwindow.h
 	src/app/remotedesktopwindow.cpp
 	src/app/remotedesktopwindow.h
+	src/render/remotemouseclicktracker.cpp
+	src/render/remotemouseclicktracker.h
 	src/render/videorenderwidget.cpp
 	src/render/videorenderwidget.h
+	src/input/remotekeyboardroutingservice.cpp
+	src/input/remotekeyboardroutingservice.h
 	src/session/inputfeedbacktracker.cpp
 	src/session/inputfeedbacktracker.h
 	src/session/sessionviewmodel.cpp
@@ -963,6 +984,7 @@ target_link_libraries(wrc_qt_presentation PUBLIC
 	wrc_clipboard_application
 	wrc_terminal_application
 	wrc_file_transfer_application
+	wrc_settings_application
 	wrc_diagnostics
 	Qt6::Widgets
 	Qt6::Gui
@@ -970,6 +992,8 @@ target_link_libraries(wrc_qt_presentation PUBLIC
 	dxgi
 	dxguid
 	d3dcompiler
+	user32
+	dwmapi
 	ole32
 	shlwapi
 	"${WEBVIEW2_ROOT}/build/native/x64/WebView2Loader.dll.lib"
@@ -1306,6 +1330,51 @@ if(WRC_BUILD_TESTS)
 	)
 	add_test(NAME wrc_input_injector_tests COMMAND wrc_input_injector_tests)
 
+	add_executable(wrc_mouse_input_routing_state_tests
+		tests/unit/mouseinputroutingstatetest.cpp
+	)
+	target_link_libraries(wrc_mouse_input_routing_state_tests PRIVATE
+		wrc_core
+		Qt6::Core
+	)
+	add_test(NAME wrc_mouse_input_routing_state_tests
+		COMMAND wrc_mouse_input_routing_state_tests)
+
+	add_executable(wrc_remote_mouse_click_tests
+		tests/unit/remotemouseclicktrackertest.cpp
+	)
+	target_link_libraries(wrc_remote_mouse_click_tests PRIVATE
+		wrc_qt_presentation
+		Qt6::Core
+	)
+	add_test(NAME wrc_remote_mouse_click_tests COMMAND wrc_remote_mouse_click_tests)
+
+	add_executable(wrc_windows_input_double_click_test
+		tests/manual/windowsinputdoubleclicktest.cpp
+	)
+	target_link_libraries(wrc_windows_input_double_click_test PRIVATE
+		wrc_windows_adapters
+		Qt6::Core
+		user32
+	)
+	add_test(NAME wrc_windows_input_double_click_test
+		COMMAND wrc_windows_input_double_click_test)
+	set_tests_properties(wrc_windows_input_double_click_test PROPERTIES
+		SKIP_RETURN_CODE 77
+		LABELS "input-e2e"
+		ENVIRONMENT_MODIFICATION
+			"PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+	add_executable(wrc_windows_desktop_input_diagnostics_tests
+		tests/unit/windowsdesktopinputdiagnosticstest.cpp
+	)
+	target_link_libraries(wrc_windows_desktop_input_diagnostics_tests PRIVATE
+		wrc_windows_adapters
+		Qt6::Core
+	)
+	add_test(NAME wrc_windows_desktop_input_diagnostics_tests
+		COMMAND wrc_windows_desktop_input_diagnostics_tests)
+
 	add_executable(wrc_windows_device_info_provider_tests
 		tests/unit/windowsdeviceinfoprovidertest.cpp
 	)
@@ -1550,6 +1619,26 @@ if(WRC_BUILD_TESTS)
 		Qt6::Core
 	)
 	add_test(NAME wrc_clipboard_sync_tests COMMAND wrc_clipboard_sync_tests)
+
+	add_executable(wrc_keyboard_settings_tests
+		tests/unit/keyboardsettingstest.cpp
+	)
+	target_link_libraries(wrc_keyboard_settings_tests PRIVATE
+		wrc_settings_application
+		wrc_settings_adapter
+		Qt6::Core
+	)
+	add_test(NAME wrc_keyboard_settings_tests COMMAND wrc_keyboard_settings_tests)
+
+	add_executable(wrc_remote_keyboard_routing_tests
+		tests/unit/remotekeyboardroutingservicetest.cpp
+	)
+	target_link_libraries(wrc_remote_keyboard_routing_tests PRIVATE
+		wrc_qt_presentation
+		wrc_settings_application
+		Qt6::Core
+	)
+	add_test(NAME wrc_remote_keyboard_routing_tests COMMAND wrc_remote_keyboard_routing_tests)
 
 	endif() # WRC_BUILD_APP
 

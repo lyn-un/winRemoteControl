@@ -40,11 +40,14 @@ Session DataChannel 打开后交换 `KSessionCapabilities`，包括：
 - 支持的 codec 和 channel。
 - 最大宽度、高度、FPS 与码率。
 - 剪贴板、实时输入、键盘、Unicode、鼠标按钮与滚轮能力。
+- 按钮按住期间切换到可靠输入通道的 `orderedMouseDrag` 可选能力。
 - 显示器元数据；当前只描述，不提供显示器切换。
 - 防窥模式 `supportedPrivacyModes` 与会话结束锁屏 `postSessionLock`。
 - 双向文件传输能力及 `file-control`、`file-data` 通道。
 
 必需交集为 H.264、`video`、`session` 和 `input`。`clipboard`、`input-realtime`、`file-control` 与 `file-data` 属于可选能力，不支持时不会阻止基础远控。文件传输只有在双方通道能力均存在且最终权限包含 `fileTransfer` 时才可用。
+
+`orderedMouseDrag` 只有双方都声明支持且实时输入可用时才启用。字段缺失默认为关闭：空闲移动继续使用 `input-realtime`，按钮和旧版拖拽保持原兼容行为。启用后，按钮 `Down/Up` 与按住期间的移动统一走可靠 `input`；接收端会丢弃按钮按住期间迟到的实时移动，同时推进实时序号水位。
 
 隐私控制使用 `setPrivacyMode`、`privacyModeState`、`setPostSessionAction` 和 `postSessionActionState`。命令复用 Session Command 的 UUID、1 秒超时、一次重试和结果缓存；状态事件始终携带远端真实 `effectiveMode`。旧客户端缺少能力字段时按仅支持 `disabled`、不支持结束锁屏处理。生产构建默认不发布 `displayoff`，因此控制端不会显示该入口。
 
@@ -52,8 +55,8 @@ Session DataChannel 打开后交换 `KSessionCapabilities`，包括：
 
 | Label | 可靠性 | 用途 |
 | --- | --- | --- |
-| `input` | reliable、ordered | 键盘、Unicode 文本、鼠标按钮及需要可靠送达的输入 |
-| `input-realtime` | unordered、`maxRetransmits=0` | 高频鼠标移动等可被新状态覆盖的实时输入 |
+| `input` | reliable、ordered | 键盘、Unicode 文本、鼠标按钮；协商 `orderedMouseDrag` 后还承载按钮按住期间的移动 |
+| `input-realtime` | unordered、`maxRetransmits=0` | 未按按钮时的高频鼠标移动等可被新状态覆盖的实时输入 |
 | `session` | reliable、ordered | 能力、设备信息、流配置、开始/停止推流和结束会话 |
 | `clipboard` | reliable、ordered | 双向纯文本剪贴板消息与同步状态 |
 | `terminal` | reliable、ordered | ConPTY stdin 与合并后的 stdout/stderr 二进制字节流 |
@@ -61,6 +64,8 @@ Session DataChannel 打开后交换 `KSessionCapabilities`，包括：
 | `file-data` | reliable、ordered | 不含路径的文件二进制块 |
 
 各通道有独立、有上限的发送队列和背压策略。输入序号用于拒绝重复或倒序事件；剪贴板使用 UUID 去重，日志不记录正文。
+
+可靠拖拽移动只允许在同一按钮状态 epoch 内合并，不能跨越 `Down/Up`。按钮按下前清除尚未发送的实时移动，按钮全部释放后才恢复实时通道。更完整的输入所有权和兼容路径见[远程输入](../features/remote-input.md)。
 
 终端控制消息通过 `session` DataChannel 传输，包括申请、审批、尺寸、关闭、退出和结构化错误；有副作用的命令具有 command ID、ACK、最多一次重试及幂等结果缓存。终端字节流不经过 JSON，每帧显式携带当前 terminal requestId 和单调 sequence；旧实例、重复和倒序数据会被拒绝。单帧总长最大 64 KiB，实际正文按 16 KiB 分块。`terminal` 是可选能力，没有交集时不影响桌面、输入和剪贴板。
 

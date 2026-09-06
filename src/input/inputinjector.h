@@ -4,6 +4,7 @@
 #include "core/protocol/inputmessage.h"
 
 #include <QtCore/QObject>
+#include <QtCore/QSet>
 #include <QtCore/QStringList>
 
 #include <memory>
@@ -24,6 +25,7 @@ public:
 
 public slots:
 	void handleInputMessage(const KInputMessage &message);
+	void setOrderedMouseDragEnabled(bool bEnabled);
 	void releaseAllKeys();
 	void releaseAllInputs();
 
@@ -35,8 +37,10 @@ private:
 	void emitInputErrors(const QStringList &errorMessages);
 
 	std::unique_ptr<IKInputInjector> m_spInputInjector;
+	QSet<int> m_pressedMouseButtons;
 	quint64 m_nLastPointerSequence = 0;
 	quint64 m_nLastReliableSequence = 0;
+	bool m_bOrderedMouseDragEnabled = false;
 };
 
 #endif // _WINREMOTECONTROL_INPUTINJECTOR_H_

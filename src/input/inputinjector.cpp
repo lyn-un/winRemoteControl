@@ -19,10 +19,25 @@ namespace
 				.arg(KInputMessageCodec::typeName(message.type))
 				.arg(message.bPressed ? 1 : 0);
 		}
+		if (message.type == MouseButtonInputMessageType)
+		{
+			return QStringLiteral(
+				"seq=%1 type=%2 channel=%3 button=%4 pressed=%5 x=%6 y=%7")
+				.arg(message.nSequence)
+				.arg(KInputMessageCodec::typeName(message.type))
+				.arg(message.bRealtime ? QStringLiteral("realtime")
+					: QStringLiteral("reliable"))
+				.arg(KInputMessageCodec::mouseButtonName(message.mouseButton))
+				.arg(message.bPressed ? 1 : 0)
+				.arg(message.nX)
+				.arg(message.nY);
+		}
 
-		return QStringLiteral("seq=%1 type=%2 x=%3 y=%4")
+		return QStringLiteral("seq=%1 type=%2 channel=%3 x=%4 y=%5")
 			.arg(message.nSequence)
 			.arg(KInputMessageCodec::typeName(message.type))
+			.arg(message.bRealtime ? QStringLiteral("realtime")
+				: QStringLiteral("reliable"))
 			.arg(message.nX)
 			.arg(message.nY);
 	}
@@ -48,6 +63,18 @@ void KInputInjector::handleInputMessage(const KInputMessage &message)
 		return;
 	if (message.nSequence > 0)
 		nLastSequence = message.nSequence;
+	if (m_bOrderedMouseDragEnabled
+		&& message.type == MouseMoveInputMessageType
+		&& message.bRealtime
+		&& !m_pressedMouseButtons.isEmpty())
+	{
+		KLatencyTraceLogger::write(QStringLiteral("controlled"),
+			QStringLiteral("input_drop"),
+			QStringLiteral("%1 reason=late_realtime_move pressedButtons=%2")
+				.arg(inputTraceExtra(message))
+				.arg(m_pressedMouseButtons.size()));
+		return;
+	}
 	const bool bTrace = message.bTrace
 		|| ((message.type == KeyInputMessageType || message.type == TextInputMessageType)
 			&& KLatencyTraceLogger::isEnabled());
@@ -67,6 +94,14 @@ void KInputInjector::handleInputMessage(const KInputMessage &message)
 		emit inputError(strError);
 	if (bOk && message.nSequence > 0)
 		emit inputInjected(message.nSequence, QDateTime::currentMSecsSinceEpoch());
+	if (bOk && message.type == MouseButtonInputMessageType)
+	{
+		const int nButton = static_cast<int>(message.mouseButton);
+		if (message.bPressed)
+			m_pressedMouseButtons.insert(nButton);
+		else
+			m_pressedMouseButtons.remove(nButton);
+	}
 
 	if (bTrace)
 	{
@@ -77,6 +112,12 @@ void KInputInjector::handleInputMessage(const KInputMessage &message)
 				.arg(timer.isValid() ? timer.elapsed() : -1)
 				.arg(bOk ? 1 : 0));
 	}
+}
+
+void KInputInjector::setOrderedMouseDragEnabled(bool bEnabled)
+{
+	m_bOrderedMouseDragEnabled = bEnabled;
+	m_pressedMouseButtons.clear();
 }
 
 void KInputInjector::releaseAllKeys()
@@ -93,6 +134,7 @@ void KInputInjector::releaseAllInputs()
 {
 	m_nLastPointerSequence = 0;
 	m_nLastReliableSequence = 0;
+	m_pressedMouseButtons.clear();
 	if (m_spInputInjector == nullptr)
 		return;
 

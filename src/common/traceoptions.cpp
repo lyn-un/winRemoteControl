@@ -10,6 +10,7 @@ namespace
 	constexpr char kSessionTraceOptionName[] = "session-trace";
 	constexpr char kLatencyTraceOptionName[] = "latency-trace";
 	constexpr char kResourceTraceOptionName[] = "resource-trace";
+	constexpr char kDesktopInputTraceOptionName[] = "desktop-input-trace";
 	constexpr char kLatencyScenarioOptionName[] = "latency-scenario";
 	constexpr char kLogDirectoryOptionName[] = "log-dir";
 	constexpr char kSessionTraceEnvironmentName[] = "WRC_SESSION_TRACE";
@@ -36,13 +37,16 @@ void KTraceOptionsParser::addOptions(QCommandLineParser *pParser)
 		return;
 
 	pParser->addOption(QCommandLineOption(QString::fromLatin1(kTraceOptionName),
-		QStringLiteral("Enable session and latency trace logs.")));
+		QStringLiteral("Enable all developer trace logs.")));
 	pParser->addOption(QCommandLineOption(QString::fromLatin1(kSessionTraceOptionName),
 		QStringLiteral("Enable session trace logs.")));
 	pParser->addOption(QCommandLineOption(QString::fromLatin1(kLatencyTraceOptionName),
 		QStringLiteral("Enable latency trace logs.")));
 	pParser->addOption(QCommandLineOption(QString::fromLatin1(kResourceTraceOptionName),
 		QStringLiteral("Enable process resource trace logs.")));
+	pParser->addOption(QCommandLineOption(
+		QString::fromLatin1(kDesktopInputTraceOptionName),
+		QStringLiteral("Enable Windows desktop input diagnostics.")));
 	pParser->addOption(QCommandLineOption(QString::fromLatin1(kLatencyScenarioOptionName),
 		QStringLiteral("Label a latency run as static, mouse, or window."),
 		QStringLiteral("scenario")));
@@ -75,6 +79,8 @@ KTraceOptions KTraceOptionsParser::options(const QCommandLineParser &parser,
 	options.bResourceTraceEnabled = bEnableAll
 		|| parser.isSet(QString::fromLatin1(kResourceTraceOptionName))
 		|| IsEnvironmentEnabled(kResourceTraceEnvironmentName);
+	options.bDesktopInputTraceEnabled = bEnableAll
+		|| parser.isSet(QString::fromLatin1(kDesktopInputTraceOptionName));
 
 	const QString strRequestedDirectory = parser.value(
 		QString::fromLatin1(kLogDirectoryOptionName)).trimmed();

@@ -354,6 +354,47 @@ void KWebViewWidget::sendApplicationThemeError(const QString &strError)
 	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
 }
 
+void KWebViewWidget::sendKeyboardSettingsChanged(const KKeyboardSettings &settings)
+{
+	QJsonArray localShortcuts;
+	for (const KKeyboardShortcut &shortcut : settings.localOnlyShortcuts)
+	{
+		QJsonObject item;
+		item.insert(QStringLiteral("value"), KeyboardShortcutCanonicalName(shortcut));
+		item.insert(QStringLiteral("display"), KeyboardShortcutDisplayName(shortcut));
+		localShortcuts.append(item);
+	}
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("keyboardSettingsChanged"));
+	object.insert(QStringLiteral("localOnlyShortcuts"), localShortcuts);
+	object.insert(QStringLiteral("releaseCapture"),
+		KeyboardShortcutDisplayName(DefaultReleaseKeyboardCaptureShortcut()));
+	object.insert(QStringLiteral("toggleFullscreen"),
+		KeyboardShortcutDisplayName(settings.toggleFullscreenShortcut));
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendKeyboardSettingsError(const QString &strError)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("keyboardSettingsError"));
+	object.insert(QStringLiteral("message"), strError);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
+void KWebViewWidget::sendShortcutRecordingStateChanged(
+	bool bRecording,
+	const QString &strTarget,
+	const QString &strError)
+{
+	QJsonObject object;
+	object.insert(QStringLiteral("type"), QStringLiteral("shortcutRecordingStateChanged"));
+	object.insert(QStringLiteral("recording"), bRecording);
+	object.insert(QStringLiteral("target"), strTarget);
+	object.insert(QStringLiteral("error"), strError);
+	postJson(QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+}
+
 void KWebViewWidget::sendIncomingAccessRequest(const QString &strRequestId,
 	const QString &strDeviceName,
 	const QString &strSourceAddress,
@@ -923,6 +964,18 @@ void KWebViewWidget::handleWebMessage(const QString &strMessage)
 		emit updateApplicationThemeRequested(
 			document.object().value(QStringLiteral("themeId")).toString());
 	}
+	else if (strCommand == QStringLiteral("requestKeyboardSettings"))
+		emit requestKeyboardSettingsRequested();
+	else if (strCommand == QStringLiteral("beginKeyboardShortcutRecording"))
+		emit beginKeyboardShortcutRecordingRequested(
+			document.object().value(QStringLiteral("target")).toString());
+	else if (strCommand == QStringLiteral("cancelKeyboardShortcutRecording"))
+		emit cancelKeyboardShortcutRecordingRequested();
+	else if (strCommand == QStringLiteral("removeLocalKeyboardShortcut"))
+		emit removeLocalKeyboardShortcutRequested(
+			document.object().value(QStringLiteral("shortcut")).toString());
+	else if (strCommand == QStringLiteral("restoreDefaultKeyboardShortcuts"))
+		emit restoreDefaultKeyboardShortcutsRequested();
 	else if (strCommand == QStringLiteral("respondIncomingAccessRequest"))
 	{
 		const QJsonObject object = document.object();
