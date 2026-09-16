@@ -8,6 +8,11 @@ KLatestDecodedFrameEnqueueResult KLatestDecodedFrameQueue::enqueue(
 {
 	std::lock_guard<std::mutex> guard(m_mutex);
 	KLatestDecodedFrameEnqueueResult result;
+	if (!frame.hasPixels())
+	{
+		result.stats = m_stats;
+		return result;
+	}
 	++m_stats.nReceivedFrames;
 	if (m_bHasPendingFrame)
 	{
@@ -32,8 +37,10 @@ bool KLatestDecodedFrameQueue::takeLatest(KDecodedVideoFrame *pFrame)
 		return false;
 
 	std::lock_guard<std::mutex> guard(m_mutex);
-	if (!m_bHasPendingFrame)
+	if (!m_bHasPendingFrame || !m_latestFrame.hasPixels())
 	{
+		m_latestFrame = KDecodedVideoFrame();
+		m_bHasPendingFrame = false;
 		m_bPresentationQueued = false;
 		return false;
 	}

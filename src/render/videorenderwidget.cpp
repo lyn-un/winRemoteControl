@@ -1,4 +1,5 @@
 #include "render/videorenderwidget.h"
+#include "common/sessiontracelogger.h"
 
 #include "common/latencytracelogger.h"
 
@@ -144,29 +145,92 @@ void KVideoRenderWidget::presentFrame(const KDecodedVideoFrame &frame)
 
 	QString strError;
 	if (!initializeD3d(&strError) ||
-		!ensureFrameTexture(frame.nWidth, frame.nHeight, &strError) ||
 		!updateVertexBuffer(frame.nWidth, frame.nHeight, &strError))
 	{
 		emit renderError(strError);
 		return;
 	}
 
-	const D3D11_BOX sourceBox = {
-		0,
-		0,
-		0,
-		static_cast<UINT>(frame.nWidth),
-		static_cast<UINT>(frame.nHeight),
-		1
-	};
-	m_spContext->UpdateSubresource(m_spFrameTexture.Get(),
-		0,
-		&sourceBox,
-		frame.pixelData(),
-		static_cast<UINT>(frame.nWidth * 4),
-		0);
+	QElapsedTimer uploadTimer;
+	uploadTimer.start();
+	const bool bI420Frame = frame.pixelFormat == KDecodedPixelFormat::I420;
+	quint64 nUploadBytes = static_cast<quint64>(frame.nWidth) * frame.nHeight * 4;
+	if (bI420Frame)
+	{
+		if (frame.spRenderSession && frame.spRenderSession->bForceBgra.load())
+			return;
+		const HRESULT hr = m_i420Pipeline.upload(m_spDevice.Get(), m_spContext.Get(), frame);
+		if (FAILED(hr))
+		{
+			m_bI420Frame = false;
+			m_i420Pipeline.clear();
+			m_spFrameShaderResourceView.Reset();
+			m_spFrameTexture.Reset();
+			const HRESULT hrDevice = m_spDevice->GetDeviceRemovedReason();
+			if (FAILED(hrDevice))
+			{
+				emit renderError(hresultMessage(QStringLiteral("D3D11 device failed"), hrDevice));
+				return;
+			}
+			if (frame.spRenderSession && frame.spRenderSession->bActive.load())
+				frame.spRenderSession->bForceBgra.store(true);
+			KSessionTraceLogger::write(QStringLiteral("controller"), QStringLiteral("video_renderer_fallback"),
+				QStringLiteral("bgra"), -1, QStringLiteral("reason=i420_resource_failure generation=%1 hresult=%2")
+					.arg(frame.spRenderSession ? frame.spRenderSession->nGeneration : 0).arg(static_cast<quint32>(hr)));
+			return;
+		}
+		m_nFrameWidth = frame.nWidth;
+		m_nFrameHeight = frame.nHeight;
+		nUploadBytes = 0;
+		for (const KVideoPlane &plane : frame.planes)
+			nUploadBytes += static_cast<quint64>(plane.nWidth) * plane.nHeight;
+	}
+	else
+	{
+		// Capture a valid pointer before submission. A concurrent session retirement
+		// may make pixelData() return null, but cannot free this frame's owned pixels.
+		const unsigned char *pPixels = frame.pixelData();
+		if (pPixels == nullptr)
+			return;
+		if (!ensureFrameTexture(frame.nWidth, frame.nHeight, &strError))
+		{
+			emit renderError(strError);
+			return;
+		}
+		const D3D11_BOX sourceBox = {
+			0,
+			0,
+			0,
+			static_cast<UINT>(frame.nWidth),
+			static_cast<UINT>(frame.nHeight),
+			1
+		};
+		m_spContext->UpdateSubresource(m_spFrameTexture.Get(),
+			0,
+			&sourceBox,
+			pPixels,
+			static_cast<UINT>(frame.nWidth * 4),
+			0);
+	}
+	m_bI420Frame = bI420Frame;
+	const qint64 nUploadSubmitUs = uploadTimer.nsecsElapsed() / 1000;
+	QElapsedTimer presentTimer;
+	presentTimer.start();
 
 	render();
+	const quint64 nGeneration = frame.spRenderSession ? frame.spRenderSession->nGeneration : 0;
+	if (!m_bRenderPathLogged || m_lastLoggedPixelFormat != frame.pixelFormat
+		|| m_nLoggedRenderGeneration != nGeneration || frame.nFrameIndex % 300 == 0)
+	{
+		KSessionTraceLogger::write(QStringLiteral("controller"), QStringLiteral("video_present"),
+			m_bI420Frame ? QStringLiteral("i420_gpu") : QStringLiteral("bgra"), -1,
+			QStringLiteral("uploadBytes=%1 uploadSubmitUs=%2 drawPresentCallUs=%3 generation=%4 requested=%5")
+				.arg(nUploadBytes).arg(nUploadSubmitUs).arg(presentTimer.nsecsElapsed() / 1000).arg(nGeneration)
+				.arg(g_bForceBgraVideoRenderer.load() ? QStringLiteral("bgra") : QStringLiteral("auto")));
+		m_bRenderPathLogged = true;
+		m_lastLoggedPixelFormat = frame.pixelFormat;
+		m_nLoggedRenderGeneration = nGeneration;
+	}
 	const qint64 nPresentEndAtMs = SteadyNowMs();
 	const KLatestDecodedFrameQueueStats renderStats =
 		m_frameQueue.recordPresented();
@@ -201,7 +265,7 @@ void KVideoRenderWidget::presentFrame(const KDecodedVideoFrame &frame)
 				.arg(frame.nLastInputSeq)
 				.arg(frame.nInputAgeMs)
 				.arg(renderTimer.isValid() ? renderTimer.elapsed() : -1)
-				.arg(frame.nRemoteCallbackAtMs >= 0
+				.arg(frame.nRemoteCallbackAtMs >= 0 && frame.nConversionDoneAtMs >= 0
 					? frame.nConversionDoneAtMs - frame.nRemoteCallbackAtMs : -1)
 				.arg(frame.nConversionDoneAtMs >= 0
 					? frame.nRenderEnqueuedAtMs - frame.nConversionDoneAtMs : -1)
@@ -226,6 +290,13 @@ void KVideoRenderWidget::clearFrame()
 {
 	suspendRemoteInput();
 	const KLatestDecodedFrameQueueStats renderStats = m_frameQueue.clear();
+	m_i420Pipeline.clear();
+	m_bI420Frame = false;
+	m_bRenderPathLogged = false;
+	m_spFrameShaderResourceView.Reset();
+	m_spFrameTexture.Reset();
+	m_nFrameWidth = 0;
+	m_nFrameHeight = 0;
 	m_nLastRenderedInputSeq = 0;
 	if (renderStats.nReceivedFrames > 0 && KLatencyTraceLogger::isEnabled())
 	{
@@ -825,8 +896,17 @@ bool KVideoRenderWidget::createSampler(QString *pErrorMessage)
 
 bool KVideoRenderWidget::ensureFrameTexture(int nWidth, int nHeight, QString *pErrorMessage)
 {
-	if (m_spFrameTexture && m_nFrameWidth == nWidth && m_nFrameHeight == nHeight)
-		return true;
+	if (m_spFrameTexture)
+	{
+		D3D11_TEXTURE2D_DESC current = {};
+		m_spFrameTexture->GetDesc(&current);
+		if (current.Width == static_cast<UINT>(nWidth) && current.Height == static_cast<UINT>(nHeight))
+		{
+			m_nFrameWidth = nWidth;
+			m_nFrameHeight = nHeight;
+			return true;
+		}
+	}
 
 	m_spFrameShaderResourceView.Reset();
 	m_spFrameTexture.Reset();
@@ -921,6 +1001,8 @@ void KVideoRenderWidget::releaseRenderTarget()
 
 void KVideoRenderWidget::releaseAll()
 {
+	m_i420Pipeline.clear();
+	m_bI420Frame = false;
 	releaseRenderTarget();
 	m_spVertexBuffer.Reset();
 	m_spInputLayout.Reset();
@@ -940,7 +1022,8 @@ void KVideoRenderWidget::releaseAll()
 
 void KVideoRenderWidget::render()
 {
-	if (!m_spContext || !m_spSwapChain || !m_spRenderTargetView || !m_spFrameShaderResourceView)
+	if (!m_spContext || !m_spSwapChain || !m_spRenderTargetView
+		|| (m_bI420Frame ? !m_i420Pipeline.isReady() : !m_spFrameShaderResourceView))
 		return;
 
 	const QSize widgetSize = size();
@@ -965,8 +1048,12 @@ void KVideoRenderWidget::render()
 	m_spContext->VSSetShader(m_spVertexShader.Get(), nullptr, 0);
 	m_spContext->PSSetShader(m_spPixelShader.Get(), nullptr, 0);
 	m_spContext->PSSetShaderResources(0, 1, &pShaderResourceView);
+	if (m_bI420Frame)
+		m_i420Pipeline.bind(m_spContext.Get());
 	m_spContext->PSSetSamplers(0, 1, &pSamplerState);
 	m_spContext->Draw(4, 0);
+	ID3D11ShaderResourceView *emptyViews[3] = {};
+	m_spContext->PSSetShaderResources(0, 3, emptyViews);
 	m_spSwapChain->Present(0, 0);
 }
 

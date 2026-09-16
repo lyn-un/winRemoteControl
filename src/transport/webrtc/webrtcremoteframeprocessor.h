@@ -46,10 +46,13 @@ private:
 	std::thread m_processThread;
 	bool m_bStopping = false;
 	quint64 m_nEpoch = 1;
+	std::shared_ptr<KVideoRenderSession> m_spRenderSession = std::make_shared<KVideoRenderSession>();
 	quint64 m_nReceivedCallbackFrames = 0;
 	quint64 m_nProcessedCallbackFrames = 0;
 	quint64 m_nDroppedCallbackFrames = 0;
 	quint64 m_nFrameIndex = 0;
+	std::optional<bool> m_lastCpuMode;
+	quint64 m_nLoggedEpoch = 0;
 };
 
 #endif // _WINREMOTECONTROL_WEBRTCREMOTEFRAMEPROCESSOR_H_

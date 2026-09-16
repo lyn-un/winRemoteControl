@@ -51,6 +51,26 @@ npm.cmd --prefix frontend run build
 
 本次修复已通过 Edge 无头浏览器的 18 组组合（1100×800、640×480、400×360；DPI 1/1.5；daylight、midnight、nordic-mist）。使用虚拟设备和模拟 Bridge 验证按钮九点命中、边缘定位、三种关闭方式及唯一目标移除命令；恢复旧 DOM 层级可复现遮挡。原生 WebView2 窗口复验仍待完成。
 
+### 接收端 I420 渲染验证
+
+`wrc_d3d_i420_tests` 使用本机 D3D11 硬件离屏目标，比较生产 I420 着色器和 libyuv BGRA 路径；覆盖灰阶、彩条、随机像素、奇数尺寸、padding stride、放大/缩小和资源重建，不捕获桌面或注入输入。无可用硬件设备时测试报错，不静默记为通过。`wrc_webrtc_remote_frame_processor_tests` 验证共享所有权、回退及会话重置；`wrc_webrtc_remote_frame_trace_tests` 在独立进程验证 latency trace 强制 BGRA。
+
+同一个离屏可执行文件提供可重复 A/B 基准，参数依次为宽、高、目标 FPS、`i420|bgra`、测量秒数、预热秒数：
+
+```powershell
+$env:PATH = "$PWD/build/Release;$env:PATH"
+build/cmake-release/tests/Release/wrc_d3d_i420_tests.exe --benchmark 1920 1080 60 i420 60 10
+build/cmake-release/tests/Release/wrc_d3d_i420_tests.exe --benchmark 1920 1080 60 bgra 60 10
+# 完整矩阵：约 28 分钟，三轮交替顺序，本地 JSON 保存到 build/diagnostics/reports
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/measure-receiver-render.ps1
+```
+
+上述执行策略参数只作用于本次 PowerShell 进程，不修改用户或机器的持久执行策略。脚本默认将报告保存在已忽略的 `build/diagnostics/reports`；中断时保留已完成案例，并保持 `completed=false`。
+
+分别对 1920×1080、2560×1440 和 30/60 FPS 各运行三轮，两种模式串行交替，测试期间避免构建及其他重负载。输出 JSON 包含 CPU 时间、准备/上传提交/离屏 Draw 调用 P50/P95、GPU 查询时间、有效上传字节、错过节拍数和预热后/结束时资源快照。基准使用相同静态合成 I420，不包含采集、网络、解码、Qt 调度或交换链 Present；错过节拍不是远程视频丢帧率，资源快照不是峰值，不能将结果当作双机端到端性能。
+
+正式交付仍须复验原生窗口、真实双机视频、颜色、缩放和重连。个体机器的性能结果保存在本地，不把未实测的 FPS 或延迟当成已达成指标。
+
 ## Release 构建
 
 日常开发默认只构建和更新 `build/Release`（`release` preset），包括前端资源部署；只有明确要求生产构建或打包时才更新 `build/production/Release`，不为同步两份运行目录而重复构建。

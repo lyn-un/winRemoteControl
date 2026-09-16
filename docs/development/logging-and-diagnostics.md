@@ -14,6 +14,7 @@
 | `--latency-scenario <static\|mouse\|window>` | 启用延迟日志并标记本次基线场景 |
 | `--log-dir <path>` | 指定所有 trace 日志目录；相对路径以 exe 目录为基准 |
 | `--help` | 显示命令行帮助 |
+| `--video-renderer <auto\|bgra>` | 接收端默认尝试 I420 GPU 转色，或强制原有 BGRA 路径；非法值报错，不持久化 |
 
 示例：
 
@@ -138,6 +139,12 @@ JSON 汇总和两端原始资源日志写入 `build/diagnostics/reports`。第�
 `button_after inserted=2 error=0` 只证明 `SendInput()` 接受了“绝对移动 + 按钮”两个 `INPUT`，不能证明 Explorer 或其他目标窗口最终处理了按钮事件。排查时必须把 `button_before/after`、对应 `hookSequence`、目标窗口状态和应用实际表现一起判断。
 
 诊断会记录 HWND、PID、窗口类、进程文件名、坐标、完整性级别和 GUI 线程句柄状态；不记录窗口标题、用户名、桌面文件名、完整路径或画面内容。高频诊断本身可能改变钩子时序，结论应使用相同构建的启用/关闭 A/B 结果交叉验证。
+
+## 接收渲染诊断
+
+开启 session trace 后，`video_prepare` 按会话/路径变化及每 300 帧记录请求模式、实际格式、回退原因、`processUs` 和 `callbackToPreparedMs`（后者包含处理队列等待，不是纯转换耗时）；`video_present` 按首帧、会话/路径变化及每 300 帧记录请求/实际模式、generation、`uploadBytes`、`uploadSubmitUs`、`drawPresentCallUs`。后二者为 CPU 提交/调用耗时，不是 GPU 完成时间或屏幕发光时间。`video_renderer_fallback` 记录 I420 资源失败的 HRESULT 与会话 generation，不记录画面内容。
+
+开启 latency trace 时强制 BGRA，并在延迟日志的 `video_renderer_selected` 中标记 `actual=bgra reason=latency_trace`，即使未开启 session trace 也能确认回退。GPU 正常路径的 `nConversionDoneAtMs` 保留未测量状态，不伪造 CPU 转换时间。隔离基准中的 `gpuUploadDraw*Us` 来自 GPU timestamp/disjoint 查询，延后四帧读取，未就绪/时钟失效样本和末尾未读样本单独计数。
 
 ## 隐私约束
 

@@ -1,12 +1,12 @@
 #include "app/mainwindow.h"
 
-#include "core/media/decodedvideoframe.h"
 #include "common/desktopinputtracelogger.h"
 #include "common/latencytracelogger.h"
 #include "common/resourcetracelogger.h"
 #include "common/applicationpaths.h"
 #include "common/sessiontracelogger.h"
 #include "common/traceoptions.h"
+#include "core/media/decodedvideoframe.h"
 #include "core/media/networkstats.h"
 #include "core/media/streamconfig.h"
 #include "core/media/videoframe.h"
@@ -60,6 +60,7 @@ int main(int nArgc, char *pArgv[])
 		::CoUninitialize();
 		return 2;
 	}
+	g_bForceBgraVideoRenderer.store(traceOptions.bForceBgraVideoRenderer);
 	KSessionTraceLogger::configure(
 		traceOptions.bSessionTraceEnabled, traceOptions.strLogDirectory);
 	KLatencyTraceLogger::configure(

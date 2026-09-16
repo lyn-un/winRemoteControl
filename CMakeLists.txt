@@ -953,6 +953,8 @@ add_library(wrc_qt_presentation STATIC
 	src/render/remotemouseclicktracker.cpp
 	src/render/remotemouseclicktracker.h
 	src/render/videorenderwidget.cpp
+	src/render/d3di420pipeline.cpp
+	src/render/d3di420pipeline.h
 	src/render/videorenderwidget.h
 	src/input/remotekeyboardroutingservice.cpp
 	src/input/remotekeyboardroutingservice.h
@@ -1416,6 +1418,20 @@ if(WRC_BUILD_TESTS)
 	)
 	add_test(NAME wrc_webrtc_remote_frame_processor_tests
 		COMMAND wrc_webrtc_remote_frame_processor_tests)
+	add_test(NAME wrc_webrtc_remote_frame_trace_tests
+		COMMAND wrc_webrtc_remote_frame_processor_tests --trace-case)
+	add_executable(wrc_d3d_i420_tests
+		tests/unit/d3di420test.cpp
+		src/render/d3di420pipeline.cpp
+	)
+	target_link_libraries(wrc_d3d_i420_tests PRIVATE
+		wrc_webrtc_adapter
+		Qt6::Core
+		d3d11
+		d3dcompiler
+		Psapi
+	)
+	add_test(NAME wrc_d3d_i420_tests COMMAND wrc_d3d_i420_tests)
 
 	add_executable(wrc_capture_pipeline_tests
 		tests/unit/capturepipelinetest.cpp

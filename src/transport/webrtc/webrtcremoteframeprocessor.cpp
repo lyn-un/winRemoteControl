@@ -2,6 +2,7 @@
 
 #include "common/framewatermark.h"
 #include "common/latencytracelogger.h"
+#include "common/sessiontracelogger.h"
 
 #include <api/video/i420_buffer.h>
 
@@ -25,6 +26,7 @@ namespace
 KWebRtcRemoteFrameProcessor::KWebRtcRemoteFrameProcessor(QObject *pParent)
 	: QObject(pParent)
 {
+	m_spRenderSession->nGeneration = m_nEpoch;
 	m_processThread = std::thread(
 		&KWebRtcRemoteFrameProcessor::processFrames, this);
 }
@@ -34,6 +36,7 @@ KWebRtcRemoteFrameProcessor::~KWebRtcRemoteFrameProcessor()
 	{
 		std::lock_guard<std::mutex> guard(m_mutex);
 		m_bStopping = true;
+		m_spRenderSession->bActive.store(false);
 		m_pendingFrame.reset();
 	}
 	m_frameCondition.notify_all();
@@ -93,6 +96,9 @@ void KWebRtcRemoteFrameProcessor::clear()
 		bPendingFrameDiscarded = m_pendingFrame.has_value();
 		m_pendingFrame.reset();
 		++m_nEpoch;
+		m_spRenderSession->bActive.store(false);
+		m_spRenderSession = std::make_shared<KVideoRenderSession>();
+		m_spRenderSession->nGeneration = m_nEpoch;
 		m_nReceivedCallbackFrames = 0;
 		m_nProcessedCallbackFrames = 0;
 		m_nDroppedCallbackFrames = 0;
@@ -135,6 +141,7 @@ void KWebRtcRemoteFrameProcessor::decodeAndEmit(
 	qint64 nCallbackAtMs,
 	quint64 nEpoch)
 {
+	const auto prepareStart = std::chrono::steady_clock::now();
 	const quint64 nNextFrameIndex = m_nFrameIndex + 1;
 	if (nNextFrameIndex % kVideoTraceFrameInterval == 0)
 	{
@@ -159,25 +166,73 @@ void KWebRtcRemoteFrameProcessor::decodeAndEmit(
 	decodedFrame.bWebRtcLowLatencyRender =
 		frame.render_parameters().use_low_latency_rendering;
 	decodedFrame.nRemoteCallbackAtMs = nCallbackAtMs;
-	decodedFrame.spBgraBuffer = std::make_shared<std::vector<unsigned char>>(
-		static_cast<size_t>(decodedFrame.nWidth) * decodedFrame.nHeight * 4);
+	{
+		std::lock_guard<std::mutex> guard(m_mutex);
+		if (m_bStopping || nEpoch != m_nEpoch)
+			return;
+		decodedFrame.spRenderSession = m_spRenderSession;
+	}
+	const bool bLatencyTrace = KLatencyTraceLogger::isEnabled();
+	const bool bCpu = g_bForceBgraVideoRenderer.load() || bLatencyTrace
+		|| decodedFrame.spRenderSession->bForceBgra.load();
+	if (!bCpu)
+	{
+		decodedFrame.pixelFormat = KDecodedPixelFormat::I420;
+		decodedFrame.spPlaneOwner = std::make_shared<webrtc::scoped_refptr<webrtc::I420BufferInterface>>(spI420);
+		const int nChromaWidth = decodedFrame.nWidth / 2 + decodedFrame.nWidth % 2;
+		const int nChromaHeight = decodedFrame.nHeight / 2 + decodedFrame.nHeight % 2;
+		decodedFrame.planes = {{
+			{spI420->DataY(), decodedFrame.nWidth, decodedFrame.nHeight, spI420->StrideY(),
+				static_cast<size_t>(spI420->StrideY()) * decodedFrame.nHeight},
+			{spI420->DataU(), nChromaWidth, nChromaHeight, spI420->StrideU(),
+				static_cast<size_t>(spI420->StrideU()) * nChromaHeight},
+			{spI420->DataV(), nChromaWidth, nChromaHeight, spI420->StrideV(),
+				static_cast<size_t>(spI420->StrideV()) * nChromaHeight}}};
+	}
+	else
+	{
+		decodedFrame.spBgraBuffer = std::make_shared<std::vector<unsigned char>>(
+			static_cast<size_t>(decodedFrame.nWidth) * decodedFrame.nHeight * 4);
 
-	// libyuv ARGB is stored as B,G,R,A on little-endian Windows, matching DXGI BGRA8.
-	const int nConvertResult = libyuv::I420ToARGB(spI420->DataY(),
-		spI420->StrideY(),
-		spI420->DataU(),
-		spI420->StrideU(),
-		spI420->DataV(),
-		spI420->StrideV(),
-		decodedFrame.spBgraBuffer->data(),
-		decodedFrame.nWidth * 4,
-		decodedFrame.nWidth,
-		decodedFrame.nHeight);
-	if (nConvertResult != 0)
-		return;
-	decodedFrame.nConversionDoneAtMs = SteadyNowMs();
+		// libyuv ARGB is stored as B,G,R,A on little-endian Windows, matching DXGI BGRA8.
+		const int nConvertResult = libyuv::I420ToARGB(spI420->DataY(),
+			spI420->StrideY(),
+			spI420->DataU(),
+			spI420->StrideU(),
+			spI420->DataV(),
+			spI420->StrideV(),
+			decodedFrame.spBgraBuffer->data(),
+			decodedFrame.nWidth * 4,
+			decodedFrame.nWidth,
+			decodedFrame.nHeight);
+		if (nConvertResult != 0)
+			return;
+		decodedFrame.nConversionDoneAtMs = SteadyNowMs();
+	}
+	decodedFrame.nFramePreparedAtMs = SteadyNowMs();
+	if (m_lastCpuMode != bCpu || m_nLoggedEpoch != nEpoch || decodedFrame.nFrameIndex % 300 == 0)
+	{
+		if (bLatencyTrace)
+		{
+			KLatencyTraceLogger::write(QStringLiteral("controller"), QStringLiteral("video_renderer_selected"),
+				QStringLiteral("requested=%1 actual=bgra reason=latency_trace generation=%2")
+					.arg(g_bForceBgraVideoRenderer.load() ? QStringLiteral("bgra") : QStringLiteral("auto"))
+					.arg(nEpoch));
+		}
+		KSessionTraceLogger::write(QStringLiteral("controller"), QStringLiteral("video_prepare"),
+			bCpu ? QStringLiteral("bgra") : QStringLiteral("i420"), -1,
+			QStringLiteral("requested=%1 reason=%2 callbackToPreparedMs=%3 processUs=%4 generation=%5")
+				.arg(g_bForceBgraVideoRenderer.load() ? QStringLiteral("bgra") : QStringLiteral("auto"))
+				.arg(bLatencyTrace ? QStringLiteral("latency_trace") :
+					(decodedFrame.spRenderSession->bForceBgra.load() ? QStringLiteral("gpu_fallback") : QStringLiteral("configured")))
+				.arg(decodedFrame.nFramePreparedAtMs - nCallbackAtMs)
+				.arg(std::chrono::duration_cast<std::chrono::microseconds>(
+					std::chrono::steady_clock::now() - prepareStart).count()).arg(nEpoch));
+		m_lastCpuMode = bCpu;
+		m_nLoggedEpoch = nEpoch;
+	}
 
-	if (KLatencyTraceLogger::isEnabled())
+	if (bLatencyTrace)
 	{
 		KFrameWatermark watermark;
 		if (KFrameWatermarkCodec::readBgra(*decodedFrame.spBgraBuffer,

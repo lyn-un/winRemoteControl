@@ -12,7 +12,7 @@ flowchart LR
     SOURCE --> ENC["H.264 encoder"]
     ENC --> RTC["WebRTC video track"]
     RTC --> DEC["H.264 decoder"]
-    DEC --> PROCESS["RemoteFrameProcessor / I420 to BGRA"]
+    DEC --> PROCESS["RemoteFrameProcessor / shared I420 or BGRA fallback"]
     PROCESS --> D3D["KVideoRenderWidget / D3D11"]
 ```
 
@@ -32,7 +32,13 @@ WebRTC 输入为 I420，编码器内部转换为 NV12。线上保持 H.264 和�
 
 ## 控制端
 
-WebRTC H.264 decoder 输出 I420。`KWebRtcRemoteFrameProcessor` 在专用转换线程中将其转换为 Windows D3D 渲染所需的 BGRA，并采用“待处理帧只保留最新一张”的有界槽位：新帧覆盖尚未开始转换的旧帧，GUI 线程不会执行 I420 到 BGRA 的大块转换。转换结果使用共享像素存储跨 Qt 队列传递，避免每帧再次深拷贝约 `width * height * 4` 字节。该策略减少排队延迟，而不是传输错误；会话结束日志会输出 received、processed 和 coalesced 汇总。
+WebRTC H.264 decoder 输出 I420。默认 `--video-renderer=auto` 下，`KWebRtcRemoteFrameProcessor` 保留引用计数缓冲区的所有权，将只读 Y/U/V 平面交给 D3D11：三张 `R8_UNORM` 纹理按各自 stride 上传，像素着色器执行 BT.601 limited-range 转色。正常路径不分配整帧 BGRA，也不执行整帧 CPU `I420ToARGB()`；这不是采集到编码的 GPU 零拷贝，解码器原有 I420 拷贝及 CPU→GPU 上传仍存在。
+
+`KDecodedVideoFrame` 同时支持 I420 与 BGRA，不暴露 WebRTC/D3D 类型。共享所有权和独立会话 token 保证缓冲区直到消费或丢弃才释放；清理使旧 token 失效，迟到帧不能再次显示。处理线程和 GUI 队列继续只保留最新待处理帧。
+
+`--video-renderer=bgra` 强制使用原有 CPU 转色。I420 专属资源创建失败时，渲染器标记该帧所属会话回退，后续帧在处理线程转换 BGRA；不把转换搬到 GUI 线程，新会话可再次尝试 GPU。整个 D3D 设备失效仍按原有错误路径处理，BGRA 回退不代表无 GPU 的软件显示。格式不变、尺寸不变时复用纹理，清理时释放纹理。
+
+开启 latency trace（包括 `--trace`）时，接收端始终使用 BGRA，以保留现有水印读取、移除及输入反馈语义。因而不能使用该模式证明 I420 GPU 路径的端到端延迟收益；若需观察 GPU 路径，可只开启 session/resource trace。着色器以现有 libyuv 行为为颜色基准，在转换 RGB 后执行双线性过滤，不在本轮增加 HDR 或 BT.709 元数据处理。
 
 `KVideoRenderWidget` 在 GUI/渲染边界显示最新帧，并将画面坐标映射为远端输入坐标。线程安全的 `KLatestDecodedFrameQueue` 保证 GUI 忙时最多保留一张待处理帧，旧帧可被覆盖，但最新帧在当前呈现结束后会再次调度。视频帧携带最近输入序号，用于控制端以单调时钟计算输入发送到画面完成渲染的 round trip。
 

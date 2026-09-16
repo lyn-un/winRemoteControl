@@ -49,7 +49,7 @@ flowchart TB
 - GUI 线程：窗口、WebView2、D3D 控件、轻量状态编排。
 - Capture 线程：DXGI 抓帧与采集循环。
 - WebRTC network/worker/signaling 线程：WebRTC 内部网络与媒体任务。
-- Remote frame processor 线程：将控制端 I420 帧转换为 BGRA，只保留最新待处理帧，并用共享像素存储投递到 GUI。
+- Remote frame processor 线程：默认以共享所有权投递 I420 平面，由 D3D11 转色；强制 BGRA、latency trace 或会话内 GPU 回退时在此线程执行 CPU 转换。只保留最新待处理帧，会话 token 在清理时失效，迟到回退不影响新会话。
 - teardown 后台任务：异步释放 PeerConnection、Factory 和 WebRTC 线程。
 - latency trace 线程：批量落盘高频延迟事件。
 - desktop input trace 线程：以 100 ms 批次实时追加 Win32 输入诊断；低级键鼠钩子回调保持有界，不执行文件 I/O。

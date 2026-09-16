@@ -35,6 +35,8 @@ void KTraceOptionsParser::addOptions(QCommandLineParser *pParser)
 {
 	if (pParser == nullptr)
 		return;
+	pParser->addOption(QCommandLineOption(QStringLiteral("video-renderer"),
+		QStringLiteral("Receiver renderer: auto or bgra."), QStringLiteral("mode"), QStringLiteral("auto")));
 
 	pParser->addOption(QCommandLineOption(QString::fromLatin1(kTraceOptionName),
 		QStringLiteral("Enable all developer trace logs.")));
@@ -60,6 +62,10 @@ KTraceOptions KTraceOptionsParser::options(const QCommandLineParser &parser,
 {
 	const bool bEnableAll = parser.isSet(QString::fromLatin1(kTraceOptionName));
 	KTraceOptions options;
+	const QString strRenderer = parser.value(QStringLiteral("video-renderer"));
+	options.bForceBgraVideoRenderer = strRenderer == QStringLiteral("bgra");
+	if (strRenderer != QStringLiteral("auto") && strRenderer != QStringLiteral("bgra"))
+		options.strValidationError = QStringLiteral("Invalid video renderer. Expected auto or bgra.");
 	options.strLatencyScenario = parser.value(
 		QString::fromLatin1(kLatencyScenarioOptionName)).trimmed().toLower();
 	if (!options.strLatencyScenario.isEmpty()

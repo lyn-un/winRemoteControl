@@ -73,5 +73,53 @@ int main()
 	{
 		return 1;
 	}
+	queue.clear();
+	KDecodedVideoFrame i420;
+	i420.pixelFormat = KDecodedPixelFormat::I420;
+	i420.nWidth = 3;
+	i420.nHeight = 3;
+	auto pixels = std::make_shared<std::vector<unsigned char>>(32, 128);
+	std::weak_ptr<std::vector<unsigned char>> weakPixels = pixels;
+	i420.spPlaneOwner = pixels;
+	i420.planes = {{{pixels->data(), 3, 3, 4, 12},
+		{pixels->data() + 12, 2, 2, 4, 8}, {pixels->data() + 20, 2, 2, 4, 8}}};
+	i420.spRenderSession = std::make_shared<KVideoRenderSession>();
+	if (!Check(i420.hasPixels(), "odd I420 with padded strides is valid")) return 1;
+	auto malformed = i420;
+	malformed.planes[1].nStride = -1;
+	if (!Check(!malformed.hasPixels(), "negative stride rejected")) return 1;
+	malformed = i420;
+	malformed.planes[2].nHeight = 3;
+	if (!Check(!malformed.hasPixels(), "incorrect chroma dimensions rejected")) return 1;
+	malformed = i420;
+	malformed.spPlaneOwner.reset();
+	if (!Check(!malformed.hasPixels(), "unowned I420 pointer rejected")) return 1;
+	malformed = {};
+	queue.enqueue(i420, 40);
+	pixels.reset();
+	i420 = {};
+	if (!Check(!weakPixels.expired(), "queue retains I420 owner")) return 1;
+	queue.enqueue(MakeFrame(5), 50);
+	if (!Check(weakPixels.expired(), "coalescing releases superseded I420 owner")) return 1;
+	queue.clear();
+	auto invalid = MakeFrame(6);
+	invalid.spBgraBuffer->resize(3);
+	if (!Check(!invalid.hasPixels(), "undersized BGRA rejected")) return 1;
+	invalid = MakeFrame(7);
+	invalid.spRenderSession = std::make_shared<KVideoRenderSession>();
+	invalid.spRenderSession->bActive.store(false);
+	if (!Check(!invalid.hasPixels(), "retired session frame rejected")) return 1;
+	if (!Check(!queue.enqueue(invalid, 70).bNeedsPresentation,
+		"late retired frame cannot schedule presentation after clear")) return 1;
+	invalid = MakeFrame(8);
+	invalid.pixelFormat = static_cast<KDecodedPixelFormat>(99);
+	if (!Check(!invalid.hasPixels(), "unknown pixel format rejected")) return 1;
+	auto pending = MakeFrame(9);
+	pending.spRenderSession = std::make_shared<KVideoRenderSession>();
+	queue.enqueue(pending, 90);
+	pending.spRenderSession->bActive.store(false);
+	if (!Check(!queue.takeLatest(&presentedFrame), "retired queued frame cannot be consumed")) return 1;
+	if (!Check(queue.enqueue(MakeFrame(10), 100).bNeedsPresentation,
+		"fresh frame schedules after retired queued frame is dropped")) return 1;
 	return 0;
 }

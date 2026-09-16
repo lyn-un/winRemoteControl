@@ -11,6 +11,7 @@ struct KTraceOptions
 	bool bLatencyTraceEnabled = false;
 	bool bResourceTraceEnabled = false;
 	bool bDesktopInputTraceEnabled = false;
+	bool bForceBgraVideoRenderer = false;
 	QString strLogDirectory;
 	QString strLatencyScenario;
 	QString strValidationError;

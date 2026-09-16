@@ -3,6 +3,7 @@
 
 #include "core/media/latestdecodedframequeue.h"
 #include "render/remotemouseclicktracker.h"
+#include "render/d3di420pipeline.h"
 
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QPoint>
@@ -106,6 +107,11 @@ private:
 	QPoint m_pendingMouseMovePoint;
 	QSet<quint32> m_pressedRemoteKeys;
 	bool m_bInitialized = false;
+	bool m_bI420Frame = false;
+	bool m_bRenderPathLogged = false;
+	KDecodedPixelFormat m_lastLoggedPixelFormat = KDecodedPixelFormat::Bgra;
+	quint64 m_nLoggedRenderGeneration = 0;
+	KD3dI420Pipeline m_i420Pipeline;
 	bool m_bHasPendingMouseMove = false;
 	bool m_bImeComposing = false;
 	bool m_bNativeKeyboardRoutingEnabled = false;

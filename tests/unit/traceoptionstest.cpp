@@ -53,8 +53,13 @@ namespace
 		const QString strApplicationDirectory = QDir::cleanPath(
 			QDir::temp().absoluteFilePath(QStringLiteral("wrc-app")));
 		ClearTraceEnvironment();
+		Check(ParseOptions({QStringLiteral("app"), QStringLiteral("--video-renderer=bgra")},
+			strApplicationDirectory).bForceBgraVideoRenderer, QStringLiteral("BGRA renderer option"));
+		Check(!ParseOptions({QStringLiteral("app"), QStringLiteral("--video-renderer=invalid")},
+			strApplicationDirectory).strValidationError.isEmpty(), QStringLiteral("invalid renderer rejected"));
 		KTraceOptions options = ParseOptions(
 			{QStringLiteral("winRemoteControl.exe")}, strApplicationDirectory);
+		Check(!options.bForceBgraVideoRenderer, QStringLiteral("renderer defaults to auto"));
 		Check(!options.bSessionTraceEnabled && !options.bLatencyTraceEnabled
 			&& !options.bResourceTraceEnabled && !options.bDesktopInputTraceEnabled,
 			QStringLiteral("trace logging is disabled by default"));
