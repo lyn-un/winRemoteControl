@@ -84,3 +84,12 @@ Session DataChannel 打开后交换 `KSessionCapabilities`，包括：
 - 文件正文只经过 C++、磁盘和 `file-data`，不进入 React、JSON 或诊断日志。
 
 文件传输的文件系统、安全提交和重连边界见[文件传输](../features/file-transfer.md)。
+## H.264 SDP 能力更新（2026-10-10）
+
+未新增私有信令字段或修改信令版本。H.264 工厂共享 Constrained Baseline Level 5.2
+能力声明（`profile-level-id=42e034`），仅使用 packetization-mode=1，并关闭 level 非对称协商。
+WebRTC 按双方能力得到共同等级；旧端只支持 3.1 时仍取 3.1，而不是强行向旧端发送 4.2。
+编码配置不能满足协商约束时明确失败，不静默降低分辨率或 FPS。
+接收实际 SPS 与协商约束不符时拒绝码流；因此旧程序曾经“声明 3.1、实际输出更高等级”
+的连接可能被新版拒绝。建议两端同时更新，不能将此前宽松接受视为协议合规。
+计算、后端配置和验证限制见 `docs/media/video-pipeline.md` 的 level 章节。

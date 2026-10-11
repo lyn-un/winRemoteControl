@@ -806,6 +806,8 @@ target_link_libraries(wrc_udp_discovery_adapter PUBLIC
 )
 
 add_library(wrc_ffmpeg_adapter STATIC
+	src/codec/h264levelpolicy.cpp
+	src/codec/h264levelpolicy.h
 	src/codec/h264decoder.cpp
 	src/codec/h264decoder.h
 	src/codec/h264encoder.cpp
@@ -828,6 +830,7 @@ target_link_directories(wrc_ffmpeg_adapter PUBLIC
 
 target_link_libraries(wrc_ffmpeg_adapter PUBLIC
 	wrc_foundation
+	wrc_diagnostics
 	Qt6::Core
 	avcodec
 	avutil
@@ -837,6 +840,8 @@ target_link_libraries(wrc_ffmpeg_adapter PUBLIC
 )
 
 add_library(wrc_webrtc_adapter STATIC
+	src/transport/webrtc/webrtch264format.cpp
+	src/transport/webrtc/webrtch264format.h
 	src/transport/webrtc/webrtccallbackgate.cpp
 	src/transport/webrtc/webrtccallbackgate.h
 	src/transport/webrtc/webrtcpeer.cpp
@@ -850,6 +855,7 @@ add_library(wrc_webrtc_adapter STATIC
 	src/transport/webrtc/webrtch264decoder.cpp
 	src/transport/webrtc/webrtch264decoder.h
 	src/transport/webrtc/webrtch264encoder.cpp
+	src/transport/webrtc/encoderdiagnostics.cpp
 	src/transport/webrtc/webrtch264encoder.h
 )
 
@@ -1411,14 +1417,42 @@ if(WRC_BUILD_TESTS)
 		COMMAND wrc_webrtc_peer_initialization_tests)
 
 	add_executable(wrc_webrtc_h264_encoder_rate_control_tests
+		tests/unit/h264leveltest.cpp
 		tests/unit/webrtch264encoderratecontroltest.cpp
+		tests/unit/h264bitrateoutputtest.cpp
 	)
+	target_include_directories(wrc_webrtc_h264_encoder_rate_control_tests PRIVATE "${FFMPEG_ROOT}/include")
 	target_link_libraries(wrc_webrtc_h264_encoder_rate_control_tests PRIVATE
 		wrc_webrtc_adapter
 		Qt6::Core
 	)
 	add_test(NAME wrc_webrtc_h264_encoder_rate_control_tests
 		COMMAND wrc_webrtc_h264_encoder_rate_control_tests)
+
+	add_executable(wrc_mf_bitrate_output_tests tests/unit/mfbitrateoutputtest.cpp tests/unit/h264hardwarebitratetest.cpp)
+	target_include_directories(wrc_mf_bitrate_output_tests PRIVATE "${FFMPEG_ROOT}/include")
+	target_link_libraries(wrc_mf_bitrate_output_tests PRIVATE wrc_ffmpeg_adapter Qt6::Core mfplat mfuuid ole32)
+	add_test(NAME wrc_mf_bitrate_output_tests COMMAND wrc_mf_bitrate_output_tests)
+	set_tests_properties(wrc_mf_bitrate_output_tests PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 240 LABELS "mf-hardware")
+	add_executable(wrc_vendor_bitrate_output_tests
+		tests/unit/vendorleveltest.cpp
+		tests/unit/vendorbitrateoutputtest.cpp tests/unit/h264hardwarebitratetest.cpp
+		tests/unit/vendorencoderresourceprobe.cpp)
+	set_target_properties(wrc_vendor_bitrate_output_tests PROPERTIES
+		RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+	target_include_directories(wrc_vendor_bitrate_output_tests PRIVATE "${FFMPEG_ROOT}/include")
+	target_link_libraries(wrc_vendor_bitrate_output_tests PRIVATE wrc_webrtc_adapter Qt6::Core dxgi ole32 psapi)
+	foreach(backend IN ITEMS qsv amf)
+		add_test(NAME wrc_${backend}_bitrate_output_tests COMMAND wrc_vendor_bitrate_output_tests h264_${backend})
+		set_tests_properties(wrc_${backend}_bitrate_output_tests PROPERTIES
+			SKIP_RETURN_CODE 77 TIMEOUT 240 LABELS "vendor-hardware")
+		add_test(NAME wrc_${backend}_level_tests COMMAND wrc_vendor_bitrate_output_tests h264_${backend} --levels)
+		set_tests_properties(wrc_${backend}_level_tests PROPERTIES
+			SKIP_RETURN_CODE 77 TIMEOUT 120 LABELS "vendor-hardware")
+		add_test(NAME wrc_${backend}_startup_rate_tests COMMAND wrc_vendor_bitrate_output_tests h264_${backend} --startup-rates)
+		set_tests_properties(wrc_${backend}_startup_rate_tests PROPERTIES
+			SKIP_RETURN_CODE 77 TIMEOUT 120 LABELS "vendor-hardware")
+	endforeach()
 
 	add_executable(wrc_webrtc_remote_frame_processor_tests
 		tests/unit/webrtcremoteframeprocessortest.cpp

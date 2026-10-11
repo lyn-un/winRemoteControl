@@ -3,6 +3,7 @@
 #include "common/latencytracelogger.h"
 
 #include <QtCore/QString>
+#include <QtCore/QDebug>
 
 #include <api/make_ref_counted.h>
 #include <api/video/i420_buffer.h>
@@ -18,49 +19,21 @@ extern "C" {
 #include <libyuv.h>
 
 #include <algorithm>
-#include <cctype>
 #include <cstring>
 
 namespace
 {
-	constexpr char kH264CodecName[] = "H264";
-	constexpr char kH264ProfileLevelId[] = "profile-level-id";
-	constexpr char kH264ConstrainedBaselineLevel31[] = "42e01f";
-	constexpr char kH264LevelAsymmetryAllowed[] = "level-asymmetry-allowed";
-	constexpr char kH264PacketizationMode[] = "packetization-mode";
 	constexpr int kYuvPlaneCount = 3;
 	constexpr quint64 kDecodeTraceFrameInterval = 30;
-
-	static bool equalsIgnoreCase(const std::string &left, const char *right)
-	{
-		const std::string strRight(right);
-		if (left.size() != strRight.size())
-			return false;
-
-		for (size_t i = 0; i < left.size(); ++i)
-		{
-			if (std::tolower(static_cast<unsigned char>(left[i]))
-				!= std::tolower(static_cast<unsigned char>(strRight[i])))
-			{
-				return false;
-			}
-		}
-
-		return true;
-	}
-
-	static webrtc::SdpVideoFormat h264SdpFormat()
-	{
-		return webrtc::SdpVideoFormat(kH264CodecName,
-			{
-				{ kH264ProfileLevelId, kH264ConstrainedBaselineLevel31 },
-				{ kH264LevelAsymmetryAllowed, "1" },
-				{ kH264PacketizationMode, "1" }
-			});
-	}
 }
 
 KWebRtcH264Decoder::KWebRtcH264Decoder()
+	: KWebRtcH264Decoder(KH264LevelPolicy::kMaximumLevel)
+{
+}
+
+KWebRtcH264Decoder::KWebRtcH264Decoder(int nNegotiatedLevel)
+	: m_spsGuard(nNegotiatedLevel)
 {
 }
 
@@ -71,6 +44,8 @@ KWebRtcH264Decoder::~KWebRtcH264Decoder()
 
 bool KWebRtcH264Decoder::Configure(const Settings &)
 {
+	m_spsGuard.reset();
+	m_bReportedSpsError = false;
 	return openDecoder();
 }
 
@@ -80,6 +55,22 @@ int32_t KWebRtcH264Decoder::Decode(const webrtc::EncodedImage &inputImage, int64
 		return WEBRTC_VIDEO_CODEC_ERROR;
 	if (inputImage.data() == nullptr || inputImage.size() == 0)
 		return WEBRTC_VIDEO_CODEC_ERR_PARAMETER;
+	QString strLevelError;
+	const int nPreviousLevel = m_spsGuard.observedLevel();
+	if (!m_spsGuard.validate(std::span(inputImage.data(), inputImage.size()), 0, 0, 0, &strLevelError))
+	{
+		if (!m_bReportedSpsError)
+		{
+			qWarning() << strLevelError;
+			KLatencyTraceLogger::write(QStringLiteral("controller"), QStringLiteral("h264_level_rejected"), strLevelError);
+			m_bReportedSpsError = true;
+		}
+		return WEBRTC_VIDEO_CODEC_ERROR;
+	}
+	m_bReportedSpsError = false;
+	if (m_spsGuard.observedLevel() != nPreviousLevel)
+		KLatencyTraceLogger::write(QStringLiteral("controller"), QStringLiteral("h264_sps_validated"),
+			QStringLiteral("actualLevel=%1").arg(m_spsGuard.observedLevel()));
 
 	// WebRTC delivers one complete Annex-B access unit per EncodedImage (frame
 	// boundaries are guaranteed by RTP packetization), so no av_parser framing
@@ -110,6 +101,7 @@ int32_t KWebRtcH264Decoder::RegisterDecodeCompleteCallback(webrtc::DecodedImageC
 
 int32_t KWebRtcH264Decoder::Release()
 {
+	m_spsGuard.reset();
 	releaseDecoder();
 	return WEBRTC_VIDEO_CODEC_OK;
 }
@@ -355,7 +347,7 @@ QString KWebRtcH264Decoder::ffmpegErrorMessage(const QString &strPrefix, int nEr
 
 std::vector<webrtc::SdpVideoFormat> KWebRtcH264DecoderFactory::GetSupportedFormats() const
 {
-	return { h264SdpFormat() };
+	return { SupportedH264Format() };
 }
 
 webrtc::VideoDecoderFactory::CodecSupport KWebRtcH264DecoderFactory::QueryCodecSupport(
@@ -378,10 +370,10 @@ std::unique_ptr<webrtc::VideoDecoder> KWebRtcH264DecoderFactory::Create(const we
 	KLatencyTraceLogger::write(QStringLiteral("controller"),
 		QStringLiteral("webrtc_decoder_selected"),
 		QStringLiteral("codec=H264 decoder=ffmpeg_h264"));
-	return std::make_unique<KWebRtcH264Decoder>();
+	return std::make_unique<KWebRtcH264Decoder>(NegotiatedH264Level(format));
 }
 
 bool KWebRtcH264DecoderFactory::isH264Format(const webrtc::SdpVideoFormat &format)
 {
-	return equalsIgnoreCase(format.name, kH264CodecName);
+	return NegotiatedH264Level(format) != 0;
 }

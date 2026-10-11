@@ -2,6 +2,7 @@
 #define _WINREMOTECONTROL_WEBRTCH264ENCODER_H_
 
 #include "codec/h264encoder.h"
+#include "transport/webrtc/webrtch264format.h"
 
 #include <api/video/video_frame.h>
 #include <api/video/video_timing.h>
@@ -12,14 +13,17 @@
 #include <QtCore/QByteArray>
 
 #include <memory>
+#include <map>
 #include <vector>
 
 class KWebRtcH264EncoderTestAccess;
+class KEncoderDiagnostics;
 
 class KWebRtcH264Encoder final : public webrtc::VideoEncoder
 {
 public:
 	explicit KWebRtcH264Encoder(KVideoEncoderPreference preference);
+	KWebRtcH264Encoder(KVideoEncoderPreference preference, int nNegotiatedLevel);
 	~KWebRtcH264Encoder() override;
 
 	int InitEncode(const webrtc::VideoCodec *pCodecSettings,
@@ -33,9 +37,19 @@ public:
 
 private:
 	friend class KWebRtcH264EncoderTestAccess;
+	struct KFrameMetadata
+	{
+		uint32_t nRtpTimestamp = 0;
+		int64_t nNtpTimeMs = 0;
+		int64_t nCaptureTimeMs = 0;
+		qint64 nEncodeStartMs = 0;
+		std::optional<webrtc::ColorSpace> colorSpace;
+	};
 
 	bool shouldForceKeyFrame(const std::vector<webrtc::VideoFrameType> *pFrameTypes) const;
-	bool emitEncodedFrame(const webrtc::VideoFrame &frame,
+	bool emitPackets(const std::map<std::int64_t, QByteArray> &packets,
+		qint64 nEncodeFinishMs, qint64 nEncodeCostMs);
+	bool emitEncodedFrame(const KFrameMetadata &metadata,
 		const QByteArray &encodedData,
 		qint64 nEncodeStartMs,
 		qint64 nEncodeFinishMs);
@@ -46,6 +60,12 @@ private:
 	static bool isKeyFrame(const QByteArray &encodedData);
 
 	KH264Encoder m_encoder;
+	std::unique_ptr<KEncoderDiagnostics> m_spDiagnostics;
+	int m_nNegotiatedLevel;
+	int m_nEncodingLevel = 0;
+	bool m_bLevelError = false;
+	KH264SpsGuard m_spsGuard;
+	std::map<std::int64_t, KFrameMetadata> m_pendingFrames;
 	webrtc::EncodedImageCallback *m_pCallback = nullptr;
 	int m_nWidth = 0;
 	int m_nHeight = 0;

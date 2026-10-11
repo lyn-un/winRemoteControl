@@ -71,7 +71,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/measure-receiver-rende
 
 正式交付仍须复验原生窗口、真实双机视频、颜色、缩放和重连。个体机器的性能结果保存在本地，不把未实测的 FPS 或延迟当成已达成指标。
 
+### x264 实际码率回归
+
+`ctest --preset release -R '^wrc_webrtc_h264_encoder_rate_control_tests$' -V` 同时运行原有 200 次速率变更检查和真实编码用例。后者强制软件编码，固定 1280×720、30 FPS、种子 `0x6d2b79f5` 的移动灰度纹理，同一实例依次请求 1/6/1 Mbps，每阶段 300 帧，前 60 帧不计入测量；另运行固定 1 和固定 6 Mbps 的各 900 帧对照。全部输出逐帧软件解码，检查尺寸和帧数，并比较亮度 PSNR。它不捕获桌面、不注入输入，不要求硬件编码器。
+
+输出 `requestedKbps` 是请求值，`measuredKbps` 按实际编码字节和输入媒体时间计算，不按测试墙钟速度计算。高阶段须至少为首个低阶段的两倍，降回后不超过高阶段的 60%；与相应固定码率对照偏差不超过 30%，高阶段 PSNR 不低于两侧低阶段。覆盖默认码率、重复/零/负值、极小正值、VBV 整数上限及上下文/时间戳连续性。VBV 输出存在内容依赖，不要求精确填满目标。
+
+旧实现已在相同合成用例中复现升码率不响应，修复后通过；这是码率控制验证，不是双机模糊根因确认，也不是整个程序的画质或性能保证。个人数值和原始日志保留在根目录忽略的 `performance-baseline.md` 与 `build/diagnostics/x264-rate-control/`。
+
 ## Release 构建
+
+QSV/AMF/NVENC 依赖构建、AMF 补丁和部署状态见[厂商后端构建](ffmpeg-vendor-build.md)，当前仍在实施和验证中。
+[MF 实验记录](ffmpeg-mf-build.md)仅保留历史证据；旧 MF 补丁及 helper 已退出活动构建。
+`wrc_mf_bitrate_output_tests` 默认跳过，仅在 `WRC_RUN_MF_BITRATE_TEST=1` 时作为限制复现工具执行，
+其动态码率断言失败不能用来宣称新后端失败或通过，不再是 MF 动态更新交付门槛。不捕获桌面或注入输入。
 
 日常开发默认只构建和更新 `build/Release`（`release` preset），包括前端资源部署；只有明确要求生产构建或打包时才更新 `build/production/Release`，不为同步两份运行目录而重复构建。
 
@@ -128,6 +141,33 @@ git diff --check
 
 ## 双机手动检查
 
+### 厂商 H.264 显式测试
+
+默认 CTest 跳过 QSV/AMF 硬件测试。单独启用：
+
+```powershell
+$env:WRC_RUN_VENDOR_BITRATE_TEST = '1'
+ctest --preset release -R 'wrc_(qsv|amf)_bitrate_output_tests' -V
+Remove-Item Env:WRC_RUN_VENDOR_BITRATE_TEST
+```
+
+无匹配厂商 GPU 返回 77；发现 GPU 但初始化、编码或验收失败均算失败，不切换 x264。
+日志必须确认 `FFmpeg=` 构建标识，防止可执行文件旁的旧 DLL 优先于 PATH 被加载。
+测试使用固定种子 720p30 动画，同实例 1→6→1 Mbps 和两组固定对照，按 PTS 连续解码、
+验证帧数与 baseline profile，报告关键帧位置、码率目标偏差和亮度 PSNR。阈值见厂商接入规划。
+解码器启用 `AV_CODEC_EXPORT_DATA_VIDEO_ENC_PARAMS`，按“帧基础 QP + 宏块 delta”统计稳定段
+实际亮度 QP 的最小/最大/平均值和 QP=51 占比；没有 side data 时报告未知值，不把请求参数当作实测 QP。
+缺少匹配 GPU 时还会确认显式后端初始化失败且不回退，再将硬件验收标为跳过。
+WebRTC 纯逻辑测试另覆盖延迟出包、多帧输出的元数据对应以及释放后迟到输出拒绝。
+
+`build/cmake-release/tests/Release/wrc_vendor_bitrate_output_tests.exe h264_amf --resources`
+在同一显式环境开关下运行 1080p60 的 600 帧节拍测试和 20 次交替尺寸启动/释放观测。
+直接运行时把匹配的 FFmpeg `bin` 和 Qt `bin` 放入当前进程 PATH。它记录编码调用分位数、
+进程 CPU 时间、句柄和私有字节；CPU 包含合成帧生成，结果不是双机 FPS 或端到端延迟。
+资源观测成功仅表示编码/排空和 PTS 检查通过，不自动把资源增长判为可接受。
+
+### 手动流程
+
 1. 被控端开始监听，控制端通过发现或 IP 连接。
 2. 验证询问、接受、拒绝、取消和超时。
 3. 验证静态首帧、持续画面、画质切换和 H.264 软件回退环境。
@@ -140,3 +180,82 @@ git diff --check
 10. 占用 TCP 端口触发失败，释放或更换端口后再次监听，确认 WebRTC 初始化资源可干净重建。
 
 广播发现可能被校园网客户端隔离、Windows 防火墙或虚拟机 NAT 阻止。手动 IP 成功但发现失败通常是网络广播策略问题，不代表 TCP/WebRTC 链路故障。
+## H.264 level 验证
+
+默认 `wrc_webrtc_h264_encoder_rate_control_tests` 覆盖集中等级计算的分辨率/FPS、码率、
+CPB、DPB、宏块取整及整数边界；旧 3.1 与新 5.2 offer/answer 双向组合；不支持的 profile、
+封包模式与等级；实际软件编码→SPS 检查→解码；超限码流拒绝和等待关键帧恢复。
+真实软件测试包括 720p60、1080p60、4K60，各三帧，只证明功能，不衡量实时帧率。
+
+硬件等级检查独立于严格码率测试，仍须显式启用：
+
+```powershell
+$env:WRC_RUN_VENDOR_BITRATE_TEST = '1'
+ctest --preset release -R '^wrc_(amf|qsv)_level_tests$' -V
+```
+
+每后端验证 720p30/1080p30/1080p60 及问题场景 1152×720p30/1920×1200p30，各12帧、最终排空、实际 SPS 上限和连续解码。
+附加 `--startup-rates` 专项使用相同尺寸，每组120帧，初始300 kbps、提交一帧后降至235 kbps，再于第40/80帧切换至6000/235 kbps，覆盖低码率启动及后续预算增长；仍须通过 SPS 和完整解码检查。它不代替高细节严格码率测试，均要求显式设置 `WRC_RUN_VENDOR_BITRATE_TEST=1`。测试程序可附加 `--verbose` 输出 FFmpeg 参数查询/重配置诊断；此参数不属于主程序。
+无对应 GPU 跳过，有 GPU 的打开/配置/编码/检查失败记失败。默认不启用。
+通过 level 专项不能替代原 `1→6→1 Mbps` 严格门槛或双机兼容性复验。
+
+### 另一台机器无开发环境时的复验
+
+不必在目标机器安装 CMake、Qt SDK 或重新构建 FFmpeg。使用本次完整 Release 部署文件，
+额外将 `build/cmake-release/tests/Release/wrc_vendor_bitrate_output_tests.exe` 放到
+目标程序目录，与 `Qt6Core.dll` 和本次 FFmpeg DLL 同级。不要复制开发机的 `security`、
+可信设备、设置或日志，也不要覆盖目标机器原有身份数据；不要只更新单个 FFmpeg DLL。
+
+在目标程序目录打开 PowerShell，Intel GPU 机器执行：
+
+```powershell
+$env:WRC_RUN_VENDOR_BITRATE_TEST = '1'
+try {
+    & .\wrc_vendor_bitrate_output_tests.exe h264_qsv --levels *> qsv-level.log
+    $levelExit = $LASTEXITCODE
+    & .\wrc_vendor_bitrate_output_tests.exe h264_qsv *> qsv-bitrate.log
+    $bitrateExit = $LASTEXITCODE
+    "levelExit=$levelExit bitrateExit=$bitrateExit"
+} finally {
+    Remove-Item Env:WRC_RUN_VENDOR_BITRATE_TEST -ErrorAction SilentlyContinue
+}
+```
+
+AMD GPU 机器将参数换为 `h264_amf`，日志另取 `amf-*.log`；不要按 CPU 品牌判定 GPU。
+返回 0 表示该项通过，77 表示无匹配硬件而跳过，其他非零表示失败。
+记录 GPU/驱动、两项退出码和完整输出；加载器缺 DLL 也属于部署失败，不算硬件跳过。
+上述测试只生成合成画面，不采集桌面、不注入输入，也不建立远程连接。
+
+等级和码率测试分别通过后，才继续人工双机验证。双方更新本次程序，被控端显式使用
+`--diagnostic-video-encoder=h264_qsv` 或 `h264_amf`，以 `libx264` 作同设置对照。
+为采集 level/码率诊断使用 `--latency-trace`（不是 `--trace`，不附加输入追踪）；
+此开关会使用 BGRA 显示，因此所有对照均保持相同开关，不能借此评价 I420 GPU 渲染性能。
+窗口切换、滚动、视频和静止恢复分别标记时间，保存双方日志；再检查断开重连及分辨率变化。
+
+2026-10-11 冻结定位补充：新增发送端 `--session-trace` 编码快照，详见诊断文档。
+只定位卡住阶段时不必启用 latency trace。`wrc_webrtc_h264_encoder_rate_control_tests`
+增加独立线程在无编码进展时持续记录、累计计数、重复错误限频、Release 最终快照，
+以及真实码率超出等级预算的拒绝日志回归。
+
+2026-10-11 帧率反馈冻结修复：同一 libx264 适配实例依次接收 30/31/39/28/13/30 FPS，
+再覆盖零、负值、NaN、无穷、极大有限值和小数。保持实际输入时间戳约30 FPS，
+每阶段验证继续输出、连续解码及尺寸、PTS 不重置、码率请求更新和不主动要求关键帧。
+新增用例在修复前失败（`build/fps-feedback-old-test.log`），复现反馈越界后永久拒绝编码。
+该测试不代替 Intel QSV 双机桌面复验，也不证明实际送帧节奏没有瞬时波动。
+
+本次普通 Release 构建及诊断专项通过；完整 CTest 66项中58通过、8显式跳过、0失败，
+耗时92.00秒（`build/encoder-diagnostics-ctest.log`）。`git diff --check`通过。
+本机 `build/Release` 已更新。Intel远端MCP曾返回HTTP502；恢复Tailscale连接后，
+2026-10-11已将诊断主程序部署到 `D:\Qt_Projects\winRemoteCtrl\Release`，
+本地与远端SHA-256均为 `40420477A202110DA32BB6537A5A39AD0A1E82A94E057877FE53E4C794415481`。
+替换前程序保存在远端 `build/intel-diagnostics/winRemoteControl-before-diagnostics-20261011-152819.exe`，
+未覆盖DLL、设置、配对或日志；尚待用户启动会话复现冻结，未自动开启桌面采集。
+
+随后用户会话日志确认：SetRates 出现31 FPS 后锁存 levelError，回落到28/13 FPS仍不恢复；
+编码调用已返回且诊断 phase=idle，不是 FFmpeg 调用仍在阻塞。
+帧率反馈修复后普通 Release 全量构建通过，完整 CTest 58通过、8显式跳过、0失败，
+耗时93.69秒，其中编码速率回归13.85秒（`build/fps-feedback-ctest.log`）。
+本机和Intel远端上述运行目录主程序均已更新，SHA-256为
+`C8169CE0ABC5E224881BD56AE5C11E92542F6196F4A7790D201AE58BD8B4FF51`。
+远端旧程序备份为 `build/intel-diagnostics/winRemoteControl-before-fps-feedback-20261011.exe`。
+未重编/替换FFmpeg、未自动启动远控或输入；修复后QSV双机画面持续性仍待用户复验。

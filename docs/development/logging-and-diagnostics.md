@@ -142,9 +142,26 @@ JSON 汇总和两端原始资源日志写入 `build/diagnostics/reports`。第�
 
 ## 接收渲染诊断
 
+编码端 latency trace 的 `h264_encoder_init`、`h264_encode_end`、`h264_rate_target_changed` 将原 `bitrateKbps` 字段明确命名为 `requestedBitrateKbps`，表示请求目标而非实测输出；旧日志解析需兼容原字段。`bytes` 仅表示该次编码输出，不可单独当作码率。真实编码回归的 `measuredKbps` 另按媒体时间窗口累计计算。MF 记录目标变化不代表底层硬件已应用，不新增逐帧质量日志。
+
 开启 session trace 后，`video_prepare` 按会话/路径变化及每 300 帧记录请求模式、实际格式、回退原因、`processUs` 和 `callbackToPreparedMs`（后者包含处理队列等待，不是纯转换耗时）；`video_present` 按首帧、会话/路径变化及每 300 帧记录请求/实际模式、generation、`uploadBytes`、`uploadSubmitUs`、`drawPresentCallUs`。后二者为 CPU 提交/调用耗时，不是 GPU 完成时间或屏幕发光时间。`video_renderer_fallback` 记录 I420 资源失败的 HRESULT 与会话 generation，不记录画面内容。
 
 开启 latency trace 时强制 BGRA，并在延迟日志的 `video_renderer_selected` 中标记 `actual=bgra reason=latency_trace`，即使未开启 session trace 也能确认回退。GPU 正常路径的 `nConversionDoneAtMs` 保留未测量状态，不伪造 CPU 转换时间。隔离基准中的 `gpuUploadDraw*Us` 来自 GPU timestamp/disjoint 查询，延后四帧读取，未就绪/时钟失效样本和末尾未读样本单独计数。
+
+## MF 编码诊断
+
+`ffmpeg_build` 记录编码器与实际 FFmpeg 版本；旧后缀 `wrc-mf-patched-1` 表示历史实验 DLL，不能当作新版厂商依赖。
+`mf_encoder_selected` 保留实际 MFT 名称。活动源码已取消 `mf_rate_update` 专属桥接，MF 不再修改运行时目标；
+`h264_rate_update_unsupported` 每实例首次请求变化时记录请求与保留的初始值，明确不支持，不伪造已接受结果。
+新依赖使用 `wrc-vendor-<模式>-<指纹>`，AMF 库日志的 `apiAcceptedTargetBps` 仅表示 API 接受；
+实际输出必须用完整编码字节与媒体时间计算。运行目录切换和硬件验收状态见[厂商依赖构建](ffmpeg-vendor-build.md)。
+新增显式 `--diagnostic-video-encoder=h264_qsv|h264_amf`，不静默回退；NVENC 尚未开放选择，`auto` 策略不变。
+`h264_device_selected` 记录实际 D3D11 设备的名称、厂商/设备编号、驱动版本查询结果；
+当前通过 CPU NV12 上传，不承诺与采集适配器相同。AMF 选 AMD、QSV 选 Intel，同厂商多卡使用
+FFmpeg 首个可用设备，不在编码失败后偷偷换卡。
+AMF 更新成功日志按进程最多每秒一条采样，错误不采样；采样缺失不能解释为没有执行重配置。
+使用既有 latency trace，无需开启桌面输入 trace。
+原始 FFmpeg 日志保留默认输出行为，未开启 trace 时不新增追踪文件。
 
 ## 隐私约束
 
@@ -155,3 +172,34 @@ JSON 汇总和两端原始资源日志写入 `build/diagnostics/reports`。第�
 - TLS 与配对日志只记录验证方法、协议版本、密码套件、证书校验结果、短设备标识和失败原因；不记录私钥、TLS Exporter、六位配对码、完整证书、完整指纹或信令正文。
 - 高频事件应采样或聚合，避免诊断本身明显增加延迟。
 - Desktop input trace 不记录窗口标题、用户名、桌面文件名或进程完整路径；仅保留诊断所需的类名、文件名、句柄、PID 和坐标。
+## H.264 level 诊断
+
+沿用现有 latency trace，不增加命令行参数或独立日志文件：
+
+- `h264_level_config`：`negotiatedLevel`、`encodingLevel`、`peakBudgetBps`，记录初始化时的约束。
+- `h264_sps_validated`：首次或等级改变时记录 `actualLevel`；发送端同时记录协商/配置等级。
+- `h264_level_rejected`：实际 SPS 的 profile/level/结构/尺寸不符合约束；不输出原始视频内容。profile/结构拒绝包含 `profileLevelId`、解析是否成功、`frameMbsOnly` 和 `maxRefFrames`，用于区分 profile 不匹配与结构解析失败，不放宽检查规则。
+
+整数等级 31/42/52 分别代表 3.1/4.2/5.2。接收侧连续拒绝只记录首条，防止逐帧刷屏。
+初始化和运行时超出等级/FPS 预算也通过 Qt warning 报错；不把配置值当成实际码流证据。
+这些诊断不证明 HRD 合规、实际码率准确或双机实时性能。
+# H.264 冻结诊断补充（2026-10-11）
+
+仅开启 `--session-trace` 即可获得发送端 `encoder_watch` 和 `encoder_error`，不需要
+`--trace` 或 `--latency-trace`，不启用水印、不改变接收端 GPU/BGRA 路径。
+
+`encoder_watch` 由每个编码器诊断实例的独立线程约每秒输出，释放时另输出 `final=1`。
+`instance` 标识当前诊断对象（只在其生命周期内唯一）；`entered/finished/outputs/errors/noOutput`
+为累计计数，`submissions` 为进入 FFmpeg 编码封装的次数；两条记录的差值反映该时间段活动，不直接视为精准 FPS。
+`outputs` 仅计输出回调成功；`errors` 为 Encode 返回失败次数；`noOutput` 是送帧成功但未出包次数。
+`phase` 为 `initializing/idle/prepare/ffmpeg_encode/process_output/output_callback/closing`，
+`phaseMs` 使用单调时钟表示停留时长。`idle` 可能是正常暂停或 WebRTC 未送帧，不能单独认定故障；
+`ffmpeg_encode` 包含项目编码封装，不单凭此值断言驱动死锁。
+
+每秒快照还包含最近 SetRates 的请求 bit/s、浮点帧率、初始化帧率、编码 level。
+帧率反馈高于初始化值不再记录为致命错误，原始 requestedFps 仍可用于检查输入节奏波动。
+码率越界、初始化/编码/输出回调/SPS 错误会记录原因；首次错误唤醒日志线程，
+后续最多每秒一个错误事件，另保留最新错误和累计失败数。诊断队列只有一个待写错误槽。
+所有该诊断的磁盘写入均在独立线程，快照锁不跨越编码、输出回调或磁盘写入。
+关闭 trace 时不创建该线程；释放或重新初始化时回收，不修改原有错误标记、返回值或码率策略。
+不记录图像、键盘内容；已有 session-trace 的其他隐私约束仍适用。

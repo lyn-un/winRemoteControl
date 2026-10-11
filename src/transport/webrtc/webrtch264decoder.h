@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <QtCore/QString>
+#include "transport/webrtc/webrtch264format.h"
 
 #include <api/environment/environment.h>
 #include <api/video_codecs/sdp_video_format.h>
@@ -21,6 +22,7 @@ class KWebRtcH264Decoder : public webrtc::VideoDecoder
 {
 public:
 	KWebRtcH264Decoder();
+	explicit KWebRtcH264Decoder(int nNegotiatedLevel);
 	~KWebRtcH264Decoder() override;
 
 	bool Configure(const Settings &settings) override;
@@ -49,6 +51,8 @@ private:
 	int m_nSwsFormat = -1;
 	quint64 m_nDecodeInputCount = 0;
 	quint64 m_nDecodeOutputCount = 0;
+	KH264SpsGuard m_spsGuard;
+	bool m_bReportedSpsError = false;
 };
 
 class KWebRtcH264DecoderFactory : public webrtc::VideoDecoderFactory

@@ -18,6 +18,7 @@ class KH264Encoder
 {
 public:
 	using DataCallback = std::function<void(const QByteArray &)>;
+	using PacketCallback = std::function<void(const QByteArray &, std::int64_t)>;
 
 	explicit KH264Encoder(
 		KVideoEncoderPreference preference = AutoVideoEncoderPreference);
@@ -50,7 +51,10 @@ public:
 		bool bForceKeyFrame,
 		QString *pErrorMessage);
 	void setBitrateKbps(int nBitrateKbps);
+	bool setLevelLimit(int nLevel);
 	void setDataCallback(const DataCallback &callback);
+	void setPacketCallback(const PacketCallback &callback);
+	std::int64_t lastSubmittedPts() const;
 	bool close(QString *pErrorMessage);
 	bool isOpen() const;
 
@@ -61,9 +65,11 @@ public:
 	QString fallbackReason() const;
 
 private:
+	friend class KH264EncoderTestAccess;
 	bool openCodec(const char *pCodecName, bool bHardware, QString *pErrorMessage);
 	bool prepareFrame(qint64 nTimestampMs, bool bForceKeyFrame, QString *pErrorMessage);
 	bool writePacket(QString *pErrorMessage);
+	bool submitFrame(AVFrame *pFrame, QString *pErrorMessage);
 	void release();
 	static QString ffmpegErrorMessage(const QString &strPrefix, int nErrorCode);
 
@@ -72,6 +78,7 @@ private:
 	AVFrame *m_pFrame = nullptr;
 	AVPacket *m_pPacket = nullptr;
 	DataCallback m_dataCallback;
+	PacketCallback m_packetCallback;
 	int m_nEncodedWidth = 0;
 	int m_nEncodedHeight = 0;
 	int m_nFps = 10;
@@ -81,6 +88,8 @@ private:
 	QString m_strEncoderName;
 	QString m_strFallbackReason;
 	bool m_bOpen = false;
+	bool m_bReportedUnsupportedRate = false;
+	int m_nLevelLimit = 0;
 	KVideoEncoderPreference m_preference = AutoVideoEncoderPreference;
 };
 
