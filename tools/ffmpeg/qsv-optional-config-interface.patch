@@ -1,0 +1,18 @@
+--- a/libavcodec/qsvenc.c
++++ b/libavcodec/qsvenc.c
+@@ -1738,8 +1738,11 @@
+ #if HAVE_STRUCT_MFXCONFIGINTERFACE
+-    ret = MFXVideoCORE_GetHandle(q->session, MFX_HANDLE_CONFIG_INTERFACE, (mfxHDL *)(&iface));
+-    if (ret < 0)
+-        return ff_qsv_print_error(avctx, ret,
+-                                  "Error getting mfx config interface handle");
++    // The string configuration interface is optional when qsv_params is unset.
++    if (q->qsv_params) {
++        ret = MFXVideoCORE_GetHandle(q->session, MFX_HANDLE_CONFIG_INTERFACE, (mfxHDL *)(&iface));
++        if (ret < 0)
++            return ff_qsv_print_error(avctx, ret,
++                                      "Error getting mfx config interface handle");
++    }
+ 
+     while ((param = av_dict_get(q->qsv_params, "", param, AV_DICT_IGNORE_SUFFIX))) {
+         const char *param_key = param->key;

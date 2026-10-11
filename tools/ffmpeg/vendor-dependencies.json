@@ -1,0 +1,32 @@
+{
+  "ffmpeg": {
+    "version": "239f2c733d",
+    "url": "https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/239f2c733d",
+    "sha256": "11b3259addbc18cfb5cf4b198a746e8bd34828419f4284a3d00599abaadd0244"
+  },
+  "x264": {
+    "version": "c24e06c2e184345ceb33eb20a15d1024d9fd3497",
+    "url": "https://codeload.github.com/mirror/x264/tar.gz/c24e06c2e184345ceb33eb20a15d1024d9fd3497",
+    "sha256": "090d730e867fc63631782a1287974635d1237d0fa7c6fd1d09fd543620a56689"
+  },
+  "libvpl": {
+    "version": "2.13.0",
+    "url": "https://codeload.github.com/intel/libvpl/tar.gz/refs/tags/v2.13.0",
+    "sha256": "1c740e2b58f7853f56b618bdb7d4a7e5d37f8c1a9b30105a0b79ba80873e1cbd"
+  },
+  "amf": {
+    "version": "1.4.36",
+    "url": "https://codeload.github.com/GPUOpen-LibrariesAndSDKs/AMF/tar.gz/refs/tags/v1.4.36",
+    "sha256": "240a42033babc7920e5476506d5ac0c5628f67908833168e746406808d0ef146"
+  },
+  "nv-codec-headers": {
+    "version": "12.1.14.0",
+    "url": "https://codeload.github.com/FFmpeg/nv-codec-headers/tar.gz/refs/tags/n12.1.14.0",
+    "sha256": "2fefaa227d2a3b4170797796425a59d1dd2ed5fd231db9b4244468ba327acd0b"
+  },
+  "nasm": {
+    "version": "2.16.03",
+    "url": "https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/win64/nasm-2.16.03-win64.zip",
+    "sha256": "3ee4782247bcb874378d02f7eab4e294a84d3d15f3f6ee2de2f47a46aa7226e6"
+  }
+}

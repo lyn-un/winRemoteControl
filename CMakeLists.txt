@@ -63,6 +63,18 @@ set(WEBVIEW2_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/webview2"
 	CACHE PATH "WebView2 SDK root")
 set(FFMPEG_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/ffmpeg"
 	CACHE PATH "FFmpeg SDK root")
+set(WRC_FFMPEG_EXTRA_RUNTIME)
+if(EXISTS "${FFMPEG_ROOT}/bin/libwinpthread-1.dll")
+	list(APPEND WRC_FFMPEG_EXTRA_RUNTIME "${FFMPEG_ROOT}/bin/libwinpthread-1.dll")
+endif()
+if(EXISTS "${FFMPEG_ROOT}/bin/libvpl.dll")
+	list(APPEND WRC_FFMPEG_EXTRA_RUNTIME "${FFMPEG_ROOT}/bin/libvpl.dll")
+	foreach(runtime IN ITEMS msvcp140.dll vcruntime140.dll vcruntime140_1.dll)
+		if(EXISTS "${FFMPEG_ROOT}/bin/${runtime}")
+			list(APPEND WRC_FFMPEG_EXTRA_RUNTIME "${FFMPEG_ROOT}/bin/${runtime}")
+		endif()
+	endforeach()
+endif()
 set(WEBRTC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/webrtc/src"
 	CACHE PATH "WebRTC source root")
 set(WEBRTC_OUT "${WEBRTC_ROOT}/out/wrc_release_x64_msvcstl"
@@ -1467,6 +1479,7 @@ if(WRC_BUILD_TESTS)
 			"${FFMPEG_ROOT}/bin/avutil-60.dll"
 			"${FFMPEG_ROOT}/bin/swscale-9.dll"
 			"${FFMPEG_ROOT}/bin/swresample-6.dll"
+			${WRC_FFMPEG_EXTRA_RUNTIME}
 			"$<TARGET_FILE_DIR:wrc_video_pipeline_benchmark>"
 		COMMAND "$<TARGET_FILE:Qt6::windeployqt>"
 			--release
@@ -1813,6 +1826,7 @@ set(FFMPEG_DLLS
 	"${FFMPEG_ROOT}/bin/avutil-60.dll"
 	"${FFMPEG_ROOT}/bin/swscale-9.dll"
 	"${FFMPEG_ROOT}/bin/swresample-6.dll"
+	${WRC_FFMPEG_EXTRA_RUNTIME}
 )
 
 add_custom_command(TARGET winRemoteControl POST_BUILD
@@ -1836,6 +1850,17 @@ add_custom_command(TARGET winRemoteControl POST_BUILD
 		"$<TARGET_FILE:winRemoteControl>"
 	VERBATIM
 )
+
+if(EXISTS "${FFMPEG_ROOT}/wrc-build-manifest.txt" AND EXISTS "${FFMPEG_ROOT}/vendor-dependencies.json")
+	add_custom_command(TARGET winRemoteControl POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:winRemoteControl>/licenses/ffmpeg"
+		COMMAND ${CMAKE_COMMAND} -E copy_directory "${FFMPEG_ROOT}/licenses"
+			"$<TARGET_FILE_DIR:winRemoteControl>/licenses/ffmpeg"
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			"${FFMPEG_ROOT}/wrc-build-manifest.txt" "${FFMPEG_ROOT}/vendor-dependencies.json"
+			"$<TARGET_FILE_DIR:winRemoteControl>/licenses/ffmpeg"
+		VERBATIM)
+endif()
 
 if(WRC_VERIFY_PRODUCTION_RUNTIME)
 	add_custom_target(wrc_verify_production_runtime ALL

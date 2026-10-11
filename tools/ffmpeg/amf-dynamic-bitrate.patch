@@ -1,0 +1,162 @@
+diff --git a/libavcodec/amfenc.c b/libavcodec/amfenc.c
+index 329ce29..3ff460d 100644
+--- a/libavcodec/amfenc.c
++++ b/libavcodec/amfenc.c
+@@ -598,6 +598,81 @@ static AMF_RESULT amf_query_output(AVCodecContext *avctx, AMFBuffer **buffer)
+     return ret;
+ }
+ 
++static int amf_set_rate_property(AVCodecContext *avctx, const wchar_t *name, int64_t value)
++{
++    AMFEncoderContext *ctx = avctx->priv_data;
++    AMF_RESULT res;
++
++    AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, name, value);
++    if (res != AMF_OK) {
++        av_log(avctx, AV_LOG_ERROR,
++               "amf_rate_update property=%ls requested=%"PRId64" result=%d\n",
++               name, value, res);
++        ctx->bitrate_error = AVERROR_EXTERNAL;
++        return ctx->bitrate_error;
++    }
++    return 0;
++}
++
++int ff_amf_update_h264_bitrate(AVCodecContext *avctx, int initializing)
++{
++    AMFEncoderContext *ctx = avctx->priv_data;
++    int64_t target = avctx->bit_rate;
++    int64_t peak = avctx->rc_max_rate;
++    int64_t buffer = avctx->rc_buffer_size;
++    int peak_first;
++
++    if (avctx->codec_id != AV_CODEC_ID_H264)
++        return 0;
++    if (ctx->bitrate_error)
++        return ctx->bitrate_error;
++    // Paused senders must not erase the last usable configuration.
++    if (!initializing && target <= 0)
++        return 0;
++    if (!peak && ctx->rate_control_mode == AMF_VIDEO_ENCODER_RATE_CONTROL_METHOD_CBR)
++        peak = target;
++    if (target < 0 || peak < 0 || buffer < 0 || (peak && peak < target)) {
++        av_log(avctx, AV_LOG_ERROR, "amf_rate_update invalid target/peak/buffer\n");
++        return ctx->bitrate_error = AVERROR(EINVAL);
++    }
++    if (target == ctx->applied_bitrate && peak == ctx->applied_peak_bitrate &&
++        buffer == ctx->applied_buffer_size)
++        return 0;
++    if (!initializing && ctx->rate_control_mode == AMF_VIDEO_ENCODER_RATE_CONTROL_METHOD_CONSTANT_QP) {
++        av_log(avctx, AV_LOG_ERROR, "amf_rate_update unsupported in constant QP mode\n");
++        return ctx->bitrate_error = AVERROR(ENOSYS);
++    }
++    // Zero is an initialization default, not a live property reset.
++    if (!initializing && ((!peak && ctx->applied_peak_bitrate) ||
++                         (!buffer && ctx->applied_buffer_size))) {
++        av_log(avctx, AV_LOG_ERROR, "amf_rate_update cannot reset live peak/buffer to default\n");
++        return ctx->bitrate_error = AVERROR(EINVAL);
++    }
++    // Raise the ceiling before the target; lower the target before the ceiling.
++    peak_first = peak > ctx->applied_peak_bitrate;
++    if (peak_first && amf_set_rate_property(avctx, AMF_VIDEO_ENCODER_PEAK_BITRATE, peak) < 0)
++        return ctx->bitrate_error;
++    if (buffer && buffer != ctx->applied_buffer_size &&
++        amf_set_rate_property(avctx, AMF_VIDEO_ENCODER_VBV_BUFFER_SIZE, buffer) < 0)
++        return ctx->bitrate_error;
++    if (target && target != ctx->applied_bitrate &&
++        amf_set_rate_property(avctx, AMF_VIDEO_ENCODER_TARGET_BITRATE, target) < 0)
++        return ctx->bitrate_error;
++    if (!peak_first && peak && peak != ctx->applied_peak_bitrate &&
++        amf_set_rate_property(avctx, AMF_VIDEO_ENCODER_PEAK_BITRATE, peak) < 0)
++        return ctx->bitrate_error;
++
++    // SetProperty is not transactional. Any partial failure stops encoding.
++    ctx->applied_bitrate = target;
++    ctx->applied_peak_bitrate = peak;
++    ctx->applied_buffer_size = buffer;
++    av_log(avctx, AV_LOG_INFO,
++           "amf_rate_update apiAcceptedTargetBps=%"PRId64" peakBps=%"PRId64
++           " bufferBits=%"PRId64" initializing=%d result=%d\n",
++           target, peak, buffer, initializing, AMF_OK);
++    return 0;
++}
++
+ int ff_amf_receive_packet(AVCodecContext *avctx, AVPacket *avpkt)
+ {
+     AMFEncoderContext     *ctx = avctx->priv_data;
+@@ -649,6 +724,11 @@ int ff_amf_receive_packet(AVCodecContext *avctx, AVPacket *avpkt)
+                 }
+             }
+         } else { // submit frame
++            ret = ff_amf_update_h264_bitrate(avctx, 0);
++            if (ret < 0) {
++                av_frame_free(&frame);
++                return ret;
++            }
+             ret = amf_submit_frame_locked(avctx, frame, &surface);
+             if(ret < 0){
+                 av_frame_free(&frame);
+diff --git a/libavcodec/amfenc.h b/libavcodec/amfenc.h
+index ff5ce0b..631c6bc 100644
+--- a/libavcodec/amfenc.h
++++ b/libavcodec/amfenc.h
+@@ -63,6 +63,12 @@ typedef struct AMFEncoderContext {
+     int64_t             encoded_frame;
+     AVFifo             *output_list;
+ 
++    // Last complete H.264 rate-control update accepted by AMF.
++    int64_t             applied_bitrate;
++    int64_t             applied_peak_bitrate;
++    int64_t             applied_buffer_size;
++    int                 bitrate_error;
++
+     // common encoder options
+ 
+     // Static options, have to be set before Init() call
+@@ -148,6 +154,7 @@ extern const AVCodecHWConfigInternal *const ff_amfenc_hw_configs[];
+ * Common encoder initization function
+ */
+ int ff_amf_encode_init(AVCodecContext *avctx);
++int ff_amf_update_h264_bitrate(AVCodecContext *avctx, int initializing);
+ /**
+ * Common encoder termination function
+ */
+diff --git a/libavcodec/amfenc_h264.c b/libavcodec/amfenc_h264.c
+index c39a65a..8f255a9 100644
+--- a/libavcodec/amfenc_h264.c
++++ b/libavcodec/amfenc_h264.c
+@@ -333,10 +333,13 @@ static av_cold int amf_encode_init_h264(AVCodecContext *avctx)
+ 
+     // Dynamic parameters
+     AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_RATE_CONTROL_METHOD, ctx->rate_control_mode);
++    AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_EXTERNAL, "RateControlMethod failed with error %d\n", res);
++    ret = ff_amf_update_h264_bitrate(avctx, 1);
++    if (ret < 0)
++        return ret;
+ 
+     /// VBV Buffer
+     if (avctx->rc_buffer_size != 0) {
+-        AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_VBV_BUFFER_SIZE, avctx->rc_buffer_size);
+         if (avctx->rc_initial_buffer_occupancy != 0) {
+             int amf_buffer_fullness = avctx->rc_initial_buffer_occupancy * 64 / avctx->rc_buffer_size;
+             if (amf_buffer_fullness > 64)
+@@ -375,19 +378,7 @@ static av_cold int amf_encode_init_h264(AVCodecContext *avctx)
+     if (ctx->qp_b != -1)
+         AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_QP_B, ctx->qp_b);
+ 
+-    if (avctx->bit_rate) {
+-        AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_TARGET_BITRATE, avctx->bit_rate);
+-    }
+-
+-    if (ctx->rate_control_mode == AMF_VIDEO_ENCODER_RATE_CONTROL_METHOD_CBR) {
+-        if (avctx->bit_rate) {
+-            AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_PEAK_BITRATE, avctx->bit_rate);
+-        }
+-    }
+-
+-    if (avctx->rc_max_rate) {
+-        AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_PEAK_BITRATE, avctx->rc_max_rate);
+-    } else if (ctx->rate_control_mode == AMF_VIDEO_ENCODER_RATE_CONTROL_METHOD_PEAK_CONSTRAINED_VBR) {
++    if (!avctx->rc_max_rate && ctx->rate_control_mode == AMF_VIDEO_ENCODER_RATE_CONTROL_METHOD_PEAK_CONSTRAINED_VBR) {
+         av_log(ctx, AV_LOG_DEBUG, "rate control mode is vbr_peak but max_rate is not set, default max_rate will be applied.\n");
+     }

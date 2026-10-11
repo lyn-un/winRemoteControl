@@ -128,6 +128,8 @@ build\Release\winRemoteControl.exe --trace --log-dir "D:\wrc_logs"
 
 - [视频链路](docs/media/video-pipeline.md)
 - [帧率设置与高帧率方案](docs/plans/frame-rate-settings.md)
+- [FFmpeg 厂商 H.264 编码后端接入规划与验收缺口](docs/plans/vendor-h264-encoders.md)
+- [FFmpeg 厂商后端隔离构建与验收状态](docs/development/ffmpeg-vendor-build.md)
 - [远程终端](docs/features/remote-terminal.md)
 - [双向文件传输](docs/features/file-transfer.md)
 - [远程输入、键盘捕获与有序拖拽](docs/features/remote-input.md)
@@ -136,6 +138,7 @@ build\Release\winRemoteControl.exe --trace --log-dir "D:\wrc_logs"
 ### 开发与测试
 
 - [构建与测试](docs/development/build-and-test.md)
+- [MF 动态码率历史实验（已停止维护）](docs/development/ffmpeg-mf-build.md)
 - [命令级自动化 Driver](docs/automation-driver.md)
 - [隐私控制平台验证](docs/development/privacy-platform-validation.md)
 - [日志与诊断](docs/development/logging-and-diagnostics.md)
