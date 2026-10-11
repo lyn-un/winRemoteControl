@@ -2,6 +2,7 @@
 
 #include "common/latencytracelogger.h"
 #include "common/sessiontracelogger.h"
+#include "common/videostagediagnostics.h"
 #include "core/protocol/protocolconstraints.h"
 #include "core/protocol/webrtcsignalingmessage.h"
 #include "transport/webrtc/webrtcdatachannel.h"
@@ -140,6 +141,11 @@ namespace
 	class KWebRtcRawVideoSource : public webrtc::VideoSourceInterface<webrtc::VideoFrame>
 	{
 	public:
+		KWebRtcRawVideoSource()
+		{
+			if (KSessionTraceLogger::isEnabled())
+				m_upDiagnostics = std::make_unique<KVideoStageDiagnostics>(QStringLiteral("source_push_watch"));
+		}
 		void AddOrUpdateSink(webrtc::VideoSinkInterface<webrtc::VideoFrame> *pSink,
 			const webrtc::VideoSinkWants &wants) override
 		{
@@ -213,6 +219,9 @@ namespace
 						.arg(frame.nFrameIndex)
 						.arg(pushTimer.nsecsElapsed() / 1000));
 			}
+			if (m_upDiagnostics)
+				m_upDiagnostics->record(pushTimer.nsecsElapsed() / 1000,
+					!vecSinks.empty(), vecSinks.empty(), frame.nWidth, frame.nHeight);
 		}
 
 	private:
@@ -224,6 +233,7 @@ namespace
 
 		std::mutex m_mutex;
 		std::vector<SinkItem> m_vecSinks;
+		std::unique_ptr<KVideoStageDiagnostics> m_upDiagnostics;
 	};
 
 	class KSetDescriptionObserver : public webrtc::SetSessionDescriptionObserver
@@ -1345,6 +1355,22 @@ void KWebRtcPeer::handleStatsReport(webrtc::scoped_refptr<const webrtc::RTCStats
 			sample.nKeyFramesDecoded = *pInbound->key_frames_decoded;
 		if (pInbound->frames_dropped)
 			sample.nFramesDropped = *pInbound->frames_dropped;
+		if (KSessionTraceLogger::isEnabled())
+		{
+			// Preserve missing values instead of reporting unsupported counters as zero.
+			const auto value = [](const auto &field) -> QString
+			{
+				return field ? QString::number(*field) : QStringLiteral("unavailable");
+			};
+			KSessionTraceLogger::write(QStringLiteral("controller"), QStringLiteral("receive_watch"),
+				QStringLiteral("video_pipeline"), -1,
+				QStringLiteral("generation=%1 reportMs=%2 bytesReceived=%3 packetsReceived=%4 packetsLost=%5 framesReceived=%6 framesDecoded=%7 framesDropped=%8 width=%9 height=%10 fps=%11 qpSum=%12 totalDecodeSeconds=%13 nackCount=%14 pliCount=%15")
+					.arg(m_nGeneration.load()).arg(sample.nTimestampMs)
+					.arg(value(pInbound->bytes_received), value(pInbound->packets_received), value(pInbound->packets_lost))
+					.arg(value(pInbound->frames_received), value(pInbound->frames_decoded), value(pInbound->frames_dropped))
+					.arg(value(pInbound->frame_width), value(pInbound->frame_height), value(pInbound->frames_per_second))
+					.arg(value(pInbound->qp_sum), value(pInbound->total_decode_time), value(pInbound->nack_count), value(pInbound->pli_count)));
+		}
 		break;
 	}
 
@@ -1365,6 +1391,13 @@ void KWebRtcPeer::handleStatsReport(webrtc::scoped_refptr<const webrtc::RTCStats
 		m_spLatencyProbe->roundTripMs());
 	if (sample.bHasInboundVideo)
 	{
+		if (KSessionTraceLogger::isEnabled())
+			KSessionTraceLogger::write(QStringLiteral("controller"), QStringLiteral("receive_quality"),
+				QStringLiteral("video_pipeline"), -1,
+				QStringLiteral("generation=%1 reportMs=%2 receivedKbps=%3 fps=%4 packetLossRate=%5 rttMs=%6 jitterMs=%7 jitterBufferMs=%8 decodeMs=%9")
+					.arg(m_nGeneration.load()).arg(sample.nTimestampMs).arg(stats.nBitrateKbps).arg(stats.nFps)
+					.arg(stats.fPacketLossRate).arg(stats.nRttMs).arg(stats.nJitterMs)
+					.arg(stats.nJitterBufferDelayMs).arg(stats.nDecodeTimeMs));
 		KLatencyTraceLogger::write(QStringLiteral("controller"),
 			QStringLiteral("video_stats"),
 			QStringLiteral("jitterBufferMs=%1 jitterTargetEstimateMs=%2 decodeMs=%3 framesDecoded=%4 keyFramesDecoded=%5 dropped=%6")

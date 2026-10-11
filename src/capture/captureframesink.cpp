@@ -4,6 +4,7 @@
 #include "codec/h264encoder.h"
 #include "common/framewatermark.h"
 #include "common/latencytracelogger.h"
+#include "common/videostagediagnostics.h"
 #include "core/protocol/protocolconstraints.h"
 
 #include <QtCore/QDateTime>
@@ -39,7 +40,11 @@ KCaptureFrameSink::~KCaptureFrameSink()
 bool KCaptureFrameSink::initialize(QString *pErrorMessage)
 {
 	if (m_mode == RemoteVideoSinkMode)
+	{
+		if (KSessionTraceLogger::isEnabled())
+			m_upConversionDiagnostics = std::make_unique<KVideoStageDiagnostics>(QStringLiteral("conversion_watch"));
 		return true;
+	}
 
 	m_upEncoder = std::make_unique<KH264Encoder>();
 	m_upDecoder = std::make_unique<KH264Decoder>();
@@ -86,6 +91,7 @@ void KCaptureFrameSink::handleCaptureTimeout()
 
 void KCaptureFrameSink::shutdown()
 {
+	m_upConversionDiagnostics.reset();
 	if (m_bCodecOpen && m_upEncoder != nullptr)
 		m_upEncoder->close(nullptr);
 	if (m_upDecoder != nullptr)
@@ -158,6 +164,10 @@ bool KCaptureFrameSink::processRemoteFrame(KCaptureFrame &frame,
 	const FrameConversionResult conversionResult = convertBgraToI420(frame,
 		config, nLastInputSeq, nLastInputAgeMs, &videoFrame);
 	const qint64 nConversionUs = conversionTimer.nsecsElapsed() / 1000;
+	if (m_upConversionDiagnostics)
+		m_upConversionDiagnostics->record(nConversionUs,
+			conversionResult == ConvertedFrameConversionResult,
+			conversionResult == DroppedFrameConversionResult, videoFrame.nWidth, videoFrame.nHeight);
 	if (conversionResult == DroppedFrameConversionResult)
 	{
 		if (m_nFramePoolDrops == 1

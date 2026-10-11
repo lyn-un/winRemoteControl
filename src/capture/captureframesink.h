@@ -14,6 +14,7 @@
 
 class KH264Decoder;
 class KH264Encoder;
+class KVideoStageDiagnostics;
 struct SwsContext;
 
 class KCaptureFrameSink : public QObject, public IKCaptureFrameSink
@@ -68,6 +69,7 @@ private:
 	static KStreamConfig normalizeStreamConfig(const KStreamConfig &config);
 
 	SinkMode m_mode = LocalPreviewSinkMode;
+	std::unique_ptr<KVideoStageDiagnostics> m_upConversionDiagnostics;
 	mutable std::mutex m_configMutex;
 	mutable std::mutex m_inputTraceMutex;
 	KStreamConfig m_streamConfig;

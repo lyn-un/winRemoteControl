@@ -2,6 +2,7 @@
 
 #include "capture/dxgidesktopduplicator.h"
 #include "common/latencytracelogger.h"
+#include "common/videostagediagnostics.h"
 #include "core/protocol/protocolconstraints.h"
 
 #include <QtCore/QElapsedTimer>
@@ -77,6 +78,13 @@ void KCaptureWorker::startWork()
 	}
 
 	KCaptureFrame frame;
+	std::unique_ptr<KVideoStageDiagnostics> upCaptureDiagnostics;
+	std::unique_ptr<KVideoStageDiagnostics> upProcessDiagnostics;
+	if (m_bRemoteVideo && KSessionTraceLogger::isEnabled())
+	{
+		upCaptureDiagnostics = std::make_unique<KVideoStageDiagnostics>(QStringLiteral("capture_watch"));
+		upProcessDiagnostics = std::make_unique<KVideoStageDiagnostics>(QStringLiteral("capture_sink_watch"));
+	}
 	while (m_bRunning)
 	{
 		QElapsedTimer frameTimer;
@@ -86,6 +94,10 @@ void KCaptureWorker::startWork()
 		strError.clear();
 		const IKCaptureSource::CaptureResult result = m_upSource->captureNextFrame(&frame, &strError);
 		const qint64 nCaptureUs = captureTimer.nsecsElapsed() / 1000;
+		if (upCaptureDiagnostics)
+			upCaptureDiagnostics->record(nCaptureUs,
+				result != IKCaptureSource::TimeoutCaptureResult && result != IKCaptureSource::ErrorCaptureResult,
+				result == IKCaptureSource::TimeoutCaptureResult, frame.nWidth, frame.nHeight);
 		if (result == IKCaptureSource::TimeoutCaptureResult)
 		{
 			m_upSink->handleCaptureTimeout();
@@ -100,7 +112,11 @@ void KCaptureWorker::startWork()
 		}
 		QElapsedTimer processTimer;
 		processTimer.start();
-		if (!m_upSink->processFrame(frame, &strError))
+		const bool bProcessed = m_upSink->processFrame(frame, &strError);
+		if (upProcessDiagnostics)
+			upProcessDiagnostics->record(processTimer.nsecsElapsed() / 1000,
+				bProcessed, false, frame.nWidth, frame.nHeight);
+		if (!bProcessed)
 		{
 			m_bRunning = false;
 			emit captureError(strError.isEmpty() ? QStringLiteral("Capture frame processing failed") : strError);

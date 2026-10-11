@@ -1,5 +1,20 @@
 # 构建与测试
 
+## 视频流水线汇总日志回归（2026-10-11）
+
+新增诊断用例复用 `wrc_webrtc_h264_encoder_rate_control_tests`：验证没有新帧时仍输出
+周期快照、最终计数、成功/跳过/错误分离、最近有效尺寸、累计/最大耗时，以及仅统计
+成功交付给 WebRTC 的编码字节和关键帧。该用例不捕获桌面、不注入输入。
+普通 Release 全量构建通过；完整 CTest 58 通过、8 显式跳过、0 失败，99.65 秒，
+编码/诊断专项 17.45 秒。记录位于 `build/video-pipeline-diagnostics-build.log` 和
+`build/video-pipeline-diagnostics-ctest.log`。硬件和真实输入测试未启用；双机新增日志仍待复测。
+
+本机 `build/Release` 与 Intel 端 `D:\Qt_Projects\winRemoteCtrl\Release` 的主程序已同步，
+SHA-256：`BB2CE0EAB357F73D49BB12918508B7024925A493E1EE0A6D7526FF686EA0FB2B`。
+远端旧主程序保存在源码目录下
+`build/intel-diagnostics/winRemoteControl-before-pipeline-diagnostics-20261011.exe`；
+未替换依赖 DLL、设置或日志，未自动启动远控会话。
+
 ## 前置条件
 
 - Windows 10/11 x64。

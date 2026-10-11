@@ -1,5 +1,43 @@
 # 日志与诊断
 
+## 视频低帧率和模糊诊断（无需 latency trace）
+
+两端使用 `--session-trace --resource-trace`，不要使用 `--trace`；若环境中曾开启
+`WRC_LATENCY_TRACE`，先设为 `0`。这样不会因本次诊断切换到 BGRA 渲染。
+以下新记录不保存画面、键鼠事件或桌面内容；现有 session 协议日志的行为不变。
+
+发送端的 `capture_watch`、`capture_sink_watch`、`conversion_watch`、
+`source_push_watch` 各由一个仅持有计数快照的诊断线程约每秒输出，销毁时输出 `final=1`。
+没有帧时仍有心跳；未开启 session trace 时不创建这些线程。
+`instance` 区分当前进程中的实例，`elapsedMs` 为实例单调时钟时长；所有计数、
+`totalUs` 和 `maxUs` 是实例累计值，帧率用相邻 `success` 差除以时长差计算。
+耗时为完成调用的墙钟耗时（不是线程 CPU 时间或 GPU 执行时间）；尚未返回的调用不计入。
+尺寸是最近成功帧的尺寸，不是预览图尺寸。
+
+| 阶段 | 计数含义 |
+| --- | --- |
+| `capture_watch` | 采集调用完成数；`skipped` 是无新桌面帧的超时，不等于丢帧 |
+| `capture_sink_watch` | 采集 sink 处理完成数与总耗时；成功可能包含转换池丢帧 |
+| `conversion_watch` | BGRA→I420 转换；`skipped` 是缓冲池耗尽丢帧，尺寸为转换输出 |
+| `source_push_watch` | 有效 I420 送入 WebRTC sink 的调用；`skipped` 是无 sink；成功不保证编码器收到该帧 |
+
+启动阶段可能重发上一帧，因此 source 计数可能稍高于转换成功数。WebRTC 内部还可能丢帧；
+只能结合 `encoder_watch.entered` 定位区段，不把计数差直接归因于网络。
+`encoder_watch` 新增累计 `outputBytes`、`keyFrames`、`encodeTotalUs/encodeMaxUs` 和
+`ffmpegTotalUs/ffmpegMaxUs`。`measuredOutputBps` 按本地单调时间 `windowUs` 和
+成功交给 WebRTC 的 H.264 字节差计算，不包含 RTP/重传开销，不是请求值或网络吞吐量。
+总 Encode 耗时包含 FFmpeg 和回调耗时；FFmpeg 耗时仍是主机调用耗时，不是硬件内部耗时。
+
+控制端每秒的 `receive_watch` 保存 WebRTC 累计接收字节、包数、丢包、接收/解码/丢弃帧数、
+分辨率、FPS、QP 总和、解码时长及 NACK/PLI 次数，缺失字段写 `unavailable`。
+`receive_quality` 复用现有统计器的区间码率、丢包比例（0～1）、RTT、抖动和解码均值；
+首个样本的区间码率为 0，原始字段缺失时派生值不能当成有效测量。
+跨机器日志时钟未同步，不能直接相减得到端到端延迟。
+
+复测建议：两端重启并使用新的日志目录，先保持桌面静止，再切换/拖动窗口，分别测试
+720p 与原画并记下操作时间。结合源尺寸、各阶段帧数、编码实际输出和接收数据定位；
+本次仅新增诊断，不改变画质、码率控制、限帧或壁纸预览。
+
 ## 启动参数
 
 日志默认关闭，推荐通过命令行开启：
