@@ -334,10 +334,10 @@ NVENC 的“可枚举”仅为构建检查。其实际编码、动态码率和�
 
 ## 八、暂缓问题：HDR 采集性能与 SDR 转换质量（2026-10-11）
 
-- 状态：用户明确要求先记录、停止本轮优化，回到厂商编码器主线。未实现查表、GPU 转色或新色调映射方案。
+- 历史状态（2026-10-11）：用户要求先记录并回到厂商编码器主线。后续用户于 2026-10-12 授权独立 HDR 性能优化，现已实现 GPU 转色并运行基础双机 A/B，见 [HDR GPU 转色方案](hdr-gpu-capture.md)；色调映射质量仍未修复。
 - 现象：AMD 被控端开启 HDR 时采集明显低帧率，关闭后流畅度显著改善；开关对照和 WPR 数据保留在本机忽略的 `performance-baseline.md` 及 `build/hdr-profile`。
 - 性能证据：WPR CPU 采样经本机系统符号解析确认 `ucrtbase.dll!powf` 是远控进程最大已识别热点。自有代码显式幂运算位于 `src/capture/dxgidesktopduplicator.cpp` 的 `LinearToSrgb()`，HDR FP16 路径对每像素三个通道分别调用。尚无匹配的主程序 PDB 将全部调用栈映射到源码，不把全部采集墙钟耗时等同于 powf 时间。
-- 当前处理：DXGI FP16 纹理读回 CPU；半精度转 float；除以固定 `m_fSdrWhiteScale=2.5f`；裁剪到0～1；按 sRGB 曲线转换并量化到8位 BGRA，再进入 I420/H.264 SDR 链路。
+- 原处理（现由 `--hdr-conversion=cpu` 保留）：DXGI FP16 纹理读回 CPU；半精度转 float；除以固定 `m_fSdrWhiteScale=2.5f`；裁剪到0～1；按 sRGB 曲线转换并量化到8位 BGRA，再进入 I420/H.264 SDR 链路。当前默认 auto 在 GPU 上执行同等映射，只读回 BGRA8。
 - 质量限制：sRGB 曲线是标准公式，但固定白电平加裁剪不是完整、已验证的 HDR→SDR 色调映射；可能丢失高光，不能称为等价 SDR。当前未动态读取 Windows SDR 白电平。
 - 后续范围：先比较成熟的实时 HDR→SDR 实现与 D3D11 接入成本，再选择优化路径；分别验证颜色/高光、白电平、CPU/GPU耗时及资源生命周期。若仅优化性能，应与原转换输出对照，不隐式改变色彩策略。
 - 本轮验收可在明确记录 HDR 关闭的条件下继续；HDR 开启性能及 HDR 画质仍列为已知限制，不因此自动放宽 AMF 码率门槛或宣布整体画质通过。
