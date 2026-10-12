@@ -19,7 +19,7 @@ class KCaptureService : public KCaptureController
 	Q_OBJECT
 
 public:
-	explicit KCaptureService(QObject *pParent = nullptr);
+	explicit KCaptureService(QObject *pParent = nullptr, KHdrConversionMode hdrMode = AutoHdrConversionMode);
 	~KCaptureService() override;
 
 	KCaptureService(const KCaptureService &) = delete;
@@ -46,6 +46,7 @@ private:
 	void clearPendingWebRtcFrame();
 
 	QThread *m_pCaptureThread = nullptr;
+	KHdrConversionMode m_hdrMode = AutoHdrConversionMode;
 	KCaptureWorker *m_pCaptureWorker = nullptr;
 	KStreamConfig m_streamConfig;
 	quint64 m_nLastInputSeq = 0;

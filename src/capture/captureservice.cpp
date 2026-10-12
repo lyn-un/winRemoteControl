@@ -14,8 +14,9 @@ namespace
 	constexpr unsigned long kDestructorShutdownTimeoutMs = 2000;
 }
 
-KCaptureService::KCaptureService(QObject *pParent)
+KCaptureService::KCaptureService(QObject *pParent, KHdrConversionMode hdrMode)
 	: KCaptureController(pParent)
+	, m_hdrMode(hdrMode)
 {
 }
 
@@ -72,7 +73,7 @@ void KCaptureService::startCaptureWithMode(KCaptureWorker::WorkMode mode)
 	clearPendingWebRtcFrame();
 	m_bAcceptWebRtcFrames = (mode == KCaptureWorker::RemoteVideoWorkMode);
 	m_pCaptureThread = new QThread(this);
-	m_pCaptureWorker = new KCaptureWorker(mode);
+	m_pCaptureWorker = new KCaptureWorker(mode, nullptr, m_hdrMode);
 	m_pCaptureWorker->setStreamConfig(m_streamConfig);
 	m_pCaptureWorker->setInputTraceState(m_nLastInputSeq, m_nLastInputInjectedMs);
 	m_pCaptureWorker->moveToThread(m_pCaptureThread);

@@ -1,0 +1,10 @@
+#ifndef _WINREMOTECONTROL_HDRCONVERSIONMODE_H_
+#define _WINREMOTECONTROL_HDRCONVERSIONMODE_H_
+
+enum KHdrConversionMode
+{
+	AutoHdrConversionMode,
+	CpuHdrConversionMode
+};
+
+#endif // _WINREMOTECONTROL_HDRCONVERSIONMODE_H_

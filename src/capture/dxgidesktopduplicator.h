@@ -2,6 +2,8 @@
 #define _WINREMOTECONTROL_DXGIDESKTOPDUPLICATOR_H_
 
 #include "core/media/capturesource.h"
+#include "core/media/hdrconversionmode.h"
+#include "capture/hdrgpubgraconverter.h"
 
 #include <QtCore/QString>
 
@@ -16,7 +18,7 @@
 class KDxgiDesktopDuplicator : public IKCaptureSource
 {
 public:
-	KDxgiDesktopDuplicator();
+	explicit KDxgiDesktopDuplicator(KHdrConversionMode mode = AutoHdrConversionMode);
 	~KDxgiDesktopDuplicator();
 
 	KDxgiDesktopDuplicator(const KDxgiDesktopDuplicator &) = delete;
@@ -27,6 +29,7 @@ public:
 	CaptureResult captureNextFrame(KCaptureFrame *pFrame, QString *pErrorMessage) override;
 
 private:
+	friend struct KHdrCaptureTestAccess;
 	bool detectHdrOutput(const Microsoft::WRL::ComPtr<IDXGIOutput> &spOutput, QString *pErrorMessage);
 	bool createDuplication(const Microsoft::WRL::ComPtr<IDXGIOutput> &spOutput, QString *pErrorMessage);
 	bool createStagingTexture(const D3D11_TEXTURE2D_DESC &sourceDesc, QString *pErrorMessage);
@@ -49,6 +52,12 @@ private:
 	DXGI_FORMAT m_captureFormat = DXGI_FORMAT_UNKNOWN;
 	RECT m_outputRect = {};
 	float m_fSdrWhiteScale = 2.5f;
+	KHdrGpuBgraConverter m_hdrConverter;
+	KHdrConversionMode m_hdrMode = AutoHdrConversionMode;
+	bool m_bHdrGpuFailed = false;
+	DXGI_FORMAT m_lastLoggedFormat = DXGI_FORMAT_UNKNOWN;
+	UINT m_nLastLoggedWidth = 0;
+	UINT m_nLastLoggedHeight = 0;
 	DXGI_OUTDUPL_POINTER_POSITION m_pointerPosition = {};
 	DXGI_OUTDUPL_POINTER_SHAPE_INFO m_pointerShapeInfo = {};
 	std::vector<unsigned char> m_vecPointerShapeBuffer;

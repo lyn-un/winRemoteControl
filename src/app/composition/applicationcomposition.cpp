@@ -135,9 +135,9 @@ namespace
 }
 
 KApplicationComposition::KApplicationComposition(KVideoEncoderPreference encoderPreference,
-	QObject *pParent)
+	QObject *pParent, KHdrConversionMode hdrMode)
 	: QObject(pParent)
-	, m_pCaptureService(new KCaptureService(this))
+	, m_pCaptureService(new KCaptureService(this, hdrMode))
 	, m_pApplicationCommandRegistry(new KApplicationCommandRegistry(this))
 	, m_pSessionService(new KSessionCoordinator(
 		std::make_unique<KWindowsDeviceInfoProvider>(),

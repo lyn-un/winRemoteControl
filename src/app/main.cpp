@@ -41,7 +41,19 @@ int main(int nArgc, char *pArgv[])
 		QStringLiteral("Force auto, h264_mf, libx264, h264_qsv, or h264_amf. NVENC is not integrated."),
 		QStringLiteral("encoder"), QStringLiteral("auto")));
 	KTraceOptionsParser::addOptions(&parser);
+	parser.addOption(QCommandLineOption(QStringLiteral("hdr-conversion"),
+		QStringLiteral("HDR capture conversion: auto (GPU with CPU fallback) or cpu."),
+		QStringLiteral("mode"), QStringLiteral("auto")));
 	parser.process(app);
+	const QString strHdrMode = parser.value(QStringLiteral("hdr-conversion"));
+	if (strHdrMode != QStringLiteral("auto") && strHdrMode != QStringLiteral("cpu"))
+	{
+		qCritical() << "Invalid hdr-conversion. Expected auto or cpu.";
+		::CoUninitialize();
+		return 2;
+	}
+	const KHdrConversionMode hdrMode = strHdrMode == QStringLiteral("cpu")
+		? CpuHdrConversionMode : AutoHdrConversionMode;
 	QString strPathError;
 	if (!KApplicationPaths::configureDataDirectory(
 		parser.value(QStringLiteral("data-dir")), &strPathError))
@@ -104,7 +116,7 @@ int main(int nArgc, char *pArgv[])
 		return 2;
 	}
 
-	KMainWindow mainWindow(encoderPreference);
+	KMainWindow mainWindow(encoderPreference, nullptr, hdrMode);
 	mainWindow.resize(1280, 760);
 	mainWindow.show();
 

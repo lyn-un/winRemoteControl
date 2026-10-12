@@ -274,3 +274,62 @@ AMD GPU 机器将参数换为 `h264_amf`，日志另取 `amf-*.log`；不要按 
 `C8169CE0ABC5E224881BD56AE5C11E92542F6196F4A7790D201AE58BD8B4FF51`。
 远端旧程序备份为 `build/intel-diagnostics/winRemoteControl-before-fps-feedback-20261011.exe`。
 未重编/替换FFmpeg、未自动启动远控或输入；修复后QSV双机画面持续性仍待用户复验。
+
+## HDR GPU 转色测试
+
+`wrc_hdr_gpu_bgra_tests` 在硬件 D3D11 上验证离屏转换，`wrc_hdr_gpu_bgra_warp_tests` 使用 WARP。
+两者不采集桌面、不注入输入；覆盖全部 FP16 位模式、CPU 原公式与独立参考对照、最大 1 色阶
+误差、Alpha、奇数/窄尺寸、输入 stride、白电平变更、同尺寸资源复用及 20 次 reset。
+安装 Debug Layer 时检查 warning/error；设备创建不可用返回 77，WARP 通过不代表硬件性能通过。
+
+补充用例直接向生产采集读回函数提供合成纹理，不调用桌面 duplication 初始化：检查
+auto/cpu、SDR 绕过、低功能级设备导致的真实着色器初始化失败与锁存 CPU 回退、停止清理，
+以及彩色/单色指针从干净桌面缓存重绘。跨设备重建、非法参数后的恢复和每轮 reset 后
+设备 COM 引用数回归也纳入检查；COM 引用计数不等同于完整 GPU 显存泄漏证明。
+
+`wrc_hdr_capture_fault_tests` 单独编译采集源文件，只有该目标定义
+`WRC_HDR_FAULT_TESTS`，正式采集库不包含注入分支。分别模拟 shader、SRV、RTV
+创建失败和设备移除，验证一次性回退、设备失效不回退以及新实例恢复 GPU。
+`wrc_hdr_resource_cycle_tests` 在硬件上执行 120 次 1080p/1440p 交替创建/读回/释放，
+每 10 次输出进程私有内存和可用时的 DXGI 本地显存用量；以第 20 次为预热基准，
+后续私有内存增长不得超过 32 MiB、本地显存增长不得超过 64 MiB，允许驱动缓存。
+它只证明该循环中没有超限增长，不证明任意长会话、其他驱动或真实桌面生命周期无泄漏。
+
+```powershell
+ctest --preset release -R '^wrc_hdr_' -V
+```
+
+`wrc_hdr_capture_benchmark` 是显式运行的合成基准，不属于默认 CTest。程序参数依次为
+`cpu|gpu width height fps repetition`，固定预热 5 秒、采样约 30 秒。运行前将 Qt bin 加入 PATH。
+输出 JSON 包含实际设备/驱动、帧数、错过截止时间、CPU 时间、帧耗时分位数、Map 等待、
+CPU 转色/行复制时间和延迟读取的 GPU timestamp 数据。末尾 8 个 query 不等待回收，另列不可用结果。
+CPU 路径包含真实旧标量转换和 FP16 staging；GPU 路径包含输入复制、离屏绘制和 BGRA8 读回。
+以每帧 CPU 时间而不是不同帧数下的 CPU 总时间比较收益。
+
+```powershell
+.\build\cmake-release\Release\wrc_hdr_capture_benchmark.exe cpu 2560 1440 30 1
+.\build\cmake-release\Release\wrc_hdr_capture_benchmark.exe gpu 2560 1440 30 1
+```
+
+完整矩阵为 1080p/1440p、30/60 FPS、CPU/GPU、各 3 次，串行运行，避免其他编译或测试干扰。
+上述测试不证明真实 HDR 桌面帧率、双机画质或输入延迟；这些必须经用户启动/接受的会话验证。
+
+2026-10-12 经用户授权，另以现有自动化驱动运行真实 HDR 双机基础 A/B：独立配置，
+正常配对并仅授予 viewScreen，AMD 被控端、Intel 控制端，libx264，2560×1440，
+请求 30 FPS/8 Mbps；日志确认 auto 实走 GPU、cpu 实走旧转换，接收持续增长且停止后稳定。
+没有注入输入或切换系统 HDR。固定内容场景、主观画质、SDR 真机回归仍未覆盖。
+复用测试配置重启出现 trust_store_tampered（BCryptVerifySignature 0xc000a000），
+拒绝发生在采集前；保留现场且未修改安全校验，不把基础 A/B 通过描述为可信重连通过。
+另用可见合成运动窗口完成两路径重复测量及同进程断开重连；不注入键鼠，动画自动关闭。
+静止桌面可能只有首帧/保护期帧，测试帧增长前必须提供明确的画面变化，
+不能把无变化时的 DXGI 超时算成转色耗时回归或 GPU 卡死。
+
+随后用户关闭 AMD 主显示器 HDR，完成 SDR auto/cpu 两轮及同进程重连回归：
+实际 BGRA8 format=87、actual=sdr，两种参数均绕过 HDR 转换器；1440p 收帧持续，
+停止后帧数稳定，最终 Idle。日志中的主动断开 send_failed/session_channel_closed
+另保留，不将测试通过表述为全程无错误日志。
+
+用户重新开启 HDR 后完成观察会话：针对切换窗口、滚动、视频及卡住/异常颜色/残影的
+检查请求，用户确认没有这些异常，帧数正常。该反馈是人工验收依据，不是客观色彩测量。
+观察期间控制端发送画质配置变化及 stopStreaming；采样脚本随后因不再全程 Streaming
+而断言失败，保留失败记录，不把人工观察会话称为三分钟自动化全通过。

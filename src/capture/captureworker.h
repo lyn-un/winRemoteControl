@@ -3,6 +3,7 @@
 
 #include "capture/captureframesink.h"
 #include "core/media/capturesource.h"
+#include "core/media/hdrconversionmode.h"
 
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QObject>
@@ -23,7 +24,8 @@ public:
 		RemoteVideoWorkMode
 	};
 
-	explicit KCaptureWorker(WorkMode mode = LocalPreviewWorkMode, QObject *pParent = nullptr);
+	explicit KCaptureWorker(WorkMode mode = LocalPreviewWorkMode, QObject *pParent = nullptr,
+		KHdrConversionMode hdrMode = AutoHdrConversionMode);
 	KCaptureWorker(std::unique_ptr<IKCaptureSource> upSource,
 		std::unique_ptr<IKCaptureFrameSink> upSink,
 		QObject *pParent = nullptr);

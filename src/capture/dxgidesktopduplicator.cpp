@@ -1,6 +1,8 @@
 #include "capture/dxgidesktopduplicator.h"
+#include "capture/mappedframeconversion.h"
 
 #include "common/latencytracelogger.h"
+#include "common/sessiontracelogger.h"
 
 #include <QtCore/QDateTime>
 #include <QtCore/QDebug>
@@ -63,6 +65,8 @@ float HalfToFloat(unsigned short nValue)
 
 float LinearToSrgb(float fValue)
 {
+	if (std::isnan(fValue))
+		return 0.0f;
 	fValue = std::clamp(fValue, 0.0f, 1.0f);
 	if (fValue <= 0.0031308f)
 		return fValue * 12.92f;
@@ -185,7 +189,14 @@ bool CopyMappedFrameToBgra(const D3D11_TEXTURE2D_DESC &sourceDesc,
 }
 }
 
-KDxgiDesktopDuplicator::KDxgiDesktopDuplicator()
+bool CopyMappedCaptureFrameToBgra(const D3D11_TEXTURE2D_DESC &sourceDesc,
+	const D3D11_MAPPED_SUBRESOURCE &mappedResource, KCaptureFrame *pFrame, float fSdrWhiteScale)
+{
+	return CopyMappedFrameToBgra(sourceDesc, mappedResource, pFrame, fSdrWhiteScale);
+}
+
+KDxgiDesktopDuplicator::KDxgiDesktopDuplicator(KHdrConversionMode mode)
+	: m_hdrMode(mode)
 {
 }
 
@@ -213,7 +224,8 @@ bool KDxgiDesktopDuplicator::initialize(QString *pErrorMessage)
 	};
 	D3D_FEATURE_LEVEL selectedFeatureLevel = D3D_FEATURE_LEVEL_11_0;
 
-	UINT nFlags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_SINGLETHREADED;
+	// The shared device survives capture workers and may be used from new threads.
+	UINT nFlags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
 #if defined(_DEBUG)
 	nFlags |= D3D11_CREATE_DEVICE_DEBUG;
 #endif
@@ -283,10 +295,15 @@ void KDxgiDesktopDuplicator::shutdown()
 {
 	if (m_spContext != nullptr)
 	{
-		m_spContext->ClearState();
+		std::lock_guard<std::mutex> guard(g_sharedD3DDevice.mutex);
 		m_spContext->Flush();
 	}
 
+	m_hdrConverter.reset();
+	m_bHdrGpuFailed = false;
+	m_lastLoggedFormat = DXGI_FORMAT_UNKNOWN;
+	m_nLastLoggedWidth = 0;
+	m_nLastLoggedHeight = 0;
 	m_spStagingTexture.Reset();
 	m_spLastDesktopTexture.Reset();
 	m_spDuplication.Reset();
@@ -484,7 +501,10 @@ IKCaptureSource::CaptureResult KDxgiDesktopDuplicator::captureNextFrame(KCapture
 	// can be recomposed without waiting for the next desktop update. Cache
 	// failure is not fatal: pointer-only frames degrade to timeouts.
 	if (ensureLastDesktopTexture(sourceDesc, pErrorMessage))
+	{
+		std::lock_guard<std::mutex> guard(g_sharedD3DDevice.mutex);
 		m_spContext->CopyResource(m_spLastDesktopTexture.Get(), spDesktopTexture.Get());
+	}
 
 	const bool bCopied = copyTextureToBgraFrame(spDesktopTexture.Get(), pFrame, pErrorMessage);
 	m_spDuplication->ReleaseFrame();
@@ -811,6 +831,69 @@ bool KDxgiDesktopDuplicator::copyTextureToBgraFrame(ID3D11Texture2D *pSourceText
 			<< static_cast<unsigned int>(sourceDesc.Format);
 	}
 
+	// Only capture uses this shared immediate context. Serialize the entire
+	// conversion/readback sequence, but never the DXGI AcquireNextFrame wait.
+	std::unique_lock<std::mutex> contextGuard(g_sharedD3DDevice.mutex);
+	Microsoft::WRL::ComPtr<ID3D11Texture2D> spConverted;
+	const DXGI_FORMAT inputFormat = sourceDesc.Format;
+	if (inputFormat != DXGI_FORMAT_R16G16B16A16_FLOAT
+		&& m_lastLoggedFormat == DXGI_FORMAT_R16G16B16A16_FLOAT)
+	{
+		// Do not retain HDR-only textures while capturing SDR. A format change
+		// does not clear a failure latch; only capture reinitialization does.
+		m_hdrConverter.reset();
+	}
+	if (inputFormat == DXGI_FORMAT_R16G16B16A16_FLOAT
+		&& m_hdrMode == AutoHdrConversionMode && !m_bHdrGpuFailed)
+	{
+		const HRESULT hrConvert = m_hdrConverter.convert(m_spDevice.Get(), m_spContext.Get(),
+			pSourceTexture, m_fSdrWhiteScale, &spConverted);
+		if (FAILED(hrConvert))
+		{
+			HRESULT hrDevice = m_spDevice->GetDeviceRemovedReason();
+#if defined(WRC_HDR_FAULT_TESTS)
+			const HRESULT hrInjected = HdrCaptureTestFailure("device");
+			if (FAILED(hrInjected))
+				hrDevice = hrInjected;
+#endif
+			if (FAILED(hrDevice))
+			{
+				if (pErrorMessage)
+					*pErrorMessage = hresultMessage(QStringLiteral("HDR conversion device failed"), hrDevice);
+				return false;
+			}
+			m_bHdrGpuFailed = true;
+			m_hdrConverter.reset();
+			const QString strFallback = hresultMessage(
+				QStringLiteral("HDR conversion requested=auto actual=cpu fallback=gpu_initialization"), hrConvert);
+			qWarning().noquote() << strFallback;
+			KSessionTraceLogger::write(QStringLiteral("controlled"), QStringLiteral("capture"),
+				QStringLiteral("hdr_conversion_fallback"), -1, strFallback);
+		}
+		else
+		{
+			pSourceTexture = spConverted.Get();
+			pSourceTexture->GetDesc(&sourceDesc);
+			// Copy preserves the sRGB-encoded bytes; Map must not decode them.
+			sourceDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+		}
+	}
+	if (m_lastLoggedFormat != inputFormat || m_nLastLoggedWidth != sourceDesc.Width
+		|| m_nLastLoggedHeight != sourceDesc.Height)
+	{
+		const QString strPath = QStringLiteral("requested=%1 actual=%2 format=%3 width=%4 height=%5 whiteScale=%6")
+			.arg(m_hdrMode == AutoHdrConversionMode ? QStringLiteral("auto") : QStringLiteral("cpu"))
+			.arg(spConverted ? QStringLiteral("gpu") : (inputFormat == DXGI_FORMAT_R16G16B16A16_FLOAT
+				? QStringLiteral("cpu") : QStringLiteral("sdr")))
+			.arg(static_cast<unsigned int>(inputFormat)).arg(sourceDesc.Width).arg(sourceDesc.Height)
+			.arg(m_fSdrWhiteScale);
+		qInfo().noquote() << "HDR conversion" << strPath;
+		KSessionTraceLogger::write(QStringLiteral("controlled"), QStringLiteral("capture"),
+			QStringLiteral("hdr_conversion"), -1, strPath);
+		m_lastLoggedFormat = inputFormat;
+		m_nLastLoggedWidth = sourceDesc.Width;
+		m_nLastLoggedHeight = sourceDesc.Height;
+	}
 	if (!createStagingTexture(sourceDesc, pErrorMessage))
 		return false;
 
@@ -829,7 +912,7 @@ bool KDxgiDesktopDuplicator::copyTextureToBgraFrame(ID3D11Texture2D *pSourceText
 	pFrame->nHeight = static_cast<int>(sourceDesc.Height);
 	pFrame->nFrameIndex = ++m_nFrameIndex;
 	pFrame->nTimestampMs = QDateTime::currentMSecsSinceEpoch();
-	if (!CopyMappedFrameToBgra(sourceDesc, mappedResource, pFrame, m_fSdrWhiteScale))
+	if (!CopyMappedCaptureFrameToBgra(sourceDesc, mappedResource, pFrame, m_fSdrWhiteScale))
 	{
 		m_spContext->Unmap(m_spStagingTexture.Get(), 0);
 		if (pErrorMessage != nullptr)
@@ -841,6 +924,7 @@ bool KDxgiDesktopDuplicator::copyTextureToBgraFrame(ID3D11Texture2D *pSourceText
 	}
 
 	m_spContext->Unmap(m_spStagingTexture.Get(), 0);
+	contextGuard.unlock();
 	return composePointer(pFrame, pErrorMessage);
 }
 

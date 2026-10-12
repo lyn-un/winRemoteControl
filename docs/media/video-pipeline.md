@@ -20,6 +20,21 @@ flowchart LR
 
 `KDxgiDesktopDuplicator` 从当前默认输出采集桌面和指针，生成与 WebRTC 无关的 BGRA `KCaptureFrame`。CaptureLoop 负责帧率、超时和取消；`KCaptureService` 管理线程、generation、Sink 选择和停止。
 
+HDR FP16 输入默认先经过 `KHdrGpuBgraConverter` 离屏绘制：复制到可复用的 FP16 SRV 纹理，
+着色器按像素读取、除以固定白电平 2.5 并裁剪，以线性 RGB 写入 sRGB RTV。硬件进行 sRGB
+曲线编码，输出 BGRA8 再复制到 CPU staging。有效读回图像数据为 4 B/像素，旧 CPU 路径为
+8 B/像素；该数值不是总线实测流量。鼠标仍在 CPU 的 BGRA 帧上合成，后续缩放和编码不变。
+
+`--hdr-conversion=cpu` 保留旧标量转换用于对照；默认 `auto` 在 GPU 专属初始化失败后，
+该采集初始化周期固定回退 CPU，不逐帧重试。设备移除和公共 Map 失败仍报告采集错误。
+NaN/负无穷转黑、正无穷转白；普通有限值沿用旧算法。固定白电平与高光裁剪的色彩限制
+没有修复，这不是 HDR 端到端传输或完整色调映射。
+
+采集共享设备不再声明 SINGLETHREADED；共享 immediate context 的复制、转换、读回及
+关闭 Flush 使用同一 mutex 串行化，不覆盖 AcquireNextFrame 等待。转换器只使用采集上下文，
+显式设置并解除自身资源绑定，不清除其他使用者的整套状态。性能及真实桌面验收状态见
+[HDR GPU 转色方案](../plans/hdr-gpu-capture.md)。
+
 WebRTC FrameSink 使用 FFmpeg `swscale` 按协商流配置缩放并转换为 I420。I420 帧通过核心媒体类型交给 WebRTC VideoSource，因此 DXGI adapter 不需要包含 WebRTC/libyuv 头文件。
 
 静态桌面启动时，首帧后的短保护期可重推最近帧并刷新时间戳，避免软件编码器尚未输出时长期黑屏。保护期结束后仍以桌面变化驱动为主，不持续发送重复帧。

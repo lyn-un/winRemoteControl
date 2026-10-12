@@ -18,8 +18,8 @@ namespace
 	constexpr qint64 kNanosecondsPerMicrosecond = 1000;
 }
 
-KCaptureWorker::KCaptureWorker(WorkMode mode, QObject *pParent)
-	: KCaptureWorker(std::make_unique<KDxgiDesktopDuplicator>(),
+KCaptureWorker::KCaptureWorker(WorkMode mode, QObject *pParent, KHdrConversionMode hdrMode)
+	: KCaptureWorker(std::make_unique<KDxgiDesktopDuplicator>(hdrMode),
 		std::make_unique<KCaptureFrameSink>(mode == RemoteVideoWorkMode
 			? KCaptureFrameSink::RemoteVideoSinkMode
 			: KCaptureFrameSink::LocalPreviewSinkMode),

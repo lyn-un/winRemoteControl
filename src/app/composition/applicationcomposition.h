@@ -2,6 +2,7 @@
 #define _WINREMOTECONTROL_APPLICATIONCOMPOSITION_H_
 
 #include "core/media/videoencoderpreference.h"
+#include "core/media/hdrconversionmode.h"
 
 #include <QtCore/QObject>
 #include <QtCore/QPointer>
@@ -37,7 +38,7 @@ class KApplicationComposition : public QObject
 
 public:
 	explicit KApplicationComposition(KVideoEncoderPreference encoderPreference,
-		QObject *pParent = nullptr);
+		QObject *pParent = nullptr, KHdrConversionMode hdrMode = AutoHdrConversionMode);
 	~KApplicationComposition() override;
 
 	KApplicationComposition(const KApplicationComposition &) = delete;

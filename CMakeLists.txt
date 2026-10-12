@@ -900,6 +900,8 @@ target_link_libraries(wrc_webrtc_adapter PUBLIC
 add_library(wrc_windows_capture_adapter STATIC
 	src/capture/dxgidesktopduplicator.cpp
 	src/capture/dxgidesktopduplicator.h
+	src/capture/hdrgpubgraconverter.cpp
+	src/capture/hdrgpubgraconverter.h
 )
 
 target_compile_definitions(wrc_windows_capture_adapter PRIVATE
@@ -914,6 +916,8 @@ target_include_directories(wrc_windows_capture_adapter PUBLIC
 )
 
 target_link_libraries(wrc_windows_capture_adapter PUBLIC
+	d3dcompiler
+	wrc_diagnostics
 	wrc_core
 	Qt6::Core
 	Qt6::Gui
@@ -1482,6 +1486,31 @@ if(WRC_BUILD_TESTS)
 	add_executable(wrc_capture_pipeline_tests
 		tests/unit/capturepipelinetest.cpp
 	)
+	add_executable(wrc_hdr_gpu_bgra_tests tests/unit/hdrgpubgratest.cpp)
+	add_executable(wrc_hdr_capture_benchmark tests/performance/hdrcapturebenchmark.cpp)
+	target_compile_definitions(wrc_hdr_capture_benchmark PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+	target_link_libraries(wrc_hdr_capture_benchmark PRIVATE wrc_windows_capture_adapter psapi)
+	target_compile_definitions(wrc_hdr_gpu_bgra_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+	target_link_libraries(wrc_hdr_gpu_bgra_tests PRIVATE wrc_windows_capture_adapter psapi)
+	add_test(NAME wrc_hdr_gpu_bgra_tests COMMAND wrc_hdr_gpu_bgra_tests)
+	add_test(NAME wrc_hdr_gpu_bgra_warp_tests COMMAND wrc_hdr_gpu_bgra_tests --warp)
+	add_test(NAME wrc_hdr_resource_cycle_tests COMMAND wrc_hdr_gpu_bgra_tests --resources)
+	set_tests_properties(wrc_hdr_resource_cycle_tests PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+	# Compile injection hooks only into this isolated executable, never the app adapter.
+	add_executable(wrc_hdr_capture_fault_tests
+		tests/unit/hdrgpubgratest.cpp
+		src/capture/hdrgpubgraconverter.cpp
+		src/capture/dxgidesktopduplicator.cpp)
+	target_compile_definitions(wrc_hdr_capture_fault_tests PRIVATE
+		WRC_HDR_FAULT_TESTS UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+	target_include_directories(wrc_hdr_capture_fault_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+	target_link_libraries(wrc_hdr_capture_fault_tests PRIVATE
+		wrc_diagnostics wrc_core Qt6::Core Qt6::Gui d3dcompiler d3d11 dxgi dxguid ole32 psapi)
+	add_test(NAME wrc_hdr_capture_fault_tests COMMAND wrc_hdr_capture_fault_tests --warp)
+	set_tests_properties(wrc_hdr_capture_fault_tests PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+	set_tests_properties(wrc_hdr_gpu_bgra_tests wrc_hdr_gpu_bgra_warp_tests
+		PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+
 	target_link_libraries(wrc_capture_pipeline_tests PRIVATE
 		wrc_capture_application
 		Qt6::Core

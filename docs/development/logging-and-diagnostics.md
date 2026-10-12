@@ -53,6 +53,7 @@
 | `--log-dir <path>` | 指定所有 trace 日志目录；相对路径以 exe 目录为基准 |
 | `--help` | 显示命令行帮助 |
 | `--video-renderer <auto\|bgra>` | 接收端默认尝试 I420 GPU 转色，或强制原有 BGRA 路径；非法值报错，不持久化 |
+| `--hdr-conversion <auto\|cpu>` | 采集端 FP16 默认尝试 GPU 转为 SDR BGRA8，或强制旧 CPU 路径；非法值报错，不持久化 |
 
 示例：
 
@@ -241,3 +242,18 @@ AMF 更新成功日志按进程最多每秒一条采样，错误不采样；采�
 所有该诊断的磁盘写入均在独立线程，快照锁不跨越编码、输出回调或磁盘写入。
 关闭 trace 时不创建该线程；释放或重新初始化时回收，不修改原有错误标记、返回值或码率策略。
 不记录图像、键盘内容；已有 session-trace 的其他隐私约束仍适用。
+
+## HDR 采集转换诊断
+
+开发参数 `--hdr-conversion=auto|cpu` 只影响发送端 FP16 桌面采集，默认 `auto`；非法值启动返回 2。
+`cpu` 强制旧转换用于 A/B。参数不保存到用户设置，不改变接收端 `--video-renderer`，也不启用
+输入追踪、桌面截图保存或真实输入注入。
+
+初始化后的首帧及格式/尺寸变化时输出 `HDR conversion`：请求/实际模式、输入格式、尺寸和
+固定白电平。GPU 转换初始化失败另记录一次 `fallback=gpu_initialization` 及 HRESULT，之后
+该初始化周期使用 CPU。设备整体失效不走此回退。默认无新增逐帧日志；采集整体耗时继续
+使用已有 session trace。隔离性能基准的 CPU 提交耗时与 GPU timestamp 耗时分别命名。
+
+开启 `--session-trace` 后，上述路径信息同时写入 `session_trace_controlled.log`，
+`stage=capture`，类型为 `hdr_conversion` / `hdr_conversion_fallback`。仅初始化、
+尺寸/格式变化和一次性失败时写入，不记录像素或指针内容，不新增逐帧落盘。
