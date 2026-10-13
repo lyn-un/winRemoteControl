@@ -331,7 +331,15 @@ bool KVideoRenderWidget::event(QEvent *pEvent)
 		}
 	}
 
-	return QWidget::event(pEvent);
+	const bool bHandled = QWidget::event(pEvent);
+	if (pEvent && (pEvent->type() == QEvent::DevicePixelRatioChange
+		|| pEvent->type() == QEvent::ScreenChangeInternal
+		|| pEvent->type() == QEvent::WindowStateChange))
+	{
+		// Let Qt finish updating the native window before querying its client pixels.
+		QTimer::singleShot(0, this, [this]() { render(); });
+	}
+	return bHandled;
 }
 
 void KVideoRenderWidget::resizeEvent(QResizeEvent *pEvent)
@@ -340,23 +348,8 @@ void KVideoRenderWidget::resizeEvent(QResizeEvent *pEvent)
 	if (!m_spSwapChain)
 		return;
 
-	releaseRenderTarget();
-	m_spContext->OMSetRenderTargets(0, nullptr, nullptr);
-
-	const QSize widgetSize = size();
-	const HRESULT hrResize = m_spSwapChain->ResizeBuffers(0,
-		static_cast<UINT>(qMax(1, widgetSize.width())),
-		static_cast<UINT>(qMax(1, widgetSize.height())),
-		DXGI_FORMAT_UNKNOWN,
-		0);
-	if (FAILED(hrResize))
-	{
-		emit renderError(hresultMessage(QStringLiteral("Resize D3D11 swap chain failed"), hrResize));
-		return;
-	}
-
 	QString strError;
-	if (!createRenderTarget(&strError))
+	if (!synchronizeRenderSize(&strError))
 	{
 		emit renderError(strError);
 		return;
@@ -377,6 +370,8 @@ void KVideoRenderWidget::showEvent(QShowEvent *pEvent)
 	QString strError;
 	if (!initializeD3d(&strError))
 		emit renderError(strError);
+	else
+		render();
 }
 
 void KVideoRenderWidget::hideEvent(QHideEvent *pEvent)
@@ -697,12 +692,50 @@ bool KVideoRenderWidget::isExtendedVirtualKey(int nVirtualKey, quint32 nNativeSc
 	}
 }
 
+QSize KVideoRenderWidget::physicalClientSize() const
+{
+	const HWND hWindow = reinterpret_cast<HWND>(effectiveWinId());
+	if (!hWindow || !IsWindow(hWindow) || IsIconic(GetAncestor(hWindow, GA_ROOT)))
+		return QSize();
+	// Query in the HWND's own awareness context; never change process DPI policy.
+	const DPI_AWARENESS_CONTEXT windowContext = GetWindowDpiAwarenessContext(hWindow);
+	const DPI_AWARENESS_CONTEXT previousContext = SetThreadDpiAwarenessContext(windowContext);
+	RECT clientRect = {};
+	const BOOL bResult = GetClientRect(hWindow, &clientRect);
+	if (previousContext)
+		SetThreadDpiAwarenessContext(previousContext);
+	if (!bResult)
+		return QSize();
+	return QSize(clientRect.right - clientRect.left, clientRect.bottom - clientRect.top);
+}
+
+bool KVideoRenderWidget::synchronizeRenderSize(QString *pErrorMessage)
+{
+	const QSize pixelSize = physicalClientSize();
+	if (pixelSize.isEmpty() || !m_spSwapChain)
+		return true;
+	if (pixelSize == m_renderPixelSize && m_spRenderTargetView)
+		return true;
+	m_spContext->OMSetRenderTargets(0, nullptr, nullptr);
+	releaseRenderTarget();
+	const HRESULT hrResize = m_spSwapChain->ResizeBuffers(0,
+		static_cast<UINT>(pixelSize.width()), static_cast<UINT>(pixelSize.height()),
+		DXGI_FORMAT_UNKNOWN, 0);
+	if (FAILED(hrResize))
+	{
+		if (pErrorMessage)
+			*pErrorMessage = hresultMessage(QStringLiteral("Resize D3D11 swap chain failed"), hrResize);
+		return false;
+	}
+	return createRenderTarget(pErrorMessage);
+}
+
 bool KVideoRenderWidget::initializeD3d(QString *pErrorMessage)
 {
 	if (m_bInitialized)
 		return true;
 
-	const QSize widgetSize = size();
+	const QSize widgetSize = physicalClientSize();
 	DXGI_SWAP_CHAIN_DESC swapChainDesc = {};
 	swapChainDesc.BufferDesc.Width = static_cast<UINT>(qMax(1, widgetSize.width()));
 	swapChainDesc.BufferDesc.Height = static_cast<UINT>(qMax(1, widgetSize.height()));
@@ -787,6 +820,17 @@ bool KVideoRenderWidget::createRenderTarget(QString *pErrorMessage)
 		return false;
 	}
 
+	D3D11_TEXTURE2D_DESC desc = {};
+	spBackBuffer->GetDesc(&desc);
+	m_renderPixelSize = QSize(static_cast<int>(desc.Width), static_cast<int>(desc.Height));
+	const HWND hWindow = reinterpret_cast<HWND>(winId());
+	KSessionTraceLogger::write(QStringLiteral("controller"), QStringLiteral("render_size"),
+		QStringLiteral("logical=%1x%2 dpr=%3 client=%4x%5 buffer=%6x%7 windowDpi=%8 awareness=%9 frame=%10x%11")
+			.arg(width()).arg(height()).arg(devicePixelRatioF())
+			.arg(physicalClientSize().width()).arg(physicalClientSize().height())
+			.arg(desc.Width).arg(desc.Height).arg(GetDpiForWindow(hWindow))
+			.arg(static_cast<int>(GetAwarenessFromDpiAwarenessContext(GetWindowDpiAwarenessContext(hWindow))))
+			.arg(m_nFrameWidth).arg(m_nFrameHeight));
 	return true;
 }
 
@@ -1022,11 +1066,24 @@ void KVideoRenderWidget::releaseAll()
 
 void KVideoRenderWidget::render()
 {
+	if (!isVisible() || physicalClientSize().isEmpty())
+		return;
+	QString strError;
+	if (!synchronizeRenderSize(&strError))
+	{
+		emit renderError(strError);
+		return;
+	}
 	if (!m_spContext || !m_spSwapChain || !m_spRenderTargetView
 		|| (m_bI420Frame ? !m_i420Pipeline.isReady() : !m_spFrameShaderResourceView))
 		return;
+	if (!updateVertexBuffer(m_nFrameWidth, m_nFrameHeight, &strError))
+	{
+		emit renderError(strError);
+		return;
+	}
 
-	const QSize widgetSize = size();
+	const QSize widgetSize = m_renderPixelSize;
 	D3D11_VIEWPORT viewport = {};
 	viewport.Width = static_cast<float>(qMax(1, widgetSize.width()));
 	viewport.Height = static_cast<float>(qMax(1, widgetSize.height()));

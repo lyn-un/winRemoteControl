@@ -2,6 +2,12 @@
 
 ## 视频低帧率和模糊诊断（无需 latency trace）
 
+接收端交换链创建或尺寸更新成功时，session trace 的 `render_size` 记录 Qt
+`logical`、`dpr`、原生 `client`、实际 `buffer`、`windowDpi`、窗口 `awareness`
+及当时已知的 `frame` 尺寸（首帧前可能为 0）。`awareness` 为 Windows
+DPI_AWARENESS 枚举值。仅记录几何元数据，不保存桌面内容；没有每帧尺寸日志。
+正常状态下 client 与 buffer 应一致，D3D 视口使用 buffer 尺寸。
+
 两端使用 `--session-trace --resource-trace`，不要使用 `--trace`；若环境中曾开启
 `WRC_LATENCY_TRACE`，先设为 `0`。这样不会因本次诊断切换到 BGRA 渲染。
 以下新记录不保存画面、键鼠事件或桌面内容；现有 session 协议日志的行为不变。

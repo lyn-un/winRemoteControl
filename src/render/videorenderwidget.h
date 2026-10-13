@@ -73,6 +73,7 @@ private slots:
 	void flushPendingMouseMove();
 
 private:
+	friend class KVideoRenderWidgetTestAccess;
 	struct KVertex
 	{
 		float fPositionX = 0.0f;
@@ -82,6 +83,8 @@ private:
 	};
 
 	bool initializeD3d(QString *pErrorMessage);
+	QSize physicalClientSize() const;
+	bool synchronizeRenderSize(QString *pErrorMessage);
 	bool createRenderTarget(QString *pErrorMessage);
 	bool createShaders(QString *pErrorMessage);
 	bool createSampler(QString *pErrorMessage);
@@ -121,6 +124,7 @@ private:
 	int m_nRemoteScreenWidth = 0;
 	int m_nRemoteScreenHeight = 0;
 	QRectF m_frameDisplayRect;
+	QSize m_renderPixelSize;
 	Microsoft::WRL::ComPtr<ID3D11Device> m_spDevice;
 	Microsoft::WRL::ComPtr<ID3D11DeviceContext> m_spContext;
 	Microsoft::WRL::ComPtr<IDXGISwapChain> m_spSwapChain;

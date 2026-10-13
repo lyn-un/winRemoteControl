@@ -1373,6 +1373,17 @@ if(WRC_BUILD_TESTS)
 	)
 	add_test(NAME wrc_remote_mouse_click_tests COMMAND wrc_remote_mouse_click_tests)
 
+	add_executable(wrc_video_render_size_tests tests/unit/videorendersizetest.cpp)
+	target_link_libraries(wrc_video_render_size_tests PRIVATE wrc_qt_presentation Qt6::Widgets d3d11)
+	add_custom_command(TARGET wrc_video_render_size_tests POST_BUILD
+		COMMAND "$<TARGET_FILE:Qt6::windeployqt>" --release --no-translations --no-compiler-runtime
+			"$<TARGET_FILE:wrc_video_render_size_tests>" VERBATIM)
+	foreach(scale IN ITEMS 1 1.25 1.5 2)
+		add_test(NAME wrc_video_render_size_${scale} COMMAND wrc_video_render_size_tests ${scale})
+		set_tests_properties(wrc_video_render_size_${scale} PROPERTIES
+			TIMEOUT 45 RUN_SERIAL TRUE)
+	endforeach()
+
 	add_executable(wrc_windows_input_double_click_test
 		tests/manual/windowsinputdoubleclicktest.cpp
 	)
