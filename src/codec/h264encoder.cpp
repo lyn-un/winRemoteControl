@@ -30,6 +30,7 @@ extern "C" {
 #include <libyuv.h>
 
 #include "common/latencytracelogger.h"
+#include "common/sessiontracelogger.h"
 
 namespace
 {
@@ -51,11 +52,17 @@ namespace
 		av_log_default_callback(pContext, nLevel, pFormat, original);
 		va_end(original);
 		const bool bMftName = std::strncmp(pFormat, "MFT name:", 9) == 0;
-		if (!bMftName && !bAmfUpdate)
+		const bool bError = nLevel <= AV_LOG_ERROR;
+		if (!bMftName && !bAmfUpdate && !bError)
 			return;
 		char buffer[512] = {};
 		int nPrefix = 1;
 		av_log_format_line2(pContext, nLevel, pFormat, arguments, buffer, sizeof(buffer), &nPrefix);
+		if (bError)
+			KSessionTraceLogger::write(QStringLiteral("controlled"), QStringLiteral("ffmpeg_error"),
+				QString::fromUtf8(buffer).trimmed());
+		if (!bMftName && !bAmfUpdate)
+			return;
 		KLatencyTraceLogger::write(QStringLiteral("controlled"),
 			bAmfUpdate ? QStringLiteral("amf_rate_update") : QStringLiteral("mf_encoder_selected"),
 			QString::fromUtf8(buffer).trimmed());
@@ -66,9 +73,7 @@ namespace
 	constexpr int kBitsPerKilobit = 1000;
 	constexpr int kMfScenarioDisplayRemoting = 1;
 	constexpr int kMfRateControlLowDelayVbr = 4;
-	constexpr char kHardwareEncoderName[] = "h264_mf";
 	constexpr char kSoftwareEncoderName[] = "libx264";
-	constexpr UINT kAmdVendorId = 0x1002;
 
 	bool ConfigureX264Bitrate(AVCodecContext *pContext, std::int64_t nBitrateBps)
 	{
@@ -83,34 +88,53 @@ namespace
 		return true;
 	}
 
-	bool HasAmdDisplayAdapter()
+	quint64 AdapterLuid(const LUID &luid)
 	{
-		static const bool bHasAmdAdapter = []()
-		{
-			Microsoft::WRL::ComPtr<IDXGIFactory1> spFactory;
-			if (FAILED(::CreateDXGIFactory1(IID_PPV_ARGS(&spFactory))))
-				return false;
-			for (UINT nIndex = 0; ; ++nIndex)
-			{
-				Microsoft::WRL::ComPtr<IDXGIAdapter1> spAdapter;
-				if (spFactory->EnumAdapters1(nIndex, &spAdapter) == DXGI_ERROR_NOT_FOUND)
-					break;
-				DXGI_ADAPTER_DESC1 desc = {};
-				if (SUCCEEDED(spAdapter->GetDesc1(&desc)) && desc.VendorId == kAmdVendorId)
-					return true;
-			}
-			return false;
-		}();
-		return bHasAmdAdapter;
+		return (static_cast<quint64>(static_cast<quint32>(luid.HighPart)) << 32) | luid.LowPart;
 	}
 
-	int CreateVendorDevice(AVCodecContext *pContext, bool bAmf)
+	std::vector<KVideoAdapter> EnumerateVideoAdapters(QString *pError)
 	{
-		AVDictionary *pOptions = nullptr;
-		av_dict_set(&pOptions, "vendor_id", bAmf ? "0x1002" : "0x8086", 0);
+		std::vector<KVideoAdapter> adapters;
+		Microsoft::WRL::ComPtr<IDXGIFactory1> spFactory;
+		HRESULT hr = ::CreateDXGIFactory1(IID_PPV_ARGS(&spFactory));
+		if (FAILED(hr))
+		{
+			*pError = QStringLiteral("CreateDXGIFactory1 HRESULT=0x%1").arg(static_cast<quint32>(hr), 8, 16, QLatin1Char('0'));
+			return adapters;
+		}
+		for (UINT nIndex = 0; ; ++nIndex)
+		{
+			Microsoft::WRL::ComPtr<IDXGIAdapter1> spAdapter;
+			hr = spFactory->EnumAdapters1(nIndex, &spAdapter);
+			if (hr == DXGI_ERROR_NOT_FOUND)
+				break;
+			DXGI_ADAPTER_DESC1 desc = {};
+			if (SUCCEEDED(hr))
+				hr = spAdapter->GetDesc1(&desc);
+			if (FAILED(hr))
+			{
+				*pError = QStringLiteral("Enumerate adapter %1 HRESULT=0x%2")
+					.arg(nIndex).arg(static_cast<quint32>(hr), 8, 16, QLatin1Char('0'));
+				break;
+			}
+			adapters.push_back({static_cast<int>(nIndex), desc.VendorId, desc.DeviceId,
+				AdapterLuid(desc.AdapterLuid), QString::fromWCharArray(desc.Description),
+				(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0});
+			KSessionTraceLogger::write(QStringLiteral("controlled"), QStringLiteral("encoder_adapter"),
+				QStringLiteral("adapterIndex=%1 vendorId=%2 deviceId=%3 luid=%4 software=%5 gpu=%6")
+					.arg(nIndex).arg(desc.VendorId).arg(desc.DeviceId).arg(AdapterLuid(desc.AdapterLuid))
+					.arg((desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) ? 1 : 0).arg(QString::fromWCharArray(desc.Description)));
+		}
+		return adapters;
+	}
+
+	int CreateVendorDevice(AVCodecContext *pContext, const QString &strEncoder, const KVideoAdapter &adapter)
+	{
 		AVBufferRef *pDevice = nullptr;
-		int nResult = av_hwdevice_ctx_create(&pDevice, AV_HWDEVICE_TYPE_D3D11VA, nullptr, pOptions, 0);
-		av_dict_free(&pOptions);
+		const QByteArray deviceIndex = QByteArray::number(adapter.nIndex);
+		int nResult = av_hwdevice_ctx_create(&pDevice, AV_HWDEVICE_TYPE_D3D11VA,
+			deviceIndex.constData(), nullptr, 0);
 		if (nResult < 0)
 			return nResult;
 		const auto *pHardware = reinterpret_cast<const AVHWDeviceContext *>(pDevice->data);
@@ -120,20 +144,27 @@ namespace
 		DXGI_ADAPTER_DESC descriptor = {};
 		if (FAILED(pD3d->device->QueryInterface(IID_PPV_ARGS(&spDxgiDevice)))
 			|| FAILED(spDxgiDevice->GetAdapter(&spAdapter)) || FAILED(spAdapter->GetDesc(&descriptor))
-			|| descriptor.VendorId != (bAmf ? 0x1002U : 0x8086U))
+			|| descriptor.VendorId != adapter.nVendorId
+			|| AdapterLuid(descriptor.AdapterLuid) != adapter.nLuid)
 		{
+			KSessionTraceLogger::write(QStringLiteral("controlled"), QStringLiteral("encoder_device_mismatch"),
+				QStringLiteral("expectedVendor=%1 expectedLuid=%2 actualVendor=%3 actualLuid=%4 adapterIndex=%5")
+					.arg(adapter.nVendorId).arg(adapter.nLuid).arg(descriptor.VendorId)
+					.arg(AdapterLuid(descriptor.AdapterLuid)).arg(adapter.nIndex));
 			av_buffer_unref(&pDevice);
 			return AVERROR_EXTERNAL;
 		}
 		LARGE_INTEGER version = {};
 		const HRESULT hVersion = spAdapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &version);
-		const QString strDetails = QStringLiteral("encoder=%1 gpu=%2 vendorId=%3 deviceId=%4 driverVersionRaw=%5 versionResult=%6 captureAffinity=cpu_upload")
-			.arg(bAmf ? QStringLiteral("h264_amf") : QStringLiteral("h264_qsv"),
+		const QString strDetails = QStringLiteral("encoder=%1 gpu=%2 vendorId=%3 deviceId=%4 driverVersionRaw=%5 versionResult=%6 adapterIndex=%7 luid=%8 captureAffinity=cpu_upload")
+			.arg(strEncoder,
 				QString::fromWCharArray(descriptor.Description))
-			.arg(descriptor.VendorId).arg(descriptor.DeviceId).arg(version.QuadPart).arg(hVersion);
+			.arg(descriptor.VendorId).arg(descriptor.DeviceId).arg(version.QuadPart).arg(hVersion)
+			.arg(adapter.nIndex).arg(adapter.nLuid);
 		qInfo().noquote() << "h264_device_selected" << strDetails;
 		KLatencyTraceLogger::write(QStringLiteral("controlled"), QStringLiteral("h264_device_selected"), strDetails);
-		if (bAmf)
+		KSessionTraceLogger::write(QStringLiteral("controlled"), QStringLiteral("h264_device_selected"), strDetails);
+		if (strEncoder != QStringLiteral("h264_qsv"))
 			pContext->hw_device_ctx = pDevice;
 		else
 		{
@@ -198,54 +229,54 @@ bool KH264Encoder::openStream(int nWidth,
 	m_strEncoderName.clear();
 	m_strFallbackReason.clear();
 
-	QString strHardwareError;
-	const char *pVendorEncoder = m_preference == QuickSyncVideoEncoderPreference ? "h264_qsv"
-		: (m_preference == AmfVideoEncoderPreference ? "h264_amf" : nullptr);
-	const bool bAvoidAmdMediaFoundation =
-		m_preference == AutoVideoEncoderPreference && HasAmdDisplayAdapter();
-	if (pVendorEncoder != nullptr)
-	{
-		if (!openCodec(pVendorEncoder, true, pErrorMessage))
+	QString strEnumerationError;
+	std::vector<KVideoAdapter> adapters;
+	if (m_preference == AutoVideoEncoderPreference || m_preference == QuickSyncVideoEncoderPreference
+		|| m_preference == AmfVideoEncoderPreference || m_preference == NvencVideoEncoderPreference)
+		adapters = EnumerateVideoAdapters(&strEnumerationError);
+	const auto candidates = BuildVideoEncoderCandidates(m_preference, adapters);
+	QStringList failures;
+	const bool bSelected = TryVideoEncoderCandidates(candidates,
+		[this](const KVideoEncoderCandidate &candidate, QString *pError)
 		{
-			release();
-			return false;
-		}
-	}
-	else if (m_preference == LibX264VideoEncoderPreference || bAvoidAmdMediaFoundation)
-	{
-		if (!openCodec(kSoftwareEncoderName, false, pErrorMessage))
-		{
-			release();
-			return false;
-		}
-		if (bAvoidAmdMediaFoundation)
-		{
-			m_strFallbackReason = QStringLiteral(
-				"AMD Media Foundation encoder disabled after verified per-session handle growth");
-		}
-	}
-	else if (!openCodec(kHardwareEncoderName, true, &strHardwareError))
-	{
-		if (m_preference == MediaFoundationVideoEncoderPreference)
-		{
-			if (pErrorMessage != nullptr)
-				*pErrorMessage = strHardwareError;
-			release();
-			return false;
-		}
-		QString strSoftwareError;
-		if (!openCodec(kSoftwareEncoderName, false, &strSoftwareError))
-		{
-			if (pErrorMessage != nullptr)
+			m_candidate = candidate;
+			const QString strDetails = QStringLiteral("requested=%1 encoder=%2 adapterIndex=%3 vendorId=%4 deviceId=%5 luid=%6 gpu=%7")
+				.arg(VideoEncoderPreferenceName(m_preference)).arg(candidate.strEncoder).arg(candidate.adapter.nIndex)
+				.arg(candidate.adapter.nVendorId).arg(candidate.adapter.nDeviceId)
+				.arg(candidate.adapter.nLuid).arg(candidate.adapter.strName);
+			KSessionTraceLogger::write(QStringLiteral("controlled"), QStringLiteral("encoder_candidate"), strDetails);
+			const QByteArray name = candidate.strEncoder.toLatin1();
+			const bool bOpened = openCodec(name.constData(), candidate.strEncoder != QStringLiteral("libx264"), pError);
+			if (!bOpened)
 			{
-				*pErrorMessage = QStringLiteral("Hardware encoder failed: %1; software encoder failed: %2")
-					.arg(strHardwareError, strSoftwareError);
+				// Release the failed context and its device before trying another adapter.
+				avcodec_free_context(&m_pCodecContext);
+				KSessionTraceLogger::write(QStringLiteral("controlled"), QStringLiteral("encoder_candidate_failed"),
+					QStringLiteral("%1 error=%2").arg(strDetails, *pError));
 			}
-			release();
-			return false;
-		}
-		m_strFallbackReason = strHardwareError;
+			return bOpened;
+		}, &m_candidate, &failures);
+	if (!strEnumerationError.isEmpty())
+	{
+		failures.prepend(strEnumerationError);
+		KSessionTraceLogger::write(QStringLiteral("controlled"), QStringLiteral("encoder_enumeration_failed"), strEnumerationError);
 	}
+	if (!bSelected)
+	{
+		if (pErrorMessage)
+			*pErrorMessage = failures.isEmpty() ? QStringLiteral("No matching hardware adapter for %1")
+				.arg(VideoEncoderPreferenceName(m_preference))
+				: failures.join(QStringLiteral("; "));
+		release();
+		return false;
+	}
+	if (m_preference == AutoVideoEncoderPreference && candidates.size() == 1)
+		failures.prepend(QStringLiteral("No supported QSV/AMF/NVENC hardware adapter"));
+	m_strFallbackReason = failures.join(QStringLiteral("; "));
+	KSessionTraceLogger::write(QStringLiteral("controlled"), QStringLiteral("encoder_selection"),
+		QStringLiteral("requested=%1 actual=%2 adapterIndex=%3 fallback=%4 reason=%5")
+			.arg(VideoEncoderPreferenceName(m_preference)).arg(m_strEncoderName).arg(m_candidate.adapter.nIndex)
+			.arg(m_strFallbackReason.isEmpty() ? 0 : 1).arg(m_strFallbackReason));
 
 	m_pFrame = av_frame_alloc();
 	if (m_pFrame == nullptr)
@@ -437,9 +468,11 @@ void KH264Encoder::setBitrateKbps(int nBitrateKbps)
 		}
 	}
 	else if (m_pCodecContext != nullptr && (m_strEncoderName == QStringLiteral("h264_qsv")
-		|| m_strEncoderName == QStringLiteral("h264_amf")))
+		|| m_strEncoderName == QStringLiteral("h264_amf") || m_strEncoderName == QStringLiteral("h264_nvenc")))
 	{
-		if (nBitrateBps / 4 > (std::numeric_limits<int>::max)())
+		if (nBitrateBps / 4 > (std::numeric_limits<int>::max)()
+			|| (m_strEncoderName == QStringLiteral("h264_nvenc")
+				&& nBitrateBps > (std::numeric_limits<std::uint32_t>::max)()))
 		{
 			qWarning() << "Rejected vendor requested bitrate: buffer exceeds integer range" << nBitrateKbps;
 			return;
@@ -447,7 +480,7 @@ void KH264Encoder::setBitrateKbps(int nBitrateKbps)
 		m_pCodecContext->bit_rate = nBitrateBps;
 		m_pCodecContext->rc_max_rate = nBitrateBps;
 		// QSV Reset cannot resize the buffer allocated at initialization.
-		if (m_strEncoderName == QStringLiteral("h264_amf"))
+		if (m_strEncoderName != QStringLiteral("h264_qsv"))
 			m_pCodecContext->rc_buffer_size = static_cast<int>(std::max<std::int64_t>(1000, nBitrateBps / 4));
 	}
 	else if (m_pCodecContext != nullptr)
@@ -602,17 +635,19 @@ bool KH264Encoder::openCodec(const char *pCodecName, bool bHardware, QString *pE
 			kMinBitrate,
 			kMaxBitrate);
 
-	const bool bVendor = std::strcmp(pCodecName, "h264_qsv") == 0 || std::strcmp(pCodecName, "h264_amf") == 0;
+	const bool bNvenc = std::strcmp(pCodecName, "h264_nvenc") == 0;
+	const bool bVendor = std::strcmp(pCodecName, "h264_qsv") == 0 || std::strcmp(pCodecName, "h264_amf") == 0 || bNvenc;
 	if (bVendor)
 	{
 		const bool bAmf = std::strcmp(pCodecName, "h264_amf") == 0;
 		// Reserve QSV's fixed allocation for the session level budget, not its
 		// small startup target. Reset cannot grow it when congestion control ramps up.
-		const std::int64_t nBufferBudgetBps = bAmf ? m_pCodecContext->bit_rate
+		const std::int64_t nBufferBudgetBps = (bAmf || bNvenc) ? m_pCodecContext->bit_rate
 			: std::max<std::int64_t>(m_pCodecContext->bit_rate, m_nLevelLimit
 				? KH264LevelPolicy::maximumBitrate(m_nLevelLimit) : kMaxBitrate);
 		const std::int64_t nBufferBits = std::max<std::int64_t>(1000, nBufferBudgetBps / 4);
-		if (nBufferBits > (std::numeric_limits<int>::max)())
+		if (nBufferBits > (std::numeric_limits<int>::max)()
+			|| (bNvenc && m_pCodecContext->bit_rate > (std::numeric_limits<std::uint32_t>::max)()))
 		{
 			if (pErrorMessage != nullptr)
 				*pErrorMessage = QStringLiteral("Requested vendor bitrate exceeds buffer range");
@@ -624,9 +659,9 @@ bool KH264Encoder::openCodec(const char *pCodecName, bool bHardware, QString *pE
 		m_pCodecContext->flags |= AV_CODEC_FLAG_LOW_DELAY;
 		// QSV CBR rate changes require HRD conformance to be disabled. In this
 		// FFmpeg baseline, strict < normal maps to NalHrdConformance=OFF.
-		if (!bAmf)
+		if (!bAmf && !bNvenc)
 			m_pCodecContext->strict_std_compliance = FF_COMPLIANCE_UNOFFICIAL;
-		const int nDeviceResult = CreateVendorDevice(m_pCodecContext, bAmf);
+		const int nDeviceResult = CreateVendorDevice(m_pCodecContext, QString::fromLatin1(pCodecName), m_candidate.adapter);
 		if (nDeviceResult < 0)
 		{
 			if (pErrorMessage != nullptr)
@@ -644,8 +679,12 @@ bool KH264Encoder::openCodec(const char *pCodecName, bool bHardware, QString *pE
 			{ "preset", "veryfast" }, { "profile", qsvProfile.constData() }, { "async_depth", "1" },
 			{ "look_ahead", "0" }, { "forced_idr", "1" }
 		};
-		const auto *pOptions = bAmf ? amfOptions : qsvOptions;
-		const size_t nOptionCount = bAmf ? std::size(amfOptions) : std::size(qsvOptions);
+		const std::pair<const char *, const char *> nvencOptions[] = {
+			{ "preset", "p4" }, { "tune", "ull" }, { "rc", "cbr" }, { "profile", "baseline" },
+			{ "rc-lookahead", "0" }, { "zerolatency", "1" }, { "delay", "0" }, { "forced-idr", "1" }
+		};
+		const auto *pOptions = bNvenc ? nvencOptions : (bAmf ? amfOptions : qsvOptions);
+		const size_t nOptionCount = bNvenc ? std::size(nvencOptions) : (bAmf ? std::size(amfOptions) : std::size(qsvOptions));
 		for (size_t nIndex = 0; nIndex < nOptionCount; ++nIndex)
 		{
 			const int nResult = av_opt_set(m_pCodecContext->priv_data, pOptions[nIndex].first,

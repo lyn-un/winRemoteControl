@@ -812,6 +812,8 @@ add_library(wrc_ffmpeg_adapter STATIC
 	src/codec/h264decoder.h
 	src/codec/h264encoder.cpp
 	src/codec/h264encoder.h
+	src/codec/videoencoderselection.cpp
+	src/codec/videoencoderselection.h
 )
 
 target_include_directories(wrc_ffmpeg_adapter PUBLIC
@@ -1445,6 +1447,11 @@ if(WRC_BUILD_TESTS)
 		COMMAND wrc_webrtc_h264_encoder_rate_control_tests)
 
 	add_executable(wrc_mf_bitrate_output_tests tests/unit/mfbitrateoutputtest.cpp tests/unit/h264hardwarebitratetest.cpp)
+	add_executable(wrc_video_encoder_selection_tests tests/unit/videoencoderselectiontest.cpp
+		src/codec/videoencoderselection.cpp)
+	target_include_directories(wrc_video_encoder_selection_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+	target_link_libraries(wrc_video_encoder_selection_tests PRIVATE Qt6::Core)
+	add_test(NAME wrc_video_encoder_selection_tests COMMAND wrc_video_encoder_selection_tests)
 	target_include_directories(wrc_mf_bitrate_output_tests PRIVATE "${FFMPEG_ROOT}/include")
 	target_link_libraries(wrc_mf_bitrate_output_tests PRIVATE wrc_ffmpeg_adapter Qt6::Core mfplat mfuuid ole32)
 	add_test(NAME wrc_mf_bitrate_output_tests COMMAND wrc_mf_bitrate_output_tests)

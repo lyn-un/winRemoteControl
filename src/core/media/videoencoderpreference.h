@@ -7,7 +7,8 @@ enum KVideoEncoderPreference
 	MediaFoundationVideoEncoderPreference,
 	LibX264VideoEncoderPreference,
 	QuickSyncVideoEncoderPreference,
-	AmfVideoEncoderPreference
+	AmfVideoEncoderPreference,
+	NvencVideoEncoderPreference
 };
 
 #endif // _WINREMOTECONTROL_CORE_MEDIA_VIDEOENCODERPREFERENCE_H_

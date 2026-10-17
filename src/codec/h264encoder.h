@@ -2,6 +2,7 @@
 #define _WINREMOTECONTROL_H264ENCODER_H_
 
 #include "core/media/videoencoderpreference.h"
+#include "codec/videoencoderselection.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QString>
@@ -91,6 +92,7 @@ private:
 	bool m_bReportedUnsupportedRate = false;
 	int m_nLevelLimit = 0;
 	KVideoEncoderPreference m_preference = AutoVideoEncoderPreference;
+	KVideoEncoderCandidate m_candidate;
 };
 
 #endif // _WINREMOTECONTROL_H264ENCODER_H_

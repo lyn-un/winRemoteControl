@@ -1,6 +1,19 @@
 # 日志与诊断
 
+NVENC已增加显式 `--diagnostic-video-encoder=h264_nvenc`，也参与auto的DXGI顺序选择。
+初始化失败按auto规则尝试后续候选，显式模式不回退。FFmpeg错误级消息转发到
+session trace的 `ffmpeg_error`，保留库格式化的上下文和错误文本。全局回调也可能
+包含解码错误，不能仅凭事件role认定发送编码故障。不记录帧数据或逐帧成功信息。
+NVENC重配置失败由此留痕，但公共API没有逐次成功确认，不能声称applied。
+
 ## 视频低帧率和模糊诊断（无需 latency trace）
+
+默认编码器选择由 session trace 的 `encoder_adapter`、`encoder_candidate`、
+`encoder_candidate_failed`、`encoder_enumeration_failed`、`encoder_selection` 记录。
+字段包含请求模式、候选编码器、DXGI 索引、VendorId/DeviceId/LUID、显卡名称及失败原因。
+`h264_device_selected` 的身份来自实际创建的 D3D11 设备，VendorId/LUID 核对通过后才使用。
+`encoder_selection actual` 是成功打开的编码器，不是实测码率或画质保证；硬件候选全部
+失败时 auto 使用 x264。上述事件仅在初始化阶段记录，不逐帧重复。
 
 接收端交换链创建或尺寸更新成功时，session trace 的 `render_size` 记录 Qt
 `logical`、`dpr`、原生 `client`、实际 `buffer`、`windowDpi`、窗口 `awareness`
@@ -161,7 +174,7 @@ python automation\tests\resource_lifecycle.py `
 
 JSON 汇总和两端原始资源日志写入 `build/diagnostics/reports`。第一轮作为预热，后续样本计算每轮斜率。
 
-当前机器的隔离结果表明：AMD 的 `h264_mf` 每次销毁后会遗留一个 Event、一个 WaitCompletionPacket 和一个注册表 Key；强制 `h264_mf` 仅保留为诊断入口。`Auto` 在检测到 AMD 显示适配器时使用 `libx264`，其他适配器仍优先 Media Foundation。Desktop Duplication 每次连同 D3D Device 一起重建时，驱动会遗留一个 Mutant 和一个 Section，因此采集适配器只保留进程级 D3D11 Device/Context，仍逐会话释放纹理和 `IDXGIOutputDuplication`，并执行 `ClearState`、`Flush` 和 `Trim`。该平台缓存会保留一组固定的驱动资源，但不得随会话轮次继续增长。
+此前机器的隔离结果表明：AMD 的 `h264_mf` 每次销毁后会遗留一个 Event、一个 WaitCompletionPacket 和一个注册表 Key；强制 `h264_mf` 仅保留为诊断入口。当前 `auto` 优先实际尝试 QSV/AMF/NVENC，失败后使用 x264，不再选择 MF。Desktop Duplication 每次连同 D3D Device 一起重建时，驱动会遗留一个 Mutant 和一个 Section，因此采集适配器只保留进程级 D3D11 Device/Context，仍逐会话释放纹理和 `IDXGIOutputDuplication`，并执行 `ClearState`、`Flush` 和 `Trim`。该平台缓存会保留一组固定的驱动资源，但不得随会话轮次继续增长。
 
 ## Windows 桌面输入诊断
 
@@ -200,10 +213,11 @@ JSON 汇总和两端原始资源日志写入 `build/diagnostics/reports`。第�
 `h264_rate_update_unsupported` 每实例首次请求变化时记录请求与保留的初始值，明确不支持，不伪造已接受结果。
 新依赖使用 `wrc-vendor-<模式>-<指纹>`，AMF 库日志的 `apiAcceptedTargetBps` 仅表示 API 接受；
 实际输出必须用完整编码字节与媒体时间计算。运行目录切换和硬件验收状态见[厂商依赖构建](ffmpeg-vendor-build.md)。
-新增显式 `--diagnostic-video-encoder=h264_qsv|h264_amf`，不静默回退；NVENC 尚未开放选择，`auto` 策略不变。
+显式 `--diagnostic-video-encoder=h264_qsv|h264_amf|h264_nvenc` 不静默回退；auto按DXGI顺序尝试三家后端，最后回退x264。
 `h264_device_selected` 记录实际 D3D11 设备的名称、厂商/设备编号、驱动版本查询结果；
-当前通过 CPU NV12 上传，不承诺与采集适配器相同。AMF 选 AMD、QSV 选 Intel，同厂商多卡使用
-FFmpeg 首个可用设备，不在编码失败后偷偷换卡。
+当前通过 CPU NV12 上传，不承诺与采集适配器相同。AMF 选 AMD、QSV 选 Intel、NVENC 选 NVIDIA；
+设备按候选 DXGI 索引创建并核对 LUID。显式模式使用对应厂商首个候选，失败不换卡；
+auto 则依次尝试后续候选，并记录每次失败原因。
 AMF 更新成功日志按进程最多每秒一条采样，错误不采样；采样缺失不能解释为没有执行重配置。
 使用既有 latency trace，无需开启桌面输入 trace。
 原始 FFmpeg 日志保留默认输出行为，未开启 trace 时不新增追踪文件。

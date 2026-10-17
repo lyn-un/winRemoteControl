@@ -180,7 +180,7 @@ int KWebRtcH264Encoder::InitEncode(const webrtc::VideoCodec *pCodecSettings,
 	{
 		KLatencyTraceLogger::write(QStringLiteral("controlled"),
 			QStringLiteral("h264_encoder_fallback"),
-			QStringLiteral("from=h264_mf to=libx264 error=%1").arg(m_encoder.fallbackReason()));
+			QStringLiteral("to=%1 error=%2").arg(m_encoder.encoderName(), m_encoder.fallbackReason()));
 	}
 	KLatencyTraceLogger::write(QStringLiteral("controlled"),
 		QStringLiteral("webrtc_codec_selected"),
@@ -479,10 +479,11 @@ webrtc::VideoEncoder::EncoderInfo KWebRtcH264Encoder::GetEncoderInfo() const
 	webrtc::VideoEncoder::EncoderInfo info;
 	const QString strEncoderName = m_encoder.encoderName();
 	info.implementation_name = strEncoderName.isEmpty()
-		? "h264_mf_or_libx264"
+		? "ffmpeg_h264"
 		: strEncoderName.toStdString();
 	info.is_hardware_accelerated = strEncoderName == QStringLiteral("h264_mf")
-		|| strEncoderName == QStringLiteral("h264_qsv") || strEncoderName == QStringLiteral("h264_amf");
+		|| strEncoderName == QStringLiteral("h264_qsv") || strEncoderName == QStringLiteral("h264_amf")
+		|| strEncoderName == QStringLiteral("h264_nvenc");
 	info.supports_native_handle = false;
 	info.requested_resolution_alignment = 2;
 	info.apply_alignment_to_all_simulcast_layers = true;

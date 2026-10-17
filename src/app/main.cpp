@@ -38,7 +38,7 @@ int main(int nArgc, char *pArgv[])
 	parser.addOption(QCommandLineOption(QStringLiteral("automation-test-profile"),
 		QStringLiteral("Delete the temporary CNG identity when this test process exits.")));
 	parser.addOption(QCommandLineOption(QStringLiteral("diagnostic-video-encoder"),
-		QStringLiteral("Force auto, h264_mf, libx264, h264_qsv, or h264_amf. NVENC is not integrated."),
+		QStringLiteral("Force auto, h264_mf, libx264, h264_qsv, h264_amf, or h264_nvenc."),
 		QStringLiteral("encoder"), QStringLiteral("auto")));
 	KTraceOptionsParser::addOptions(&parser);
 	parser.addOption(QCommandLineOption(QStringLiteral("hdr-conversion"),
@@ -105,10 +105,12 @@ int main(int nArgc, char *pArgv[])
 		encoderPreference = QuickSyncVideoEncoderPreference;
 	else if (strEncoder == QStringLiteral("h264_amf"))
 		encoderPreference = AmfVideoEncoderPreference;
+	else if (strEncoder == QStringLiteral("h264_nvenc"))
+		encoderPreference = NvencVideoEncoderPreference;
 	else if (strEncoder != QStringLiteral("auto"))
 	{
 		qCritical().noquote() << QStringLiteral(
-			"Invalid diagnostic video encoder '%1'. Expected auto, h264_mf, libx264, h264_qsv, or h264_amf.")
+			"Invalid diagnostic video encoder '%1'. Expected auto, h264_mf, libx264, h264_qsv, h264_amf, or h264_nvenc.")
 			.arg(strEncoder);
 		KLatencyTraceLogger::shutdown();
 		KDesktopInputTraceLogger::shutdown();
