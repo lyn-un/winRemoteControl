@@ -8,6 +8,7 @@ extern "C"
 }
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QElapsedTimer>
 #include <array>
 #include <algorithm>
 #include <cmath>
@@ -167,14 +168,23 @@ private:
 	std::set<std::int64_t> m_seen;
 };
 
-bool Run(KVideoEncoderPreference preference, const char *pName, std::array<int, 3> rates, std::array<KResult, 3> *pResults)
+bool Run(KVideoEncoderPreference preference, const char *pName, std::array<int, 3> rates,
+	std::array<KResult, 3> *pResults, bool bFrequentUpdates = false)
 {
 	KReferenceDecoder decoder;
 	bool bDecoded = decoder.open();
+	std::array<std::uint64_t, kStageFrames * 3> packetBytes{};
+	std::vector<qint64> costs;
 	KH264Encoder encoder(preference);
 	QString strError;
 	if (!bDecoded || !encoder.openStream(kWidth, kHeight, kFps, rates[0],
-		[&](const QByteArray &) { bDecoded = decoder.submit(KH264EncoderTestAccess::packet(encoder)) && bDecoded; },
+		[&](const QByteArray &packet)
+		{
+			const auto *pPacket = KH264EncoderTestAccess::packet(encoder);
+			if (pPacket->pts >= 0 && pPacket->pts < static_cast<std::int64_t>(packetBytes.size()))
+				packetBytes[pPacket->pts] += packet.size();
+			bDecoded = decoder.submit(pPacket) && bDecoded;
+		},
 		&strError))
 	{
 		std::cerr << "Hardware encoder initialization failed: " << strError.toStdString() << '\n';
@@ -184,13 +194,17 @@ bool Run(KVideoEncoderPreference preference, const char *pName, std::array<int, 
 	std::vector<unsigned char> luma(kWidth * kHeight), chroma(kWidth * kHeight / 4, 128);
 	for (int nFrame = 0; nFrame < kStageFrames * 3; ++nFrame)
 	{
-		if (nFrame % kStageFrames == 0)
+		if (bFrequentUpdates && nFrame % kFps == 0)
+			encoder.setBitrateKbps((nFrame / kFps) % 2 ? 4000 : 3000);
+		else if (!bFrequentUpdates && nFrame % kStageFrames == 0)
 			encoder.setBitrateKbps(rates[nFrame / kStageFrames]);
 		if (KH264EncoderTestAccess::context(encoder) != pOriginal)
 			return false;
 		for (int y = 0; y < kHeight; ++y)
 			for (int x = 0; x < kWidth; ++x)
 				luma[y * kWidth + x] = decoder.pixel(nFrame, x, y);
+		QElapsedTimer encodeTimer;
+		encodeTimer.start();
 		if (!encoder.encodeI420Frame(luma.data(), kWidth, chroma.data(), kWidth / 2,
 			chroma.data(), kWidth / 2, kWidth, kHeight, 1000 + nFrame * 1000LL / kFps, nFrame == 0, &strError)
 			|| !bDecoded)
@@ -198,6 +212,7 @@ bool Run(KVideoEncoderPreference preference, const char *pName, std::array<int, 
 			std::cerr << pName << " frame=" << nFrame << " error=" << strError.toStdString() << '\n';
 			return false;
 		}
+		costs.push_back(encodeTimer.nsecsElapsed());
 	}
 	if (!encoder.close(&strError) || !bDecoded || !decoder.submit(nullptr) || !decoder.complete())
 		return false;
@@ -206,16 +221,37 @@ bool Run(KVideoEncoderPreference preference, const char *pName, std::array<int, 
 	for (const int nPts : decoder.keyFrames)
 		std::cout << nPts << ',';
 	std::cout << std::endl;
+	std::sort(costs.begin(), costs.end());
+	std::uint64_t nPeak100Ms = 0, nPeak1S = 0;
+	for (size_t nStart = 0; nStart < packetBytes.size(); ++nStart)
+	{
+		std::uint64_t nBytes = 0;
+		for (size_t nOffset = 0; nOffset < 30 && nStart + nOffset < packetBytes.size(); ++nOffset)
+		{
+			nBytes += packetBytes[nStart + nOffset];
+			if (nOffset == 2)
+				nPeak100Ms = std::max(nPeak100Ms, nBytes);
+			if (nOffset == 29)
+				nPeak1S = std::max(nPeak1S, nBytes);
+		}
+	}
+	std::cout << pName << " idrCount=" << decoder.keyFrames.size()
+		<< " maximumPacketBytes=" << *std::max_element(packetBytes.begin(), packetBytes.end())
+		<< " mediaPeak100MsKbps=" << nPeak100Ms * 8.0 / 100
+		<< " mediaPeak1SKbps=" << nPeak1S * 8.0 / 1000
+		<< " encodeCallP50Ms=" << costs[costs.size() / 2] / 1e6
+		<< " encodeCallP99Ms=" << costs[costs.size() * 99 / 100] / 1e6 << std::endl;
 	if (decoder.profile() != AV_PROFILE_H264_BASELINE && decoder.profile() != AV_PROFILE_H264_CONSTRAINED_BASELINE)
 		return false;
 	*pResults = decoder.results;
 	for (int nStage = 0; nStage < 3; ++nStage)
 	{
 		const auto &result = (*pResults)[nStage];
-		std::cout << pName << " stage=" << nStage << " requestedKbps=" << rates[nStage]
+		const int nRequestedKbps = bFrequentUpdates ? 3500 : rates[nStage];
+		std::cout << pName << " stage=" << nStage << " requestedMeanKbps=" << nRequestedKbps
 			<< " measuredKbps=" << result.kbps() << " lumaPsnrDb=" << result.psnr()
 			<< " measuredFrames=" << result.nFrames
-			<< " targetDeviationPercent=" << (result.kbps() / rates[nStage] - 1) * 100
+			<< " targetDeviationPercent=" << (result.kbps() / nRequestedKbps - 1) * 100
 			<< " qpBlocks=" << result.nQpBlocks
 			<< " qpMin=" << (result.nQpBlocks ? result.nMinQp : -1) << " qpMax=" << result.nMaxQp
 			<< " qpMean=" << (result.nQpBlocks ? static_cast<double>(result.nQpSum) / result.nQpBlocks : -1)
@@ -284,4 +320,11 @@ bool TestHardwareBitrateOutput(KVideoEncoderPreference preference)
 			&& control.kbps() > 0 && std::abs(dynamic[nStage].kbps() / control.kbps() - 1) <= .3;
 	}
 	return bPassed;
+}
+
+bool TestHardwareFrequentRates(KVideoEncoderPreference preference)
+{
+	std::array<KResult, 3> frequent, fixed;
+	return Run(preference, "frequent_3_4_mbps", {3000, 3000, 3000}, &frequent, true)
+		&& Run(preference, "fixed_3_mbps", {3000, 3000, 3000}, &fixed);
 }

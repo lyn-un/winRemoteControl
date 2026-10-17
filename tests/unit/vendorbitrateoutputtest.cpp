@@ -12,6 +12,7 @@ extern "C"
 
 bool TestHardwareBitrateOutput(KVideoEncoderPreference preference);
 bool TestHardwareResources(KVideoEncoderPreference preference);
+bool TestHardwareFrequentRates(KVideoEncoderPreference preference);
 bool TestHardwareLevels(KVideoEncoderPreference preference, bool bStartupRates);
 
 int main(int nArgc, char **pArgv)
@@ -22,10 +23,14 @@ int main(int nArgc, char **pArgv)
 	if (application.arguments().contains(QStringLiteral("--verbose")))
 		av_log_set_level(AV_LOG_VERBOSE);
 	const QString strBackend = application.arguments().value(1);
-	if (strBackend != QStringLiteral("h264_qsv") && strBackend != QStringLiteral("h264_amf"))
+	if (strBackend != QStringLiteral("h264_qsv") && strBackend != QStringLiteral("h264_amf")
+		&& strBackend != QStringLiteral("h264_nvenc"))
 		return 1;
 	const bool bAmf = strBackend == QStringLiteral("h264_amf");
-	const UINT nVendorId = bAmf ? 0x1002 : 0x8086;
+	const bool bNvenc = strBackend == QStringLiteral("h264_nvenc");
+	const UINT nVendorId = bNvenc ? 0x10de : (bAmf ? 0x1002 : 0x8086);
+	const KVideoEncoderPreference preference = bNvenc ? NvencVideoEncoderPreference
+		: (bAmf ? AmfVideoEncoderPreference : QuickSyncVideoEncoderPreference);
 	Microsoft::WRL::ComPtr<IDXGIFactory1> spFactory;
 	if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&spFactory))))
 		return 1;
@@ -52,7 +57,7 @@ int main(int nArgc, char **pArgv)
 	}
 	if (!bFound)
 	{
-		KH264Encoder encoder(bAmf ? AmfVideoEncoderPreference : QuickSyncVideoEncoderPreference);
+		KH264Encoder encoder(preference);
 		QString strError;
 		if (encoder.openStream(320, 240, 30, 1000, [](const QByteArray &) {}, &strError))
 		{
@@ -67,8 +72,9 @@ int main(int nArgc, char **pArgv)
 	const HRESULT hCom = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 	if (FAILED(hCom))
 		return 1;
-	const KVideoEncoderPreference preference = bAmf ? AmfVideoEncoderPreference : QuickSyncVideoEncoderPreference;
-	const bool bPassed = application.arguments().contains(QStringLiteral("--resources"))
+	const bool bPassed = application.arguments().contains(QStringLiteral("--frequent-rates"))
+		? TestHardwareFrequentRates(preference)
+		: application.arguments().contains(QStringLiteral("--resources"))
 		? TestHardwareResources(preference)
 		: application.arguments().contains(QStringLiteral("--levels"))
 			|| application.arguments().contains(QStringLiteral("--startup-rates"))

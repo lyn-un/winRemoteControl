@@ -1464,7 +1464,7 @@ if(WRC_BUILD_TESTS)
 		RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
 	target_include_directories(wrc_vendor_bitrate_output_tests PRIVATE "${FFMPEG_ROOT}/include")
 	target_link_libraries(wrc_vendor_bitrate_output_tests PRIVATE wrc_webrtc_adapter Qt6::Core dxgi ole32 psapi)
-	foreach(backend IN ITEMS qsv amf)
+	foreach(backend IN ITEMS qsv amf nvenc)
 		add_test(NAME wrc_${backend}_bitrate_output_tests COMMAND wrc_vendor_bitrate_output_tests h264_${backend})
 		set_tests_properties(wrc_${backend}_bitrate_output_tests PROPERTIES
 			SKIP_RETURN_CODE 77 TIMEOUT 240 LABELS "vendor-hardware")
@@ -1954,6 +1954,11 @@ if(WRC_VERIFY_PRODUCTION_RUNTIME)
 endif()
 
 if(WRC_BUILD_RESOURCE_DIAGNOSTICS)
+	add_executable(wrc_auto_encoder_probe tools/diagnostics/autoencoderprobe.cpp)
+	target_include_directories(wrc_auto_encoder_probe PRIVATE "${FFMPEG_ROOT}/include")
+	target_link_libraries(wrc_auto_encoder_probe PRIVATE wrc_ffmpeg_adapter Qt6::Core ole32)
+	set_target_properties(wrc_auto_encoder_probe PROPERTIES
+		RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/diagnostics/Release")
 	add_executable(wrc_capture_resource_probe
 		tools/diagnostics/captureresourceprobe.cpp
 		tools/diagnostics/resourceprobecommon.h)
