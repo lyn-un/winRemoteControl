@@ -1,10 +1,11 @@
-#include "codec/h264encoder.h"
+#include "h264hardwarebitratetest.h"
 
 extern "C"
 {
 #include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
 #include <libavutil/video_enc_params.h>
+#include <libavutil/opt.h>
 }
 
 #include <QtCore/QCoreApplication>
@@ -17,6 +18,10 @@ extern "C"
 #include <limits>
 #include <set>
 #include <vector>
+#include <atomic>
+#include <cstdarg>
+#include <cstdio>
+#include <cstring>
 
 class KH264EncoderTestAccess
 {
@@ -32,6 +37,27 @@ constexpr int kHeight = 720;
 constexpr int kFps = 30;
 constexpr int kStageFrames = 300;
 constexpr int kWarmup = 60;
+
+std::atomic<int> gs_nReconfigurationErrors = 0;
+
+void HardwareLog(void *pContext, int nLevel, const char *pFormat, va_list arguments)
+{
+	char message[2048] = {};
+	va_list copy;
+	va_copy(copy, arguments);
+	std::vsnprintf(message, sizeof(message), pFormat, copy);
+	va_end(copy);
+	if (std::strstr(message, "failed to reconfigure nvenc"))
+		++gs_nReconfigurationErrors;
+	av_log_default_callback(pContext, nLevel, pFormat, arguments);
+}
+
+class KHardwareLogScope
+{
+public:
+	KHardwareLogScope() { gs_nReconfigurationErrors = 0; av_log_set_callback(HardwareLog); }
+	~KHardwareLogScope() { av_log_set_callback(av_log_default_callback); }
+};
 
 struct KResult
 {
@@ -169,13 +195,15 @@ private:
 };
 
 bool Run(KVideoEncoderPreference preference, const char *pName, std::array<int, 3> rates,
-	std::array<KResult, 3> *pResults, bool bFrequentUpdates = false)
+	std::array<KResult, 3> *pResults, bool bFrequentUpdates = false,
+	KNvencReconfiguration configuration = {}, bool bKeyframePolicy = false, std::vector<int> *pIdrPts = nullptr)
 {
+	KHardwareLogScope logScope;
 	KReferenceDecoder decoder;
 	bool bDecoded = decoder.open();
 	std::array<std::uint64_t, kStageFrames * 3> packetBytes{};
 	std::vector<qint64> costs;
-	KH264Encoder encoder(preference);
+	KH264Encoder encoder(preference, configuration);
 	QString strError;
 	if (!bDecoded || !encoder.openStream(kWidth, kHeight, kFps, rates[0],
 		[&](const QByteArray &packet)
@@ -194,9 +222,11 @@ bool Run(KVideoEncoderPreference preference, const char *pName, std::array<int, 
 	std::vector<unsigned char> luma(kWidth * kHeight), chroma(kWidth * kHeight / 4, 128);
 	for (int nFrame = 0; nFrame < kStageFrames * 3; ++nFrame)
 	{
-		if (bFrequentUpdates && nFrame % kFps == 0)
+		if (bKeyframePolicy && (nFrame == 47 || nFrame == 113))
+			encoder.setBitrateKbps(nFrame == 47 ? 4000 : 3000);
+		else if (bFrequentUpdates && nFrame % kFps == 0)
 			encoder.setBitrateKbps((nFrame / kFps) % 2 ? 4000 : 3000);
-		else if (!bFrequentUpdates && nFrame % kStageFrames == 0)
+		else if (!bFrequentUpdates && !bKeyframePolicy && nFrame % kStageFrames == 0)
 			encoder.setBitrateKbps(rates[nFrame / kStageFrames]);
 		if (KH264EncoderTestAccess::context(encoder) != pOriginal)
 			return false;
@@ -206,7 +236,8 @@ bool Run(KVideoEncoderPreference preference, const char *pName, std::array<int, 
 		QElapsedTimer encodeTimer;
 		encodeTimer.start();
 		if (!encoder.encodeI420Frame(luma.data(), kWidth, chroma.data(), kWidth / 2,
-			chroma.data(), kWidth / 2, kWidth, kHeight, 1000 + nFrame * 1000LL / kFps, nFrame == 0, &strError)
+			chroma.data(), kWidth / 2, kWidth, kHeight, 1000 + nFrame * 1000LL / kFps,
+			nFrame == 0 || (bKeyframePolicy && nFrame == 179), &strError)
 			|| !bDecoded)
 		{
 			std::cerr << pName << " frame=" << nFrame << " error=" << strError.toStdString() << '\n';
@@ -216,11 +247,31 @@ bool Run(KVideoEncoderPreference preference, const char *pName, std::array<int, 
 	}
 	if (!encoder.close(&strError) || !bDecoded || !decoder.submit(nullptr) || !decoder.complete())
 		return false;
+	if (gs_nReconfigurationErrors != 0)
+	{
+		std::cerr << "NVENC reconfiguration API failed count=" << gs_nReconfigurationErrors << std::endl;
+		return false;
+	}
+	if (pIdrPts)
+		*pIdrPts = decoder.keyFrames;
 	std::cout << pName << " decodedFrames=900 rebuilds=0 profile=" << decoder.profile()
 		<< " level=" << decoder.level() << " idrPts=";
 	for (const int nPts : decoder.keyFrames)
 		std::cout << nPts << ',';
 	std::cout << std::endl;
+	for (int nSwitch : {300, 600})
+	{
+		std::uint64_t nFirst100Ms = 0, nFirstSecond = 0;
+		for (int nOffset = 0; nOffset < kFps; ++nOffset)
+		{
+			nFirstSecond += packetBytes[nSwitch + nOffset];
+			if (nOffset < 3)
+				nFirst100Ms += packetBytes[nSwitch + nOffset];
+		}
+		std::cout << pName << " transitionPts=" << nSwitch
+			<< " first100MsKbps=" << nFirst100Ms * 8.0 / 100
+			<< " firstSecondKbps=" << nFirstSecond * 8.0 / 1000 << std::endl;
+	}
 	std::sort(costs.begin(), costs.end());
 	std::uint64_t nPeak100Ms = 0, nPeak1S = 0;
 	for (size_t nStart = 0; nStart < packetBytes.size(); ++nStart)
@@ -261,13 +312,17 @@ bool Run(KVideoEncoderPreference preference, const char *pName, std::array<int, 
 	return true;
 }
 
-bool TestRepeatedRateChanges(KVideoEncoderPreference preference)
+bool TestRepeatedRateChanges(KVideoEncoderPreference preference, KNvencReconfiguration configuration)
 {
-	KH264Encoder encoder(preference);
+	KHardwareLogScope logScope;
+	KH264Encoder encoder(preference, configuration);
 	QString strError;
 	std::set<std::int64_t> outputPts;
 	if (!encoder.openStream(320, 240, 30, 1000, [](const QByteArray &) {}, &strError))
+	{
+		std::cerr << "Rate regression initialization failed: " << strError.toStdString() << std::endl;
 		return false;
+	}
 	encoder.setPacketCallback([&](const QByteArray &, std::int64_t nPts) { outputPts.insert(nPts); });
 	const auto *pOriginal = KH264EncoderTestAccess::context(encoder);
 	const int nInitialBufferBits = pOriginal->rc_buffer_size;
@@ -292,22 +347,22 @@ bool TestRepeatedRateChanges(KVideoEncoderPreference preference)
 			return false;
 		}
 	}
-	if (!encoder.close(&strError) || outputPts.size() != 200)
+	if (!encoder.close(&strError) || outputPts.size() != 200 || gs_nReconfigurationErrors != 0)
 		return false;
 	std::cout << "rateRegression updates=200 rebuilds=0 inputKeyframeRequests=1 outputFrames=200" << std::endl;
 	return true;
 }
 }
 
-bool TestHardwareBitrateOutput(KVideoEncoderPreference preference)
+bool TestHardwareBitrateOutput(KVideoEncoderPreference preference, KNvencReconfiguration configuration)
 {
 	std::cout << "FFmpeg=" << av_version_info() << std::endl;
-	if (preference != MediaFoundationVideoEncoderPreference && !TestRepeatedRateChanges(preference))
+	if (preference != MediaFoundationVideoEncoderPreference && !TestRepeatedRateChanges(preference, configuration))
 		return false;
 	std::array<KResult, 3> dynamic, low, high;
-	if (!Run(preference, "dynamic", {1000, 6000, 1000}, &dynamic)
-		|| !Run(preference, "fixed_low", {1000, 1000, 1000}, &low)
-		|| !Run(preference, "fixed_high", {6000, 6000, 6000}, &high))
+	if (!Run(preference, "dynamic", {1000, 6000, 1000}, &dynamic, false, configuration)
+		|| !Run(preference, "fixed_low", {1000, 1000, 1000}, &low, false, configuration)
+		|| !Run(preference, "fixed_high", {6000, 6000, 6000}, &high, false, configuration))
 		return false;
 	bool bPassed = dynamic[1].kbps() >= 2 * dynamic[0].kbps()
 		&& dynamic[2].kbps() <= .6 * dynamic[1].kbps()
@@ -322,9 +377,30 @@ bool TestHardwareBitrateOutput(KVideoEncoderPreference preference)
 	return bPassed;
 }
 
-bool TestHardwareFrequentRates(KVideoEncoderPreference preference)
+bool TestHardwareFrequentRates(KVideoEncoderPreference preference, KNvencReconfiguration configuration)
 {
 	std::array<KResult, 3> frequent, fixed;
-	return Run(preference, "frequent_3_4_mbps", {3000, 3000, 3000}, &frequent, true)
-		&& Run(preference, "fixed_3_mbps", {3000, 3000, 3000}, &fixed);
+	return Run(preference, "frequent_3_4_mbps", {3000, 3000, 3000}, &frequent, true, configuration)
+		&& Run(preference, "fixed_3_mbps", {3000, 3000, 3000}, &fixed, false, configuration);
+}
+
+bool TestNvencKeyframePolicy(KNvencReconfiguration configuration)
+{
+	std::array<KResult, 3> results;
+	std::vector<int> idrPts;
+	if (!Run(NvencVideoEncoderPreference, "non_gop_updates", {3000, 3000, 3000}, &results,
+		false, configuration, true, &idrPts))
+		return false;
+	const auto contains = [&](int nPts) { return std::find(idrPts.begin(), idrPts.end(), nPts) != idrPts.end(); };
+	AVCodecContext *pProbe = avcodec_alloc_context3(avcodec_find_encoder_by_name("h264_nvenc"));
+	if (!pProbe)
+		return false;
+	const bool bPatched = av_opt_find(pProbe->priv_data, "bitrate-reconfig-reset", nullptr, 0, 0)
+		&& av_opt_find(pProbe->priv_data, "bitrate-reconfig-idr", nullptr, 0, 0);
+	avcodec_free_context(&pProbe);
+	// FFmpeg enables PTD; the SDK specifies that resetEncoder also forces an IDR in this mode.
+	const bool bExpectedRateIdr = configuration.bOverride
+		? configuration.bReset || configuration.bForceIdr : !bPatched;
+	return contains(0) && contains(179) && contains(239) && contains(299)
+		&& contains(47) == bExpectedRateIdr && contains(113) == bExpectedRateIdr;
 }

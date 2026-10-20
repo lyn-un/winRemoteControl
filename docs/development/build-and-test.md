@@ -9,6 +9,33 @@
 切换和固定3 Mbps，记录IDR、100ms/1s滑动媒体码率峰值及提交耗时。后者不是实时网络
 吞吐测试，峰值也不是网卡瞬时流量。NVENC重配置允许额外IDR，实例不得重建。
 
+### NVENC 重配置组合对照
+
+补丁版依赖增加两个独立AVOption，库默认均为1；应用检测到选项后默认设置0/0，
+旧库缺少选项则记录原因并保持库默认。硬件测试程序接受
+`--nvenc-reconfig-reset=0|1 --nvenc-reconfig-idr=0|1`，两项必须一起指定，
+只用于`h264_nvenc`的严格码率、`--frequent-rates`或`--keyframe-policy`测试。
+重复参数、非法值、其他后端或与资源/等级测试混用返回2。主程序没有新增命令行参数。
+
+```powershell
+$env:PATH = (Resolve-Path build/Release).Path + ';' + $env:PATH
+$env:WRC_RUN_VENDOR_BITRATE_TEST = '1'
+build/cmake-release/tests/Release/wrc_vendor_bitrate_output_tests.exe h264_nvenc --keyframe-policy --nvenc-reconfig-reset=0 --nvenc-reconfig-idr=0
+pwsh -File tools/ffmpeg/benchmark-nvenc-reconfiguration.ps1
+```
+
+组合脚本使用同一套DLL，默认各重复三次1/1、1/0、0/0的严格码率、高频更新和关键帧测试，
+结果及输入哈希写入`build/nvenc-reconfiguration/`。不采集桌面、不注入输入。
+关键帧测试在第47、113帧更新码率，第179帧显式请求IDR；解析Annex-B NAL及PTS，
+检查连续900帧解码与实例不重建。默认CTest另登记四种组合的关键帧测试，硬件门禁关闭时跳过。
+当前FFmpeg开启PTD，SDK规定reset本身也强制IDR，因此1/1、1/0、0/1均预期在更新点产生IDR，
+0/0预期没有这两个附加IDR；第179帧显式请求及后续周期IDR在四组中都必须保留。
+严格码率沿用1→6→1 Mbps与固定对照门槛；新增阶段切换后100ms/1秒输出统计，
+不会用丢弃过渡帧后的稳定均值替代响应时间。NVENC测试将重配置错误日志视为失败。
+AVOption成功只证明选项已设置，GPU实效仍须看码率、IDR及解码结果。
+
+实现和硬件验证状态见[厂商构建记录](ffmpeg-vendor-build.md#nvenc-重配置选项)。
+
 2026-10-16：普通Release全量构建、默认CTest（67通过/11跳过/0失败）、NVIDIA严格码率、
 六组启动/SPS及auto探针通过；双机1440p持续600秒及独立停止/重连验证完成。QSV严格
 回归和反向短会话、AMF六组启动回归通过。频繁IDR画质代价、每次生命周期约2个句柄

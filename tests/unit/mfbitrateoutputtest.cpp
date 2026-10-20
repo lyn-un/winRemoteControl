@@ -1,11 +1,9 @@
-#include "codec/h264encoder.h"
+#include "h264hardwarebitratetest.h"
 #include <QtCore/QCoreApplication>
 #include <iostream>
 #include <windows.h>
 #include <mfapi.h>
 #include <mfidl.h>
-
-bool TestHardwareBitrateOutput(KVideoEncoderPreference preference);
 
 int main(int nArgc, char **pArgv)
 {

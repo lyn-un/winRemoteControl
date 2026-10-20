@@ -1,5 +1,41 @@
 # FFmpeg 厂商后端构建与验收状态
 
+## NVENC 重配置选项
+
+`nvenc-bitrate-reconfiguration.patch`为固定基线`239f2c733d`增加两个H.264私有AVOption：
+`bitrate-reconfig-reset`与`bitrate-reconfig-idr`，布尔值0/1、默认1/1。
+只影响纯码率参数组更新；HEVC/AV1、DAR与码率同时更新保留上游策略。
+既有`forced-idr`不变。补丁不新增公共ABI，不改变动态码率能力判断及编码器选择。
+
+固定SDK头文件注明`resetEncoder`只应与IDR一起使用；当`enablePTD=1`时，reset会强制IDR。
+FFmpeg使用PTD，因此`1/0`只作行为对照，不能宣称其不产生IDR；无附加IDR候选为`0/0`。
+
+新补丁、定向测试加入构建fingerprint，构建脚本严格应用补丁，保存补丁SHA256和完整DLL清单。
+同一次构建可测试不同组合，无需逐组合重编第三方库。
+`test-nvenc-reconfiguration.sh <patched-source>`提取完整`reconfig_encoder()`，
+使用记录型SDK桩覆盖384种组合：三编码类型、两标志、DAR/码率变化、动态能力、
+CONSTQP、成功/失败及重复目标。它验证分支参数，不代表硬件验收。
+`vendor-probe.c`另检查两个AVOption的默认值、合法组合、非法值和未知选项；不打开GPU。
+
+应用检测两个选项均存在时默认使用0/0，FFmpeg自身AVOption默认仍为1/1。
+旧库缺少选项时记录`options_unavailable`并沿用库默认；显式策略仍必须成功设置。
+显式策略通过`KNvencReconfiguration`按实例传入，
+只允许手动NVENC，设置选项失败即初始化失败。测试程序捕获FFmpeg重配置失败日志，
+不把API调用或目标字段更新当作实际输出证明。
+上游失败分支仅记录日志，且配置指针与内部状态共享，本补丁未修复该独立错误恢复限制。
+
+2026-10-20：补丁构建`831c4523b516b3cd`完成；本机RTX4060 Laptop上三种主要组合各三轮，
+严格码率/高频更新/非GOP关键帧共27项通过，0/1另行通过。reset在PTD下隐式IDR的行为已实测确认。
+0/0减少附加IDR并提高本合成场景PSNR，但1秒输出峰值和降码率首秒超调上升；
+应用默认选择0/0，不能宣称所有突发指标都优化。详细本机数据保留于本机忽略的performance-baseline.md。
+旧DLL默认兼容与显式策略拒绝通过，普通Release全量构建及完整CTest通过：67通过、15跳过、0失败。
+真实输入关闭；NVENC/AMF启动、远端Intel QSV严格码率/启动回归通过。9个厂商DLL部署哈希匹配。
+原生双向帧推进、720p/1440p、停止及重连完成；未人工比较主观画质，其他NVIDIA型号/驱动未验收。
+断开时既有状态错误未修复；复用隔离测试配置出现签名校验错误，新的隔离配置完成测试，
+冷启动持久化需另查，不将其归因于本编码补丁，也不声称真实配置已验收。
+此前历史记录仍按原日期解释。
+测试方法见[组合对照](build-and-test.md#nvenc-重配置组合对照)。
+
 ## NVENC 应用接入（2026-10-16）
 
 复用现有 `abb8e70a1c7802e6` DLL，无新增FFmpeg补丁。应用增加显式NVENC及auto候选、

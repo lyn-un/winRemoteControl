@@ -216,6 +216,11 @@ bool TestBitrateParameterBounds()
 
 bool TestH264BitrateOutput()
 {
+	KH264Encoder incompatible(LibX264VideoEncoderPreference, {true, false, false});
+	QString strError;
+	if (incompatible.openStream(320, 240, 30, 1000, [](const QByteArray &) {}, &strError)
+		|| incompatible.isOpen() || !strError.contains(QStringLiteral("requires the NVENC backend")))
+		return false;
 	std::array<KStageResult, 3> dynamic, low, high;
 	if (!RunSequence("dynamic", {1000, 6000, 1000}, &dynamic)
 		|| !RunSequence("fixed_low", {1000, 1000, 1000}, &low)

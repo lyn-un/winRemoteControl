@@ -1476,6 +1476,15 @@ if(WRC_BUILD_TESTS)
 			SKIP_RETURN_CODE 77 TIMEOUT 120 LABELS "vendor-hardware")
 	endforeach()
 
+	foreach(policy IN ITEMS 11 10 00 01)
+		string(SUBSTRING "${policy}" 0 1 reset)
+		string(SUBSTRING "${policy}" 1 1 idr)
+		add_test(NAME wrc_nvenc_reconfiguration_${policy}_tests COMMAND wrc_vendor_bitrate_output_tests
+			h264_nvenc --keyframe-policy --nvenc-reconfig-reset=${reset} --nvenc-reconfig-idr=${idr})
+		set_tests_properties(wrc_nvenc_reconfiguration_${policy}_tests PROPERTIES
+			SKIP_RETURN_CODE 77 TIMEOUT 240 LABELS "vendor-hardware")
+	endforeach()
+
 	add_executable(wrc_webrtc_remote_frame_processor_tests
 		tests/unit/webrtcremoteframeprocessortest.cpp
 		src/common/framewatermark.cpp
