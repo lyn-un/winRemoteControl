@@ -17,7 +17,9 @@ $inputs = @($lockFile, "$PSScriptRoot/build-vendor.ps1", "$PSScriptRoot/build-ve
     "$PSScriptRoot/amf-dynamic-bitrate.patch", "$PSScriptRoot/vendor-probe.c",
     "$PSScriptRoot/test-amf-rate-update.c", "$PSScriptRoot/test-amf-rate-update.sh",
     "$PSScriptRoot/qsv-optional-config-interface.patch",
-    "$PSScriptRoot/test-qsv-config-interface.c", "$PSScriptRoot/test-qsv-config-interface.sh")
+    "$PSScriptRoot/test-qsv-config-interface.c", "$PSScriptRoot/test-qsv-config-interface.sh",
+    "$PSScriptRoot/nvenc-bitrate-reconfiguration.patch",
+    "$PSScriptRoot/test-nvenc-reconfiguration.c", "$PSScriptRoot/test-nvenc-reconfiguration.sh")
 $fingerprint = ($inputs | ForEach-Object { (Get-FileHash $_).Hash }) -join ':'
 $fingerprint += ':' + (& "$MsysRoot/ucrt64/bin/gcc.exe" -dumpfullversion)
 $hash = [System.Security.Cryptography.SHA256]::Create()

@@ -21,6 +21,7 @@ if ! test -f "$SOURCE/.prepared"; then
     if test "$MODE" = patched; then
         (cd "$SOURCE" && patch --batch --fuzz=0 -p1 < "$ROOT/tools/ffmpeg/amf-dynamic-bitrate.patch")
         (cd "$SOURCE" && patch --batch --fuzz=0 -p1 < "$ROOT/tools/ffmpeg/qsv-optional-config-interface.patch")
+        (cd "$SOURCE" && patch --batch --fuzz=0 -p1 < "$ROOT/tools/ffmpeg/nvenc-bitrate-reconfiguration.patch")
     fi
     # MF must be byte-identical to the clean upstream source.
     cmp "$SOURCE/libavcodec/mfenc.c" "$WORK/sources/ffmpeg/libavcodec/mfenc.c"
@@ -29,6 +30,7 @@ fi
 if test "$MODE" = patched; then
     bash "$ROOT/tools/ffmpeg/test-amf-rate-update.sh" "$SOURCE"
     bash "$ROOT/tools/ffmpeg/test-qsv-config-interface.sh" "$SOURCE"
+    bash "$ROOT/tools/ffmpeg/test-nvenc-reconfiguration.sh" "$SOURCE"
 fi
 mkdir -p "$WORK/x264-build" "$WORK/ffmpeg-build-$MODE" "$WORK/deps/include/AMF"
 cp -R "$WORK/sources/amf/amf/public/include/"* "$WORK/deps/include/AMF/"
@@ -75,6 +77,7 @@ cp "$ROOT/tools/ffmpeg/vendor-dependencies.json" config.h config_components.h ff
 if test "$MODE" = patched; then
     cp "$ROOT/tools/ffmpeg/amf-dynamic-bitrate.patch" "$PREFIX/"
     cp "$ROOT/tools/ffmpeg/qsv-optional-config-interface.patch" "$PREFIX/"
+    cp "$ROOT/tools/ffmpeg/nvenc-bitrate-reconfiguration.patch" "$PREFIX/"
 fi
 {
     echo "fingerprint=$KEY mode=$MODE mf_patch=none"
@@ -83,6 +86,7 @@ fi
     sha256sum "$ROOT/tools/ffmpeg/vendor-dependencies.json"
     if test "$MODE" = patched; then sha256sum "$PREFIX/amf-dynamic-bitrate.patch"; fi
     if test "$MODE" = patched; then sha256sum "$PREFIX/qsv-optional-config-interface.patch"; fi
+    if test "$MODE" = patched; then sha256sum "$PREFIX/nvenc-bitrate-reconfiguration.patch"; fi
     sha256sum "$PREFIX"/bin/*.dll
 } > "$PREFIX/wrc-build-manifest.txt"
 gcc "$ROOT/tools/ffmpeg/vendor-probe.c" -I"$PREFIX/include" -L"$PREFIX/lib" \

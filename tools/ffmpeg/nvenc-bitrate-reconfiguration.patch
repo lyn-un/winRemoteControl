@@ -1,0 +1,41 @@
+diff --git a/libavcodec/nvenc.h b/libavcodec/nvenc.h
+--- a/libavcodec/nvenc.h
++++ b/libavcodec/nvenc.h
+@@ -278,6 +278,8 @@ typedef struct NvencContext
+     int aq;
+     int no_scenecut;
+     int forced_idr;
++    int bitrate_reconfig_reset;
++    int bitrate_reconfig_idr;
+     int b_adapt;
+     int temporal_aq;
+     int zerolatency;
+diff --git a/libavcodec/nvenc_h264.c b/libavcodec/nvenc_h264.c
+--- a/libavcodec/nvenc_h264.c
++++ b/libavcodec/nvenc_h264.c
+@@ -147,6 +147,10 @@ static const AVOption options[] = {
+                                                             OFFSET(no_scenecut),  AV_OPT_TYPE_BOOL,  { .i64 = 0 }, 0,  1, VE },
+     { "forced-idr",   "If forcing keyframes, force them as IDR frames.",
+                                                             OFFSET(forced_idr),   AV_OPT_TYPE_BOOL,  { .i64 = 0 }, -1, 1, VE },
++    { "bitrate-reconfig-reset", "Reset rate-control state on bitrate-only reconfiguration",
++                                      OFFSET(bitrate_reconfig_reset), AV_OPT_TYPE_BOOL, { .i64 = 1 }, 0, 1, VE },
++    { "bitrate-reconfig-idr", "Force an IDR on bitrate-only reconfiguration",
++                                      OFFSET(bitrate_reconfig_idr),   AV_OPT_TYPE_BOOL, { .i64 = 1 }, 0, 1, VE },
+     { "b_adapt",      "When lookahead is enabled, set this to 0 to disable adaptive B-frame decision",
+                                                             OFFSET(b_adapt),      AV_OPT_TYPE_BOOL,  { .i64 = 1 }, 0,  1, VE },
+     { "spatial-aq",   "set to 1 to enable Spatial AQ",      OFFSET(aq),           AV_OPT_TYPE_BOOL,  { .i64 = 0 }, 0,  1, VE },
+diff --git a/libavcodec/nvenc.c b/libavcodec/nvenc.c
+--- a/libavcodec/nvenc.c
++++ b/libavcodec/nvenc.c
+@@ -3005,6 +3005,11 @@ static void reconfig_encoder(AVCodecContext *avctx, const AVFrame *frame)
+         if (reconfig_bitrate) {
+             params.resetEncoder = 1;
+             params.forceIDR = 1;
++            /* Other codecs and mixed DAR/rate updates keep the upstream policy. */
++            if (avctx->codec_id == AV_CODEC_ID_H264 && !reconfig_dar) {
++                params.resetEncoder = ctx->bitrate_reconfig_reset;
++                params.forceIDR = ctx->bitrate_reconfig_idr;
++            }
+ 
+             needs_encode_config = 1;
+             needs_reconfig = 1;
