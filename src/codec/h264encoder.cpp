@@ -175,8 +175,9 @@ namespace
 	}
 }
 
-KH264Encoder::KH264Encoder(KVideoEncoderPreference preference)
+KH264Encoder::KH264Encoder(KVideoEncoderPreference preference, KNvencReconfiguration nvencReconfiguration)
 	: m_preference(preference)
+	, m_nvencReconfiguration(nvencReconfiguration)
 {
 }
 
@@ -216,6 +217,12 @@ bool KH264Encoder::openStream(int nWidth,
 	{
 		if (pErrorMessage != nullptr)
 			*pErrorMessage = QStringLiteral("H.264 stream callback is empty");
+		return false;
+	}
+	if (m_nvencReconfiguration.bOverride && m_preference != NvencVideoEncoderPreference)
+	{
+		if (pErrorMessage)
+			*pErrorMessage = QStringLiteral("Explicit NVENC reconfiguration requires the NVENC backend");
 		return false;
 	}
 
@@ -684,6 +691,39 @@ bool KH264Encoder::openCodec(const char *pCodecName, bool bHardware, QString *pE
 			{ "rc-lookahead", "0" }, { "zerolatency", "1" }, { "delay", "0" }, { "forced-idr", "1" }
 		};
 		const auto *pOptions = bNvenc ? nvencOptions : (bAmf ? amfOptions : qsvOptions);
+		const bool bNvencPolicySupported = bNvenc
+			&& av_opt_find(m_pCodecContext->priv_data, "bitrate-reconfig-reset", nullptr, 0, 0)
+			&& av_opt_find(m_pCodecContext->priv_data, "bitrate-reconfig-idr", nullptr, 0, 0);
+		if (bNvenc && (m_nvencReconfiguration.bOverride || bNvencPolicySupported))
+		{
+			const bool bReset = m_nvencReconfiguration.bOverride ? m_nvencReconfiguration.bReset : false;
+			const bool bForceIdr = m_nvencReconfiguration.bOverride ? m_nvencReconfiguration.bForceIdr : false;
+			const std::pair<const char *, int> reconfigurationOptions[] = {
+				{ "bitrate-reconfig-reset", bReset },
+				{ "bitrate-reconfig-idr", bForceIdr }
+			};
+			for (const auto &option : reconfigurationOptions)
+			{
+				const int nResult = av_opt_set_int(m_pCodecContext->priv_data, option.first, option.second, 0);
+				if (nResult < 0)
+				{
+					if (pErrorMessage)
+						*pErrorMessage = ffmpegErrorMessage(QStringLiteral("Set NVENC option %1 failed")
+							.arg(QString::fromLatin1(option.first)), nResult);
+					avcodec_free_context(&m_pCodecContext);
+					return false;
+				}
+			}
+			KSessionTraceLogger::write(QStringLiteral("controlled"), QStringLiteral("nvenc_reconfiguration_policy"),
+				QStringLiteral("reset=%1 forceIdr=%2 source=%3 apiAcceptedNotMeasured=1")
+					.arg(bReset).arg(bForceIdr).arg(m_nvencReconfiguration.bOverride
+						? QStringLiteral("explicit") : QStringLiteral("project_default")));
+		}
+		else if (bNvenc)
+		{
+			KSessionTraceLogger::write(QStringLiteral("controlled"), QStringLiteral("nvenc_reconfiguration_policy"),
+				QStringLiteral("reset=1 forceIdr=1 source=library_default reason=options_unavailable"));
+		}
 		const size_t nOptionCount = bNvenc ? std::size(nvencOptions) : (bAmf ? std::size(amfOptions) : std::size(qsvOptions));
 		for (size_t nIndex = 0; nIndex < nOptionCount; ++nIndex)
 		{

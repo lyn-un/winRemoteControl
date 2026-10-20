@@ -15,6 +15,13 @@ struct AVFrame;
 struct AVPacket;
 struct SwsContext;
 
+struct KNvencReconfiguration
+{
+	bool bOverride = false;
+	bool bReset = true;
+	bool bForceIdr = true;
+};
+
 class KH264Encoder
 {
 public:
@@ -22,7 +29,8 @@ public:
 	using PacketCallback = std::function<void(const QByteArray &, std::int64_t)>;
 
 	explicit KH264Encoder(
-		KVideoEncoderPreference preference = AutoVideoEncoderPreference);
+		KVideoEncoderPreference preference = AutoVideoEncoderPreference,
+		KNvencReconfiguration nvencReconfiguration = {});
 	~KH264Encoder();
 
 	KH264Encoder(const KH264Encoder &) = delete;
@@ -93,6 +101,7 @@ private:
 	int m_nLevelLimit = 0;
 	KVideoEncoderPreference m_preference = AutoVideoEncoderPreference;
 	KVideoEncoderCandidate m_candidate;
+	KNvencReconfiguration m_nvencReconfiguration;
 };
 
 #endif // _WINREMOTECONTROL_H264ENCODER_H_

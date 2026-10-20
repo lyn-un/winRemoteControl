@@ -6,6 +6,12 @@ session trace的 `ffmpeg_error`，保留库格式化的上下文和错误文本�
 包含解码错误，不能仅凭事件role认定发送编码故障。不记录帧数据或逐帧成功信息。
 NVENC重配置失败由此留痕，但公共API没有逐次成功确认，不能声称applied。
 
+NVENC初始化阶段增加一次`nvenc_reconfiguration_policy`，字段为`reset`、`forceIdr`、
+`source=explicit|project_default`、
+`apiAcceptedNotMeasured=1`。此事件只证明两个AVOption成功设置，不证明运行时硬件接受了
+后续码率；旧库没有选项时记录`source=library_default reason=options_unavailable`并沿用1/1。
+默认策略不额外逐帧记录，不新增画面或输入数据日志。主程序没有新增策略命令行参数。
+
 ## 视频低帧率和模糊诊断（无需 latency trace）
 
 默认编码器选择由 session trace 的 `encoder_adapter`、`encoder_candidate`、
