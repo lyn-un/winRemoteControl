@@ -5,6 +5,10 @@
 检查发生在身份初始化与详细 trace 配置之前，不会改写旧身份或信任库。
 有意跨进程复用测试配置时使用 SDK 的 `automation_test_profile=False`。
 
+会话进入 Stopping 后，本地隐私恢复状态不再广播给远端，因此正常收尾不应再因这两条
+`privacyModeState` 通知产生 connected 阶段的 `send_failed`。本地恢复仍有原有
+`privacy_mode_restore` 诊断；真正活动期发送失败仍记录。未增加默认常驻或逐帧日志。
+
 NVENC已增加显式 `--diagnostic-video-encoder=h264_nvenc`，也参与auto的DXGI顺序选择。
 初始化失败按auto规则尝试后续候选，显式模式不回退。FFmpeg错误级消息转发到
 session trace的 `ffmpeg_error`，保留库格式化的上下文和错误文本。全局回调也可能

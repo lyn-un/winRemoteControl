@@ -1,5 +1,22 @@
 # 构建与测试
 
+配置生命周期专项：`wrc_application_paths_tests` 验证临时目录检查及文件保留，
+Python SDK 单测验证启动前拒绝复用；`wrc_device_identity_tests` 使用独立子进程建立、
+重载签名信任库并验证篡改拒绝，最后仅清理本次测试身份。该测试依赖当前用户 Windows CNG。
+`wrc_session_service_tests` 使用 fake peer/隐私适配器模拟结束应答后通道先关闭，覆盖
+隐私启用、禁用、恢复失败及旧 generation 状态，确认本地恢复仍可观察且停止时不广播状态。
+
+进程级专项无需采集或注入输入：
+
+```powershell
+$env:WRC_RUN_E2E = '1'
+$env:WRC_EXECUTABLE = (Resolve-Path 'build/Release/winRemoteControl.exe')
+python -m unittest discover -s automation/tests -p 'test_profile_lifecycle.py' -v
+```
+
+此专项实际重启配对进程，验证持久身份与信任记录、双方主动断开，以及临时配置被拒绝后
+文件哈希保持不变。默认不运行真实遮罩、关屏或锁屏；其他显式测试门禁仍独立控制。
+
 ## NVENC 专项
 
 硬件专项由 `WRC_RUN_VENDOR_BITRATE_TEST=1` 显式启用，默认CTest跳过。

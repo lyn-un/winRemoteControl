@@ -1099,7 +1099,11 @@ KSessionCommandTransmitResult KSessionCoordinator::transmitSessionMessage(
 	KSessionTraceLogger::write(roleToString(m_sessionStateMachine.role()),
 		QStringLiteral("send_failed"), strType, strMessage.toUtf8().size(),
 		QStringLiteral("requestId=%1").arg(message.strRequestId));
-	if (!KSessionMessageCodec::isCommand(message.type))
+	const bool bExpectedStatusClose = m_sessionStateMachine.isStopping()
+		&& status == KRemotePeerTransport::SessionMessageChannelUnavailable
+		&& (message.type == PrivacyModeStateSessionMessageType
+			|| message.type == PostSessionActionStateSessionMessageType);
+	if (!KSessionMessageCodec::isCommand(message.type) && !bExpectedStatusClose)
 	{
 		const KSessionErrorCode errorCode = status
 			== KRemotePeerTransport::SessionMessageQueueOverflow
@@ -2308,11 +2312,22 @@ KProtocolHandlerResult KSessionCoordinator::handlePostSessionActionStateMessage(
 	return KProtocolHandlerResult::success();
 }
 
+bool KSessionCoordinator::canPublishSessionStatus(quint64 nGeneration) const
+{
+	const KSessionState state = m_sessionStateMachine.state();
+	return nGeneration == m_sessionStateMachine.generation()
+		&& m_sessionStateMachine.role() == ControlledSessionRole
+		&& (state == ConnectedSessionState || state == StreamingSessionState
+			|| state == ReconnectingSessionState)
+		&& m_bSessionChannelOpen && m_pCapabilitySessionFlow->isComplete();
+}
+
 void KSessionCoordinator::publishPrivacyModeStatus(const KPrivacyModeStatus &status)
 {
+	if (status.nGeneration != m_sessionStateMachine.generation())
+		return;
 	emit privacyModeStatusChanged(status);
-	if (m_sessionStateMachine.role() != ControlledSessionRole
-		|| !m_bSessionChannelOpen || !m_pCapabilitySessionFlow->isComplete())
+	if (!canPublishSessionStatus(status.nGeneration))
 	{
 		return;
 	}
@@ -2326,9 +2341,10 @@ void KSessionCoordinator::publishPrivacyModeStatus(const KPrivacyModeStatus &sta
 void KSessionCoordinator::publishPostSessionActionStatus(
 	const KPostSessionActionStatus &status)
 {
+	if (status.nGeneration != m_sessionStateMachine.generation())
+		return;
 	emit postSessionActionStatusChanged(status);
-	if (m_sessionStateMachine.role() != ControlledSessionRole
-		|| !m_bSessionChannelOpen || !m_pCapabilitySessionFlow->isComplete())
+	if (!canPublishSessionStatus(status.nGeneration))
 	{
 		return;
 	}

@@ -173,6 +173,7 @@ private:
 	KProtocolHandlerResult handlePostSessionActionStateMessage(const KSessionMessage &message);
 	void publishPrivacyModeStatus(const KPrivacyModeStatus &status);
 	void publishPostSessionActionStatus(const KPostSessionActionStatus &status);
+	bool canPublishSessionStatus(quint64 nGeneration) const;
 	void handleCapabilityTimeout();
 	void completeCapabilityNegotiation(const KNegotiatedCapabilities &capabilities);
 	KSessionCapabilities localCapabilities() const;

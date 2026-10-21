@@ -217,6 +217,9 @@ Access 审批命令，不会绕过身份认证或权限检查。
 该辅助程序默认使用 `build/cmake-release/tests/Release/wrc_device_identity_tests.exe`，
 其他构建位置可通过 `WRC_IDENTITY_TEST_EXECUTABLE` 指定；清理失败会使测试失败。
 
+仅验证配置生命周期、连接和断开时，可运行 `test_profile_lifecycle.py`，沿用
+`WRC_RUN_E2E=1` 门禁。该专项不启动推流、不注入输入，也不启用真实隐私操作。
+
 人工验收时可从仓库根目录运行统一脚本。默认会先复制一份不含 Driver 的临时 Release，
 确认主程序存活且没有发现文件，再运行连接、审批、推流和断开的双进程测试；临时副本、
 隔离 profile 和测试进程会在结束时清理：

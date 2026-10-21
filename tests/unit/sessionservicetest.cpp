@@ -153,7 +153,9 @@ namespace
 		KPrivacyOperationResult restore() override
 		{
 			++nRestoreCount;
-			return KPrivacyOperationResult::success();
+			return bRestoreSucceeds ? KPrivacyOperationResult::success()
+				: KPrivacyOperationResult::failure(QStringLiteral("restore_failed"),
+					QStringLiteral("fake restore failure"));
 		}
 		void setEmergencyRestoreHandler(EmergencyRestoreHandler handler) override
 		{
@@ -162,6 +164,7 @@ namespace
 
 		int nApplyCount = 0;
 		int nRestoreCount = 0;
+		bool bRestoreSucceeds = true;
 		EmergencyRestoreHandler emergencyHandler;
 	};
 
@@ -285,7 +288,10 @@ namespace
 			lastSentSessionMessage = message;
 			sentSessionMessages.append(message);
 			++nSentSessionCount;
-			return sessionSendStatus;
+			const KSessionMessageSendStatus status = sessionSendStatus;
+			if (onSessionSend)
+				onSessionSend(message);
+			return status;
 		}
 
 		void setStreamConfig(const KStreamConfig &config) override
@@ -406,6 +412,7 @@ namespace
 		int nSentSessionCount = 0;
 		int nStreamConfigCount = 0;
 		KSessionMessageSendStatus sessionSendStatus = SessionMessageAccepted;
+		std::function<void(const KSessionMessage &)> onSessionSend;
 		bool bInputRealtimeEnabled = false;
 		bool bOrderedMouseDragEnabled = false;
 		bool bInitializeSucceeds = true;
@@ -457,7 +464,7 @@ namespace
 			});
 	}
 
-	void testControlledSessionWithFakeTransport()
+	void testControlledSessionWithFakeTransport(bool bEnableOverlay = true, bool bRestoreSucceeds = true)
 	{
 		auto spInputInjector = std::make_unique<KFakeInputInjector>();
 		KFakeInputInjector *pInputInjector = spInputInjector.get();
@@ -478,9 +485,11 @@ namespace
 		auto spDisplay = std::make_unique<KFakeDisplayPowerAdapter>();
 		auto spLock = std::make_unique<KFakeWorkstationLockAdapter>();
 		KFakeWorkstationLockAdapter *pLock = spLock.get();
-		service.configurePrivacyServices(
-			std::make_unique<KPrivacyModeService>(std::move(spOverlay), std::move(spDisplay)),
-			std::make_unique<KPostSessionActionService>(std::move(spLock)));
+		auto spPrivacy = std::make_unique<KPrivacyModeService>(std::move(spOverlay), std::move(spDisplay));
+		KPrivacyModeService *pPrivacy = spPrivacy.get();
+		auto spPostSession = std::make_unique<KPostSessionActionService>(std::move(spLock));
+		KPostSessionActionService *pPostSession = spPostSession.get();
+		service.configurePrivacyServices(std::move(spPrivacy), std::move(spPostSession));
 		KApplicationSettings settings;
 		settings.approvalMode = AutoAcceptRemoteApprovalMode;
 		service.applyApplicationSettings(settings);
@@ -593,10 +602,19 @@ namespace
 
 		KSessionMessage privacyCommand;
 		privacyCommand.type = SetPrivacyModeSessionMessageType;
-		privacyCommand.privacyMode = PrivacyOverlayPrivacyMode;
+		privacyCommand.privacyMode = bEnableOverlay ? PrivacyOverlayPrivacyMode : DisabledPrivacyMode;
 		pTransport->deliverSessionMessage(privacyCommand);
-		check(pOverlay->nApplyCount == 1,
+		check(pOverlay->nApplyCount == (bEnableOverlay ? 1 : 0),
 			QStringLiteral("negotiated privacy command applies the controlled overlay"));
+		const int nMessagesBeforeStale = pTransport->nSentSessionCount;
+		KPrivacyModeStatus stalePrivacy = pPrivacy->status();
+		stalePrivacy.nGeneration += 1;
+		emit pPrivacy->statusChanged(stalePrivacy);
+		KPostSessionActionStatus staleAction = pPostSession->status();
+		staleAction.nGeneration += 1;
+		emit pPostSession->statusChanged(staleAction);
+		check(pTransport->nSentSessionCount == nMessagesBeforeStale,
+			QStringLiteral("stale generation privacy and post-session states are not transmitted"));
 		KSessionMessage lockCommand;
 		lockCommand.type = SetPostSessionActionSessionMessageType;
 		lockCommand.postSessionAction = LockWorkstationPostSessionAction;
@@ -649,7 +667,39 @@ namespace
 		KSessionMessage endSession;
 		endSession.type = EndSessionMessageType;
 		endSession.strReason = QStringLiteral("test_end");
+		endSession.strRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+		const int nMessagesBeforeEnd = pTransport->sentSessionMessages.size();
+		int nLocalRestoreStatuses = 0;
+		KPrivacyModeStatus lastRestoreStatus;
+		pOverlay->bRestoreSucceeds = bRestoreSucceeds;
+		QObject::connect(&service, &KSessionCoordinator::privacyModeStatusChanged,
+			[&](const KPrivacyModeStatus &status)
+			{
+				++nLocalRestoreStatuses;
+				lastRestoreStatus = status;
+			});
+		pTransport->onSessionSend = [&](const KSessionMessage &message)
+		{
+			if (message.type == CommandResultSessionMessageType
+				&& message.strRequestId == endSession.strRequestId)
+				pTransport->sessionSendStatus = KRemotePeerTransport::SessionMessageChannelUnavailable;
+		};
 		pTransport->deliverSessionMessage(endSession);
+		pTransport->onSessionSend = {};
+		check(nLocalRestoreStatuses >= 2,
+			QStringLiteral("stopping still publishes local privacy restoration states"));
+		check(bRestoreSucceeds ? lastRestoreStatus.state == InactivePrivacyModeState
+			: lastRestoreStatus.state == FailedPrivacyModeState
+				&& lastRestoreStatus.strErrorCode == QStringLiteral("restore_failed"),
+			QStringLiteral("real local restoration failures remain visible"));
+		check(std::none_of(pTransport->sentSessionMessages.cbegin() + nMessagesBeforeEnd,
+			pTransport->sentSessionMessages.cend(), [](const KSessionMessage &message)
+			{
+				return message.type == PrivacyModeStateSessionMessageType
+					|| message.type == PostSessionActionStateSessionMessageType;
+			}), QStringLiteral("stopping does not broadcast privacy or post-session state"));
+		check(nSessionErrorCount == 1,
+			QStringLiteral("closed channel after end reply does not create a connected-stage error"));
 		check(pOverlay->nRestoreCount > 0,
 			QStringLiteral("final disconnect restores the privacy overlay"));
 		check(pLock->nLockCount == 1,
@@ -1137,6 +1187,8 @@ int main(int argc, char *argv[])
 {
 	QCoreApplication application(argc, argv);
 	testControlledSessionWithFakeTransport();
+	testControlledSessionWithFakeTransport(false);
+	testControlledSessionWithFakeTransport(true, false);
 	testApprovalBeforeOffer();
 	testRecoveryAndSecureRetry();
 	testDenyPolicyRejectsBeforeOffer();
