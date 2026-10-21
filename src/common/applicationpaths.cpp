@@ -7,6 +7,31 @@
 QString KApplicationPaths::s_strDataDirectoryPath;
 bool KApplicationPaths::s_bAutomationTestProfile = false;
 
+bool KApplicationPaths::validateAutomationTestProfile(const QString &strRequestedPath,
+	bool bEnabled, QString *pErrorMessage)
+{
+	if (pErrorMessage != nullptr)
+		pErrorMessage->clear();
+	if (!bEnabled)
+		return true;
+	QString strError;
+	if (strRequestedPath.trimmed().isEmpty())
+		strError = QStringLiteral("automation_profile_required: --automation-test-profile requires an explicit --data-dir");
+	else
+	{
+		const QDir directory(strRequestedPath.trimmed());
+		if (QFileInfo::exists(directory.filePath(QStringLiteral("security/device_identity.json")))
+			|| QFileInfo::exists(directory.filePath(QStringLiteral("security/trusted_devices.json"))))
+		{
+			strError = QStringLiteral("automation_profile_reuse: use a fresh temporary data directory, "
+				"or omit --automation-test-profile for an intentional persistent identity test");
+		}
+	}
+	if (pErrorMessage != nullptr)
+		*pErrorMessage = strError;
+	return strError.isEmpty();
+}
+
 bool KApplicationPaths::configureDataDirectory(const QString &strRequestedPath,
 	QString *pErrorMessage)
 {

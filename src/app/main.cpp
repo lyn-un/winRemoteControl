@@ -55,7 +55,10 @@ int main(int nArgc, char *pArgv[])
 	const KHdrConversionMode hdrMode = strHdrMode == QStringLiteral("cpu")
 		? CpuHdrConversionMode : AutoHdrConversionMode;
 	QString strPathError;
-	if (!KApplicationPaths::configureDataDirectory(
+	if (!KApplicationPaths::validateAutomationTestProfile(
+		parser.value(QStringLiteral("data-dir")),
+		parser.isSet(QStringLiteral("automation-test-profile")), &strPathError)
+		|| !KApplicationPaths::configureDataDirectory(
 		parser.value(QStringLiteral("data-dir")), &strPathError))
 	{
 		qCritical().noquote() << strPathError;

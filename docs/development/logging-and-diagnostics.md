@@ -1,5 +1,10 @@
 # 日志与诊断
 
+自动化临时配置启动检查失败时，通过启动标准错误报告 `automation_profile_required`
+（没有显式数据目录）或 `automation_profile_reuse`（目录已包含身份/信任文件），退出码为2。
+检查发生在身份初始化与详细 trace 配置之前，不会改写旧身份或信任库。
+有意跨进程复用测试配置时使用 SDK 的 `automation_test_profile=False`。
+
 NVENC已增加显式 `--diagnostic-video-encoder=h264_nvenc`，也参与auto的DXGI顺序选择。
 初始化失败按auto规则尝试后续候选，显式模式不回退。FFmpeg错误级消息转发到
 session trace的 `ffmpeg_error`，保留库格式化的上下文和错误文本。全局回调也可能

@@ -6,6 +6,8 @@
 class KApplicationPaths
 {
 public:
+	static bool validateAutomationTestProfile(const QString &strRequestedPath,
+		bool bEnabled, QString *pErrorMessage);
 	static bool configureDataDirectory(const QString &strRequestedPath,
 		QString *pErrorMessage);
 	static QString dataDirectoryPath();

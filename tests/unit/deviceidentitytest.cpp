@@ -9,6 +9,8 @@
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+#include <QtCore/QProcess>
+#include <QtCore/QTemporaryDir>
 #include <QtCore/QTextStream>
 #include <QtCore/QUuid>
 
@@ -61,11 +63,105 @@ namespace
 		SystemTimeToFileTime(&systemTime, &fileTime);
 		return fileTime;
 	}
+
+	int RunProfileChild(const QStringList &arguments)
+	{
+		if (arguments.size() < 4)
+			return 2;
+		const QString strDirectory = arguments.at(2);
+		const QString strMode = arguments.at(3);
+		if (strMode != QStringLiteral("create") && strMode != QStringLiteral("verify")
+			&& strMode != QStringLiteral("tampered") && strMode != QStringLiteral("cleanup"))
+			return 2;
+		if (strMode == QStringLiteral("cleanup"))
+		{
+			QFile descriptor(QDir(strDirectory).filePath(QStringLiteral("device_identity.json")));
+			if (arguments.size() != 5 || QUuid(arguments.at(4)).isNull()
+				|| !descriptor.open(QIODevice::ReadOnly)
+				|| QJsonDocument::fromJson(descriptor.readAll()).object()
+					.value(QStringLiteral("deviceId")).toString() != arguments.at(4))
+				return 2;
+		}
+		KWindowsDeviceIdentityProvider provider(strDirectory);
+		QString strError;
+		if (!Require(provider.initialize(&strError), strError))
+			return 1;
+		if (strMode == QStringLiteral("cleanup"))
+		{
+			const bool bExpectedIdentity = provider.identity().strDeviceId == arguments.at(4);
+			const bool bDeleted = provider.deletePersistedKey(&strError);
+			return Require(bExpectedIdentity && bDeleted, strError) ? 0 : 1;
+		}
+		KSignedJsonTrustedDeviceStore store(QDir(strDirectory).filePath(QStringLiteral("trusted_devices.json")));
+		store.setIdentityProvider(&provider);
+		if (strMode == QStringLiteral("create"))
+			return Require(store.saveDevices({ MakeTrustedDevice(provider.identity(), provider.certificate()) },
+				&strError), strError) ? 0 : 1;
+		const QVector<KTrustedDevice> devices = store.loadDevices(&strError);
+		if (strMode == QStringLiteral("tampered"))
+			return Require(devices.isEmpty() && store.lastLoadError() == TamperedTrustedDeviceStoreError,
+				QStringLiteral("Modified persisted trust was accepted")) ? 0 : 1;
+		return Require(devices.size() == 1 && devices.first().strDeviceId == provider.identity().strDeviceId
+			&& devices.first().spkiSha256 == provider.certificate().spkiSha256 && strError.isEmpty(),
+			QStringLiteral("Identity or trust changed across processes: %1").arg(strError)) ? 0 : 1;
+	}
+
+	bool TestCrossProcessProfile()
+	{
+		QTemporaryDir directory;
+		const auto run = [&](const QString &strMode, const QString &strDeviceId = QString())
+		{
+			QProcess child;
+			QStringList arguments = { QStringLiteral("--profile-child"), directory.path(), strMode };
+			if (!strDeviceId.isEmpty())
+				arguments.append(strDeviceId);
+			child.start(QCoreApplication::applicationFilePath(), arguments);
+			if (!child.waitForFinished(15000))
+			{
+				child.kill();
+				child.waitForFinished();
+				return false;
+			}
+			return Require(child.exitStatus() == QProcess::NormalExit && child.exitCode() == 0,
+				QString::fromUtf8(child.readAllStandardError()));
+		};
+		bool bPassed = directory.isValid() && run(QStringLiteral("create"));
+		bPassed = bPassed && run(QStringLiteral("verify"));
+		QFile storeFile(directory.filePath(QStringLiteral("trusted_devices.json")));
+		if (bPassed && storeFile.open(QIODevice::ReadOnly))
+		{
+			QJsonObject root = QJsonDocument::fromJson(storeFile.readAll()).object();
+			storeFile.close();
+			QJsonArray devices = root.value(QStringLiteral("devices")).toArray();
+			QJsonObject device = devices.first().toObject();
+			device.insert(QStringLiteral("alias"), QStringLiteral("changed-after-signing"));
+			devices.replace(0, device);
+			root.insert(QStringLiteral("devices"), devices);
+			bPassed = storeFile.open(QIODevice::WriteOnly)
+				&& storeFile.write(QJsonDocument(root).toJson()) > 0;
+			storeFile.close();
+			bPassed = bPassed && run(QStringLiteral("tampered"));
+		}
+		else
+			bPassed = false;
+		QFile descriptor(directory.filePath(QStringLiteral("device_identity.json")));
+		if (!descriptor.open(QIODevice::ReadOnly))
+			return false;
+		const QString strDeviceId = QJsonDocument::fromJson(descriptor.readAll()).object()
+			.value(QStringLiteral("deviceId")).toString();
+		descriptor.close();
+		const bool bCleaned = run(QStringLiteral("cleanup"), strDeviceId);
+		return bPassed && bCleaned;
+	}
 }
 
 int main(int nArgumentCount, char **pArguments)
 {
 	QCoreApplication application(nArgumentCount, pArguments);
+	if (application.arguments().value(1) == QStringLiteral("--profile-child"))
+		return RunProfileChild(application.arguments());
+	if (!Require(TestCrossProcessProfile(), QStringLiteral("Cross-process trust profile regression failed")))
+		return 1;
 	const QDateTime policyNow(QDate(2026, 8, 17), QTime(12, 34, 56), Qt::UTC);
 	const KCertificateValidityPeriod normalValidity =
 		BuildDeviceCertificateValidityPeriod(policyNow);

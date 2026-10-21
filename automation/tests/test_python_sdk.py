@@ -370,6 +370,32 @@ class PythonSdkTests(unittest.TestCase):
         self.assertIn("--data-dir", arguments)
         self.assertNotIn("--automation-test-profile", arguments)
 
+    def test_ephemeral_launch_rejects_existing_security_files(self):
+        for name in ("device_identity.json", "trusted_devices.json"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as root:
+                security = Path(root) / "security"
+                security.mkdir()
+                marker = security / name
+                marker.write_bytes(b"preserve-existing-data")
+                with mock.patch("wrcdriver.process.subprocess.Popen") as popen:
+                    with self.assertRaisesRegex(ValueError, "automation_profile_reuse"):
+                        process_module.launch_process("winRemoteControl.exe", root)
+                    popen.assert_not_called()
+                self.assertEqual(marker.read_bytes(), b"preserve-existing-data")
+
+    def test_ephemeral_launch_allows_non_security_settings(self):
+        with tempfile.TemporaryDirectory() as root:
+            (Path(root) / "settings.ini").write_text("test=1", encoding="utf-8")
+            with mock.patch("wrcdriver.process.subprocess.Popen") as popen:
+                process_module.launch_process("winRemoteControl.exe", root)
+            self.assertIn("--automation-test-profile", popen.call_args.args[0])
+
+    def test_ephemeral_launch_requires_explicit_directory(self):
+        with mock.patch("wrcdriver.process.subprocess.Popen") as popen:
+            with self.assertRaisesRegex(ValueError, "automation_profile_required"):
+                process_module.launch_process("winRemoteControl.exe", " ")
+            popen.assert_not_called()
+
     def test_frame_progress_requires_two_distinct_new_samples(self):
         now_ms = int(__import__("time").time() * 1000)
         baseline = {

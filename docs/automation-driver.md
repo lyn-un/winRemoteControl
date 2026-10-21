@@ -183,9 +183,18 @@ python -m wrcdriver --pid 12345 state
 python -m wrcdriver --pid 12345 trigger session.disconnect
 ```
 
-`WrcApplication.launch()` 始终传入隔离的 `--data-dir`，并将设备身份标记为自动化测试
-身份。测试进程正常退出时会删除其临时 CNG 密钥和证书，普通应用配置中的设备身份仍会
-持久保存。
+`WrcApplication.launch()` 始终传入隔离的 `--data-dir`，默认使用
+`automation_test_profile=True`，正常退出时删除临时 CNG 密钥和证书。
+临时模式要求新的身份目录：如果已有 `security/device_identity.json` 或
+`security/trusted_devices.json`，SDK 在启动前抛出 `ValueError(automation_profile_reuse...)`，
+原生 CLI 也会在创建身份前拒绝启动（退出码 2）。普通设置文件不影响此检查。
+直接使用 `--automation-test-profile` 时必须显式提供非空 `--data-dir`，否则返回
+`automation_profile_required`，避免把默认用户目录当作临时身份清理。
+
+需要退出后重启同一配置的测试，应每次显式使用 `automation_test_profile=False`，
+在整组测试结束后清理其拥有的身份；不能在最后一次启动时切换为临时模式。
+临时模式只在正常退出时保证清理，强制终止的遗留资源由测试夹具处理。
+同一数据目录不得由多个进程同时使用。普通应用配置中的设备身份继续持久保存。
 
 ## 双进程测试
 
@@ -203,7 +212,10 @@ Access 审批命令，不会绕过身份认证或权限检查。
 
 隐私遮罩测试还要求显式设置 `WRC_RUN_PRIVACY_E2E=1`；真实锁屏等测试要求更严格的
 `WRC_RUN_DESTRUCTIVE_AUTOMATION=1`。普通 CI 工作流绝不会启用这两类测试。跨进程隐私
-测试会复用隔离 profile 验证设备身份和偏好，再在最终测试进程退出时删除临时 CNG 密钥。
+测试会全程使用持久身份复用隔离 profile 验证设备身份和偏好，结束后由
+`automation/tests/identity_support.py` 调用测试程序按该目录的明确设备 ID 删除测试密钥和证书。
+该辅助程序默认使用 `build/cmake-release/tests/Release/wrc_device_identity_tests.exe`，
+其他构建位置可通过 `WRC_IDENTITY_TEST_EXECUTABLE` 指定；清理失败会使测试失败。
 
 人工验收时可从仓库根目录运行统一脚本。默认会先复制一份不含 Driver 的临时 Release，
 确认主程序存活且没有发现文件，再运行连接、审批、推流和断开的双进程测试；临时副本、

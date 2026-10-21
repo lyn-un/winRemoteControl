@@ -129,6 +129,15 @@ def launch_process(
     extra_arguments: list[str] | tuple[str, ...] | None = None,
     automation_test_profile: bool = True,
 ) -> subprocess.Popen[bytes]:
+    if automation_test_profile:
+        if not str(profile).strip():
+            raise ValueError("automation_profile_required: specify a fresh temporary data directory")
+        security = Path(profile).resolve() / "security"
+        if any((security / name).exists() for name in ("device_identity.json", "trusted_devices.json")):
+            raise ValueError(
+                "automation_profile_reuse: use a fresh temporary data directory, or set "
+                "automation_test_profile=False for an intentional persistent identity test"
+            )
     arguments = [
         str(Path(executable).resolve()),
         "--data-dir",

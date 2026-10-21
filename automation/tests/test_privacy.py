@@ -9,7 +9,7 @@ from e2e_support import (
     destructive_e2e_enabled,
     privacy_e2e_enabled,
 )
-from wrcdriver import WrcApplication
+from identity_support import cleanup_persistent_identity
 
 
 def _wait_for_privacy_state(session, expected: str, timeout: float = 15.0):
@@ -51,19 +51,6 @@ def _restore_privacy(pair: TwoProcessSession | None) -> None:
         _wait_for_privacy_state(pair.controller_session, "inactive", timeout=5.0)
     except Exception:
         pass
-
-
-def _cleanup_persistent_identity(executable: Path, profile: Path) -> None:
-    application = None
-    try:
-        application = WrcApplication.launch(
-            executable, profile, automation_test_profile=True
-        )
-    except Exception:
-        return
-    finally:
-        if application is not None:
-            application.close()
 
 
 def _pair_diagnostics(
@@ -195,7 +182,7 @@ class PrivacyOverlayTests(unittest.TestCase):
                 pair = TwoProcessSession(
                     executable,
                     profile_root=profile_root,
-                    automation_test_profile=True,
+                    automation_test_profile=False,
                 )
                 self.assertNotIn(pair.host.pid, first_pids)
                 self.assertNotIn(pair.controller.pid, first_pids)
@@ -219,8 +206,8 @@ class PrivacyOverlayTests(unittest.TestCase):
                 _restore_privacy(pair)
                 if pair is not None:
                     pair.close()
-                _cleanup_persistent_identity(executable, profile_root / "host")
-                _cleanup_persistent_identity(executable, profile_root / "controller")
+                cleanup_persistent_identity(executable, profile_root / "host")
+                cleanup_persistent_identity(executable, profile_root / "controller")
 
     def test_privacy_preference_isolated_by_remote_device_id(self):
         executable = Path(os.environ["WRC_EXECUTABLE"]).resolve()
@@ -265,7 +252,7 @@ class PrivacyOverlayTests(unittest.TestCase):
                 pair = TwoProcessSession(
                     executable,
                     profile_root=profile_root,
-                    automation_test_profile=True,
+                    automation_test_profile=False,
                 )
                 pair.connect()
                 pair.start_streaming()
@@ -287,9 +274,9 @@ class PrivacyOverlayTests(unittest.TestCase):
                 _restore_privacy(pair)
                 if pair is not None:
                     pair.close()
-                _cleanup_persistent_identity(executable, host_a_profile)
-                _cleanup_persistent_identity(executable, profile_root / "host")
-                _cleanup_persistent_identity(executable, profile_root / "controller")
+                cleanup_persistent_identity(executable, host_a_profile)
+                cleanup_persistent_identity(executable, profile_root / "host")
+                cleanup_persistent_identity(executable, profile_root / "controller")
 
 
 @unittest.skipUnless(
