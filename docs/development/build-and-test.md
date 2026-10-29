@@ -67,6 +67,10 @@ AMF auto实际双机已确认跨卡CPU回退（111810→103674），90样本持�
 
 ## GPU 硬件帧接入专项（发送链路显式启用）
 
+发送链路 CPU/GPU 对照工具为 `wrc_gpu_encoding_benchmark`，只使用合成 GPU 图像，
+不属于默认 CTest。预热/采样、解码校验、timestamp 边界和当前验证状态见
+[合成 GPU 编码链路基准](gpu-encoding-benchmark.md)。
+
 `wrc_gpu_nv12_tests` 和 `wrc_gpu_nv12_warp_tests` 验证独立的 BGRA→NV12 GPU
 模块：BT.601 limited-range、双线性缩放、2×2 UV 平均、奇数源尺寸、输入 stride
 padding、输出对齐填充及无效参数。对比独立标量参考，Y/UV 最大误差门限为 3；

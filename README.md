@@ -139,6 +139,7 @@ build\Release\winRemoteControl.exe --trace --log-dir "D:\wrc_logs"
 ### 开发与测试
 
 - [构建与测试](docs/development/build-and-test.md)
+- [合成 GPU 编码链路基准](docs/development/gpu-encoding-benchmark.md)
 - [MF 动态码率历史实验（已停止维护）](docs/development/ffmpeg-mf-build.md)
 - [命令级自动化 Driver](docs/automation-driver.md)
 - [隐私控制平台验证](docs/development/privacy-platform-validation.md)
