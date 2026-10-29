@@ -212,6 +212,7 @@ namespace
 		};
 		local.bInputRealtime = true;
 		local.bOrderedMouseDrag = true;
+		local.bCursorShapeV1 = true;
 		local.supportedPrivacyModes = {
 			QStringLiteral("disabled"), QStringLiteral("privacyoverlay"),
 			QStringLiteral("futuremode")
@@ -229,6 +230,7 @@ namespace
 			&& compatible.capabilities.nMaximumWidth == 1280
 			&& compatible.capabilities.bInputRealtime
 			&& compatible.capabilities.bOrderedMouseDrag
+			&& compatible.capabilities.bCursorShapeV1
 			&& compatible.capabilities.bPostSessionLock
 			&& compatible.capabilities.supportedPrivacyModes
 				== QStringList({ QStringLiteral("disabled"),
@@ -236,11 +238,13 @@ namespace
 			QStringLiteral("capability negotiator returns the bounded intersection"));
 
 		remote.bOrderedMouseDrag = false;
+		remote.bCursorShapeV1 = false;
 		const KCapabilityNegotiationResult legacyCompatible =
 			KCapabilityNegotiator::negotiate(local, remote);
 		Check(legacyCompatible.succeeded()
 			&& legacyCompatible.capabilities.bInputRealtime
-			&& !legacyCompatible.capabilities.bOrderedMouseDrag,
+			&& !legacyCompatible.capabilities.bOrderedMouseDrag
+			&& !legacyCompatible.capabilities.bCursorShapeV1,
 			QStringLiteral("ordered mouse drag requires support from both peers"));
 
 		remote.supportedCodecs = { QStringLiteral("vp9") };

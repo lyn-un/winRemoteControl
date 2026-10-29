@@ -693,6 +693,7 @@ namespace
 		};
 		source.capabilities.bInputRealtime = true;
 		source.capabilities.bOrderedMouseDrag = true;
+		source.capabilities.bCursorShapeV1 = true;
 		source.capabilities.supportedPrivacyModes = {
 			QStringLiteral("disabled"), QStringLiteral("privacyoverlay")
 		};
@@ -713,6 +714,7 @@ namespace
 			&& decoded.capabilities.supportedPrivacyModes.contains(
 				QStringLiteral("privacyoverlay"))
 			&& decoded.capabilities.bOrderedMouseDrag
+			&& decoded.capabilities.bCursorShapeV1
 			&& decoded.capabilities.bPostSessionLock
 			&& decoded.capabilities.nMaximumFps == KProtocolConstraints::kMaximumStreamFps
 			&& decoded.capabilities.monitorList.size() == 1,
@@ -721,11 +723,17 @@ namespace
 		QJsonObject legacyObject = QJsonDocument::fromJson(
 			KSessionMessageCodec::encode(source).toUtf8()).object();
 		legacyObject.remove(QStringLiteral("orderedMouseDrag"));
+		legacyObject.remove(QStringLiteral("cursorShapeV1"));
 		check(KSessionMessageCodec::decode(
 				QString::fromUtf8(QJsonDocument(legacyObject).toJson(QJsonDocument::Compact)),
 				&decoded, nullptr)
-			&& !decoded.capabilities.bOrderedMouseDrag,
-			QStringLiteral("missing ordered mouse drag capability defaults to disabled"));
+			&& !decoded.capabilities.bOrderedMouseDrag
+			&& !decoded.capabilities.bCursorShapeV1,
+			QStringLiteral("missing optional drag and cursor capabilities default to disabled"));
+		legacyObject.insert(QStringLiteral("cursorShapeV1"), QStringLiteral("true"));
+		check(!KSessionMessageCodec::decode(
+			QString::fromUtf8(QJsonDocument(legacyObject).toJson(QJsonDocument::Compact)), &decoded, nullptr),
+			QStringLiteral("non-boolean cursor capability is rejected"));
 
 		check(!KSessionMessageCodec::decode(
 			QStringLiteral("{\"version\":1,\"type\":\"capabilities\","

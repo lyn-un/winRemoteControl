@@ -1,5 +1,58 @@
 # 日志与诊断
 
+## 采集失败详情
+
+开启 `--session-trace` 时，采集初始化、取帧或帧处理失败会各在失败点记录一条
+`capture_pipeline_error`，`type=initialize|capture|process`，`detail` 保留底层技术错误
+（例如 HRESULT）。远程采集写 controlled 日志，预览写 app 日志；默认不开启。
+详情最多512个UTF-16字符，换行/回车/Tab转换为空格；不记录帧像素、指针图形或输入内容，
+不逐帧增加日志。该记录只在本机诊断中使用，不改变线上 capture_failed 消息。
+新增失败详情及限长/单行测试已随普通Release构建和完整CTest通过；旧程序的泛化错误不能
+反推出具体 HRESULT，真实失败的原生原因仍需带该记录的新程序复验。
+
+DXGI每次成功获取帧后统一检查`ReleaseFrame`返回值；释放失败立即报采集错误，
+不等下一次`AcquireNextFrame`才发现。释放错误保留HRESULT及`acquired/released`计数，
+同时存在的原始处理错误追加在`prior`；获取失败另带`lastRelease`，便于区分释放调用
+失败与此前都成功但后续获取仍失败。只在失败时进入上述现有事件，不增加逐帧落盘。
+这项检查不等于修复已观察到的0x887a0001根因；新程序已在用户手动锁屏时复现
+ReleaseFrame=0x887a0026（ACCESS_LOST），记录最后一帧释放失败后按capture_failed收尾。
+历史0x887a0001的具体内部状态未完全复现，锁屏恢复也尚未实现，详见视频链路GPU-CAP-001。
+
+指针分离基础模块不新增日志文件或逐事件写盘。形状像素、Base64 数据和掩码不得写入
+诊断日志；采集侧只在内存保留最新更新，协议重组器最多缓存 256 KiB。现有输入
+trace 选择及权限不因指针能力字段改变。`cursor_shape/default_fallback` 每个渲染会话
+最多记录一次原生形状回退原因，`cursor_shape/send_failed` 每会话最多一次；不记录坐标
+或像素。正常指针分块跳过通用逐消息 `protocol_route` 日志，非法消息仍走既有拒绝策略。
+
+## 实验性 GPU 发送路径
+
+`gpu_capture_watch` 原有首帧/每300帧汇总行增加 `inputFormat`、`hdrGpu`、
+`sdrWhiteScale`：inputFormat 记录转换前 DXGI 源格式，hdrGpu=1 表示该帧经过现有
+FP16→SDR GPU 转换，白电平仅解释现有算法，不代表引入色调映射修正。这样可以区分
+SDR GPU 捕获与 HDR GPU 捕获；没有这几个字段的旧日志不能单靠系统 HDR 设置推断分支。
+不新增日志文件或事件频率，不记录像素。
+
+开发参数 `--video-frame-path=cpu|auto|gpu` 本轮保守保持默认 cpu；auto/gpu为显式入口，
+不是全部场景已无退化或GPU-CAP-001已修复的声明。
+auto 在初始化不兼容时保留已选编码后端并回退 CPU；gpu 不允许回退。
+已发布可选指针分离能力；旧端缺少交集时 auto 走 CPU，gpu 报
+`peer_cursor_separation_unavailable`。初始化日志中的实际路径才是是否使用 GPU 的依据，
+不能仅凭传入 auto 或 gpu 参数宣称某次会话通过验证。
+latency trace（含 --trace、环境变量或 latency-scenario）将 auto 切到 CPU；
+与 gpu 同用则启动报错。session/resource trace 不强制 CPU，也不新增常驻日志。
+
+`video_frame_path_config` 记录 requested/effective/reason；编码入口
+`video_frame_path` 记录请求、实际 gpu/cpu/failed、编码器、采集 LUID 和回退原因。
+`native_frame_cpu_fallback` 明确记录额外读回字节及 BGRA→I420，不能算作 GPU 正常路径。
+`gpu_capture_watch` 在首帧/每300帧采样，记录尺寸、LUID、池占用及应用层零读回；
+`gpu_capture_pool_drop` / `gpu_encode_pool_drop` 首次/每30次采样，不逐帧写盘。
+这些是应用层资源操作诊断，不能证明驱动内部绝无复制。
+
+`native_frame_prepare_watch` 是原生帧元数据准备/转交的 CPU 调用耗时，不是 CPU 转色
+或 GPU 执行时间。`encoder_watch.gpuSubmitCpuTotalUs/gpuSubmitCpuMaxUs` 单列 GPU
+转换命令及编码提交调用的墙钟耗时；旧 ffmpegTotalUs 仅统计 CPU 输入路径调用。
+GPU timestamp 测量仍限隔离基准，不能用上述 CPU 时间冒充 GPU 执行时间。
+
 自动化临时配置启动检查失败时，通过启动标准错误报告 `automation_profile_required`
 （没有显式数据目录）或 `automation_profile_reuse`（目录已包含身份/信任文件），退出码为2。
 检查发生在身份初始化与详细 trace 配置之前，不会改写旧身份或信任库。
@@ -53,7 +106,7 @@ DPI_AWARENESS 枚举值。仅记录几何元数据，不保存桌面内容；没
 | `capture_watch` | 采集调用完成数；`skipped` 是无新桌面帧的超时，不等于丢帧 |
 | `capture_sink_watch` | 采集 sink 处理完成数与总耗时；成功可能包含转换池丢帧 |
 | `conversion_watch` | BGRA→I420 转换；`skipped` 是缓冲池耗尽丢帧，尺寸为转换输出 |
-| `source_push_watch` | 有效 I420 送入 WebRTC sink 的调用；`skipped` 是无 sink；成功不保证编码器收到该帧 |
+| `source_push_watch` | 有效 I420 或原生帧送入 WebRTC sink 的调用；`skipped` 是无 sink；成功不保证编码器收到该帧 |
 
 启动阶段可能重发上一帧，因此 source 计数可能稍高于转换成功数。WebRTC 内部还可能丢帧；
 只能结合 `encoder_watch.entered` 定位区段，不把计数差直接归因于网络。

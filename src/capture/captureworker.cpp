@@ -2,6 +2,7 @@
 
 #include "capture/dxgidesktopduplicator.h"
 #include "common/latencytracelogger.h"
+#include "common/sessiontracelogger.h"
 #include "common/videostagediagnostics.h"
 #include "core/protocol/protocolconstraints.h"
 
@@ -16,10 +17,24 @@ namespace
 	constexpr quint64 kVideoTraceFrameInterval = 30;
 	constexpr qint64 kMicrosecondsPerSecond = 1000000;
 	constexpr qint64 kNanosecondsPerMicrosecond = 1000;
+	constexpr int kCaptureErrorDetailMaxCharacters = 512;
+
+	void TraceCaptureFailure(bool bRemoteVideo, const char *pPhase, const QString &strError)
+	{
+		QString strDetail = strError.left(kCaptureErrorDetailMaxCharacters);
+		strDetail.replace(QLatin1Char('\r'), QLatin1Char(' '));
+		strDetail.replace(QLatin1Char('\n'), QLatin1Char(' '));
+		strDetail.replace(QLatin1Char('\t'), QLatin1Char(' '));
+		KSessionTraceLogger::write(bRemoteVideo ? QStringLiteral("controlled") : QStringLiteral("app"),
+			QStringLiteral("capture_pipeline_error"), QString::fromLatin1(pPhase), -1,
+			QStringLiteral("detail=%1").arg(strDetail));
+	}
 }
 
-KCaptureWorker::KCaptureWorker(WorkMode mode, QObject *pParent, KHdrConversionMode hdrMode)
-	: KCaptureWorker(std::make_unique<KDxgiDesktopDuplicator>(hdrMode),
+KCaptureWorker::KCaptureWorker(WorkMode mode, QObject *pParent, KHdrConversionMode hdrMode,
+	std::shared_ptr<KVideoFramePathState> spFramePath)
+	: KCaptureWorker(std::make_unique<KDxgiDesktopDuplicator>(hdrMode,
+		mode == RemoteVideoWorkMode ? std::move(spFramePath) : nullptr),
 		std::make_unique<KCaptureFrameSink>(mode == RemoteVideoWorkMode
 			? KCaptureFrameSink::RemoteVideoSinkMode
 			: KCaptureFrameSink::LocalPreviewSinkMode),
@@ -69,7 +84,9 @@ void KCaptureWorker::startWork()
 		|| !m_upSink->initialize(&strError))
 	{
 		m_bRunning = false;
-		emit captureError(strError.isEmpty() ? QStringLiteral("Capture pipeline initialization failed") : strError);
+		const QString strDetail = strError.isEmpty() ? QStringLiteral("Capture pipeline initialization failed") : strError;
+		TraceCaptureFailure(m_bRemoteVideo, "initialize", strDetail);
+		emit captureError(strDetail);
 		emit statusChanged(QStringLiteral("Error"));
 		if (m_upSource != nullptr)
 			m_upSource->shutdown();
@@ -94,6 +111,12 @@ void KCaptureWorker::startWork()
 		strError.clear();
 		const IKCaptureSource::CaptureResult result = m_upSource->captureNextFrame(&frame, &strError);
 		const qint64 nCaptureUs = captureTimer.nsecsElapsed() / 1000;
+		if (result != IKCaptureSource::ErrorCaptureResult)
+		{
+			KCursorShape shape;
+			if (m_upSource->takeCursorUpdate(&shape) && shape.isValid())
+				emit cursorShapeReady(shape);
+		}
 		if (upCaptureDiagnostics)
 			upCaptureDiagnostics->record(nCaptureUs,
 				result != IKCaptureSource::TimeoutCaptureResult && result != IKCaptureSource::ErrorCaptureResult,
@@ -106,7 +129,9 @@ void KCaptureWorker::startWork()
 		if (result == IKCaptureSource::ErrorCaptureResult)
 		{
 			m_bRunning = false;
-			emit captureError(strError);
+			const QString strDetail = strError.isEmpty() ? QStringLiteral("Capture source failed") : strError;
+			TraceCaptureFailure(m_bRemoteVideo, "capture", strDetail);
+			emit captureError(strDetail);
 			emit statusChanged(QStringLiteral("Error"));
 			break;
 		}
@@ -119,7 +144,9 @@ void KCaptureWorker::startWork()
 		if (!bProcessed)
 		{
 			m_bRunning = false;
-			emit captureError(strError.isEmpty() ? QStringLiteral("Capture frame processing failed") : strError);
+			const QString strDetail = strError.isEmpty() ? QStringLiteral("Capture frame processing failed") : strError;
+			TraceCaptureFailure(m_bRemoteVideo, "process", strDetail);
+			emit captureError(strDetail);
 			emit statusChanged(QStringLiteral("Error"));
 			break;
 		}

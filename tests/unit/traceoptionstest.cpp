@@ -53,6 +53,16 @@ namespace
 		const QString strApplicationDirectory = QDir::cleanPath(
 			QDir::temp().absoluteFilePath(QStringLiteral("wrc-app")));
 		ClearTraceEnvironment();
+		Check(ParseOptions({QStringLiteral("app"), QStringLiteral("--video-frame-path=gpu")},
+			strApplicationDirectory).videoFramePath == GpuVideoFramePath, QStringLiteral("GPU frame path option"));
+		Check(ParseOptions({QStringLiteral("app"), QStringLiteral("--video-frame-path=auto")},
+			strApplicationDirectory).videoFramePath == AutoVideoFramePath, QStringLiteral("auto frame path option"));
+		Check(!ParseOptions({QStringLiteral("app"), QStringLiteral("--video-frame-path=invalid")},
+			strApplicationDirectory).strValidationError.isEmpty(), QStringLiteral("invalid frame path rejected"));
+		Check(!ParseOptions({QStringLiteral("app"), QStringLiteral("--video-frame-path=gpu"), QStringLiteral("--trace")},
+			strApplicationDirectory).strValidationError.isEmpty(), QStringLiteral("forced GPU conflicts with latency trace"));
+		Check(ParseOptions({QStringLiteral("app"), QStringLiteral("--video-frame-path=auto"), QStringLiteral("--latency-trace")},
+			strApplicationDirectory).videoFramePath == CpuVideoFramePath, QStringLiteral("latency forces CPU frame path"));
 		Check(ParseOptions({QStringLiteral("app"), QStringLiteral("--video-renderer=bgra")},
 			strApplicationDirectory).bForceBgraVideoRenderer, QStringLiteral("BGRA renderer option"));
 		Check(!ParseOptions({QStringLiteral("app"), QStringLiteral("--video-renderer=invalid")},

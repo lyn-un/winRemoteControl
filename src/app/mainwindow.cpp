@@ -18,9 +18,10 @@ namespace
 	constexpr int kResizeBorderDip = 8;
 }
 
-KMainWindow::KMainWindow(KVideoEncoderPreference encoderPreference, QWidget *pParent, KHdrConversionMode hdrMode)
+KMainWindow::KMainWindow(KVideoEncoderPreference encoderPreference, QWidget *pParent, KHdrConversionMode hdrMode,
+	KVideoFramePathMode framePath)
 	: QMainWindow(pParent)
-	, m_pComposition(new KApplicationComposition(encoderPreference, this, hdrMode))
+	, m_pComposition(new KApplicationComposition(encoderPreference, this, hdrMode, framePath))
 	, m_pWebViewWidget(new KWebViewWidget(this))
 {
 	setWindowFlags(Qt::FramelessWindowHint | Qt::Window);

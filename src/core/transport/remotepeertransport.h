@@ -7,6 +7,7 @@
 #include "core/media/videoframe.h"
 #include "core/protocol/inputmessage.h"
 #include "core/protocol/clipboardmessage.h"
+#include "core/protocol/cursorshapemessage.h"
 #include "core/protocol/filetransfercontrolmessage.h"
 #include "core/protocol/filetransferlifecyclemessage.h"
 #include "core/protocol/sessionmessage.h"
@@ -59,6 +60,8 @@ public:
 		const KFileTransferControlMessage &) { return false; }
 	virtual bool sendFileTransferData(const QByteArray &) { return false; }
 	virtual bool fileTransferBackpressured() const { return false; }
+	virtual bool sendCursorShape(const KCursorShape &) { return false; }
+	virtual void clearCursorShapeQueue() {}
 	virtual KSessionMessageSendStatus sendSessionMessage(
 		const KSessionMessage &message) = 0;
 	virtual void setInputRealtimeEnabled(bool bEnabled) = 0;
@@ -94,6 +97,7 @@ signals:
 		bool bDataOpen);
 	void fileTransferLowWatermarkReached(quint64 nGeneration);
 	void sessionMessageReceived(quint64 nGeneration, const KSessionMessage &message);
+	void cursorShapeMessageReceived(quint64 nGeneration, const KCursorShapeMessage &message);
 	void sessionChannelChanged(quint64 nGeneration, bool bOpen);
 	void connectionInterrupted(quint64 nGeneration);
 	void connectionRestored(quint64 nGeneration);

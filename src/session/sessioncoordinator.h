@@ -17,6 +17,7 @@
 #include "session/sessioncontroller.h"
 
 #include <QtCore/QObject>
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QString>
 
 #include <memory>
@@ -60,6 +61,7 @@ public:
 	QString authenticatedDeviceId() const;
 	void setTerminalCapabilitiesAvailable(bool bControllerAvailable,
 		bool bControlledAvailable);
+	void setCursorShapeAvailable(bool bAvailable);
 	void configurePrivacyServices(
 		std::unique_ptr<KPrivacyModeService> spPrivacyModeService,
 		std::unique_ptr<KPostSessionActionService> spPostSessionActionService);
@@ -78,6 +80,7 @@ public slots:
 	void startStreaming() override;
 	void stopStreaming() override;
 	void pushVideoFrame(const KVideoFrame &frame) override;
+	void publishCursorShape(quint64 nGeneration, const KCursorShape &shape);
 	void sendInputMessage(const KInputMessage &message) override;
 	void sendClipboardMessage(const KClipboardMessage &message) override;
 	bool sendTerminalControlMessage(const KTerminalMessage &message) override;
@@ -107,12 +110,22 @@ public slots:
 	void requestRePairDevice(const QString &strDeviceId);
 
 signals:
+	void cursorShapeChanged(const KCursorShape &shape);
+	void cursorShapeCleared();
 	void trustedDevicesChanged(const QVector<KTrustedDevice> &devices);
 	void trustedDeviceError(const QString &strError);
 	void trustedDeviceRevoked(const QString &strDeviceId);
 	void securityMigrationNotice(const QString &strMessage);
 
 private:
+	void handleCursorShapeMessage(quint64 nGeneration, const KCursorShapeMessage &message);
+	KCursorShapeAssembler m_cursorShapeAssembler;
+	QElapsedTimer m_cursorClock;
+	QTimer *m_pCursorAssemblyTimer = nullptr;
+	quint64 m_nSentCursorSequence = 0;
+	bool m_bCursorShapeAvailable = false;
+	int m_nInvalidCursorShapes = 0;
+	bool m_bCursorSendFailureLogged = false;
 	enum PendingRequestType
 	{
 		NoPendingRequest,

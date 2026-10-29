@@ -11,6 +11,7 @@
 #include <Windows.h>
 
 #include <chrono>
+#include <cstring>
 #include <iostream>
 #include <thread>
 
@@ -52,10 +53,20 @@ namespace
 	}
 
 	bool InjectMouseButton(KWindowsInputInjector *pInjector,
+		HWND hTestWindow,
 		int nX,
 		int nY,
 		bool bPressed)
 	{
+		DWORD dwProcessId = 0;
+		GetWindowThreadProcessId(hTestWindow, &dwProcessId);
+		const POINT target = {nX, nY};
+		if (!IsWindow(hTestWindow) || dwProcessId != GetCurrentProcessId()
+			|| GetForegroundWindow() != hTestWindow || WindowFromPoint(target) != hTestWindow)
+		{
+			std::cerr << "Input test window lost focus or target ownership; injection refused" << std::endl;
+			return false;
+		}
 		KInputMessage message;
 		message.type = MouseButtonInputMessageType;
 		message.mouseButton = LeftRemoteMouseButton;
@@ -94,8 +105,11 @@ namespace
 	}
 }
 
-int main()
+int main(int nArgc, char *pArgv[])
 {
+	if (nArgc > 2 || (nArgc == 2 && std::strcmp(pArgv[1], "--wait-for-focus") != 0))
+		return 2;
+	const bool bWaitForFocus = nArgc == 2;
 	if (qEnvironmentVariableIntValue("WRC_RUN_INPUT_E2E") != 1)
 		return 77;
 	QTemporaryDir traceDirectory;
@@ -148,18 +162,25 @@ int main()
 	UpdateWindow(hWindow);
 	SetForegroundWindow(hWindow);
 	PumpMessages(static_cast<int>(GetDoubleClickTime()) + 50);
+	if (bWaitForFocus)
+	{
+		std::cout << "Waiting up to 30 seconds for normal activation of the scoped test window" << std::endl;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+		while (GetForegroundWindow() != hWindow && std::chrono::steady_clock::now() < deadline)
+			PumpMessages(25);
+	}
 
 	const int nTargetX = nWindowX + nWindowWidth / 2;
 	const int nTargetY = nWindowY + nWindowHeight / 2;
 	bool bSuccess = false;
 	{
 		KWindowsInputInjector injector;
-		bSuccess = InjectMouseButton(&injector, nTargetX, nTargetY, true)
-			&& InjectMouseButton(&injector, nTargetX, nTargetY, false);
+		bSuccess = InjectMouseButton(&injector, hWindow, nTargetX, nTargetY, true)
+			&& InjectMouseButton(&injector, hWindow, nTargetX, nTargetY, false);
 		PumpMessages(50);
 		bSuccess = bSuccess
-			&& InjectMouseButton(&injector, nTargetX, nTargetY, true)
-			&& InjectMouseButton(&injector, nTargetX, nTargetY, false);
+			&& InjectMouseButton(&injector, hWindow, nTargetX, nTargetY, true)
+			&& InjectMouseButton(&injector, hWindow, nTargetX, nTargetY, false);
 		PumpMessages(200);
 	}
 	KDesktopInputTraceLogger::shutdown();

@@ -68,6 +68,7 @@ KCapabilityNegotiationResult KCapabilityNegotiator::negotiate(
 	negotiated.bOrderedMouseDrag = negotiated.bInputRealtime
 		&& localCapabilities.bOrderedMouseDrag
 		&& remoteCapabilities.bOrderedMouseDrag;
+	negotiated.bCursorShapeV1 = localCapabilities.bCursorShapeV1 && remoteCapabilities.bCursorShapeV1;
 	negotiated.bKeyboard = localCapabilities.bKeyboard && remoteCapabilities.bKeyboard;
 	negotiated.bUnicodeText = localCapabilities.bUnicodeText && remoteCapabilities.bUnicodeText;
 	negotiated.bMouseButtons = localCapabilities.bMouseButtons && remoteCapabilities.bMouseButtons;

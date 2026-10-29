@@ -6,6 +6,8 @@
 
 #include <memory>
 
+#include "core/media/nativevideoframe.h"
+
 struct KI420FrameBuffer
 {
 	int nWidth = 0;
@@ -27,6 +29,7 @@ struct KVideoFrame
 	quint64 nLastInputSeq = 0;
 	qint64 nInputAgeMs = -1;
 	std::shared_ptr<KI420FrameBuffer> spBuffer;
+	std::shared_ptr<IKNativeVideoFrame> spNativeFrame;
 };
 
 Q_DECLARE_METATYPE(KVideoFrame)

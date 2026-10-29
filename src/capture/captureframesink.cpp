@@ -42,7 +42,10 @@ bool KCaptureFrameSink::initialize(QString *pErrorMessage)
 	if (m_mode == RemoteVideoSinkMode)
 	{
 		if (KSessionTraceLogger::isEnabled())
+		{
 			m_upConversionDiagnostics = std::make_unique<KVideoStageDiagnostics>(QStringLiteral("conversion_watch"));
+			m_upNativeDiagnostics = std::make_unique<KVideoStageDiagnostics>(QStringLiteral("native_frame_prepare_watch"));
+		}
 		return true;
 	}
 
@@ -92,6 +95,7 @@ void KCaptureFrameSink::handleCaptureTimeout()
 void KCaptureFrameSink::shutdown()
 {
 	m_upConversionDiagnostics.reset();
+	m_upNativeDiagnostics.reset();
 	if (m_bCodecOpen && m_upEncoder != nullptr)
 		m_upEncoder->close(nullptr);
 	if (m_upDecoder != nullptr)
@@ -164,8 +168,10 @@ bool KCaptureFrameSink::processRemoteFrame(KCaptureFrame &frame,
 	const FrameConversionResult conversionResult = convertBgraToI420(frame,
 		config, nLastInputSeq, nLastInputAgeMs, &videoFrame);
 	const qint64 nConversionUs = conversionTimer.nsecsElapsed() / 1000;
-	if (m_upConversionDiagnostics)
-		m_upConversionDiagnostics->record(nConversionUs,
+	KVideoStageDiagnostics *pDiagnostics = videoFrame.spNativeFrame ? m_upNativeDiagnostics.get()
+		: m_upConversionDiagnostics.get();
+	if (pDiagnostics)
+		pDiagnostics->record(nConversionUs,
 			conversionResult == ConvertedFrameConversionResult,
 			conversionResult == DroppedFrameConversionResult, videoFrame.nWidth, videoFrame.nHeight);
 	if (conversionResult == DroppedFrameConversionResult)
@@ -272,7 +278,8 @@ KCaptureFrameSink::FrameConversionResult KCaptureFrameSink::convertBgraToI420(
 	KVideoFrame *pVideoFrame)
 {
 	if (pVideoFrame == nullptr || captureFrame.nWidth < 2 || captureFrame.nHeight < 2
-		|| captureFrame.vecBgraBuffer.empty())
+		|| (captureFrame.vecBgraBuffer.empty() && !captureFrame.spNativeFrame)
+		|| (!captureFrame.vecBgraBuffer.empty() && captureFrame.spNativeFrame))
 	{
 		return FailedFrameConversionResult;
 	}
@@ -288,6 +295,21 @@ KCaptureFrameSink::FrameConversionResult KCaptureFrameSink::convertBgraToI420(
 		nHeight = std::max(2, static_cast<int>(std::floor(captureFrame.nHeight * fScale)) & ~1);
 	}
 
+	if (captureFrame.spNativeFrame)
+	{
+		if (captureFrame.spNativeFrame->width() != captureFrame.nWidth
+			|| captureFrame.spNativeFrame->height() != captureFrame.nHeight
+			|| captureFrame.spNativeFrame->generation() == 0)
+			return FailedFrameConversionResult;
+		pVideoFrame->nWidth = nWidth;
+		pVideoFrame->nHeight = nHeight;
+		pVideoFrame->nFrameIndex = captureFrame.nFrameIndex;
+		pVideoFrame->nTimestampMs = captureFrame.nTimestampMs;
+		pVideoFrame->nLastInputSeq = nLastInputSeq;
+		pVideoFrame->nInputAgeMs = nLastInputAgeMs;
+		pVideoFrame->spNativeFrame = captureFrame.spNativeFrame;
+		return ConvertedFrameConversionResult;
+	}
 	if (KLatencyTraceLogger::isEnabled() && nLastInputSeq > 0)
 	{
 		KFrameWatermark watermark;

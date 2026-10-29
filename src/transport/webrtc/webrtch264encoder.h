@@ -3,6 +3,7 @@
 
 #include "codec/h264encoder.h"
 #include "transport/webrtc/webrtch264format.h"
+#include "core/media/videoframepath.h"
 
 #include <api/video/video_frame.h>
 #include <api/video/video_timing.h>
@@ -24,6 +25,8 @@ class KWebRtcH264Encoder final : public webrtc::VideoEncoder
 public:
 	explicit KWebRtcH264Encoder(KVideoEncoderPreference preference);
 	KWebRtcH264Encoder(KVideoEncoderPreference preference, int nNegotiatedLevel);
+	KWebRtcH264Encoder(KVideoEncoderPreference preference, int nNegotiatedLevel,
+		std::shared_ptr<KVideoFramePathState> spFramePath);
 	~KWebRtcH264Encoder() override;
 
 	int InitEncode(const webrtc::VideoCodec *pCodecSettings,
@@ -60,6 +63,9 @@ private:
 	static bool isKeyFrame(const QByteArray &encodedData);
 
 	KH264Encoder m_encoder;
+	std::shared_ptr<KVideoFramePathState> m_spFramePath;
+	bool m_bGpuAttempted = false;
+	quint64 m_nGpuPoolDrops = 0;
 	std::unique_ptr<KEncoderDiagnostics> m_spDiagnostics;
 	int m_nNegotiatedLevel;
 	int m_nEncodingLevel = 0;
@@ -82,7 +88,8 @@ private:
 class KWebRtcH264EncoderFactory final : public webrtc::VideoEncoderFactory
 {
 public:
-	explicit KWebRtcH264EncoderFactory(KVideoEncoderPreference preference);
+	explicit KWebRtcH264EncoderFactory(KVideoEncoderPreference preference,
+		std::shared_ptr<KVideoFramePathState> spFramePath = nullptr);
 
 	std::vector<webrtc::SdpVideoFormat> GetSupportedFormats() const override;
 	webrtc::VideoEncoderFactory::CodecSupport QueryCodecSupport(
@@ -95,6 +102,7 @@ public:
 private:
 	static bool isH264Format(const webrtc::SdpVideoFormat &format);
 	KVideoEncoderPreference m_preference = AutoVideoEncoderPreference;
+	std::shared_ptr<KVideoFramePathState> m_spFramePath;
 };
 
 #endif // _WINREMOTECONTROL_WEBRTCH264ENCODER_H_

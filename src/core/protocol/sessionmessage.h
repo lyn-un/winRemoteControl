@@ -50,6 +50,7 @@ struct KSessionCapabilities
 	bool bClipboardText = true;
 	bool bInputRealtime = false;
 	bool bOrderedMouseDrag = false;
+	bool bCursorShapeV1 = false;
 	bool bKeyboard = true;
 	bool bUnicodeText = true;
 	bool bMouseButtons = true;
@@ -72,6 +73,7 @@ struct KNegotiatedCapabilities
 	bool bClipboardText = false;
 	bool bInputRealtime = false;
 	bool bOrderedMouseDrag = false;
+	bool bCursorShapeV1 = false;
 	bool bKeyboard = false;
 	bool bUnicodeText = false;
 	bool bMouseButtons = false;

@@ -14,9 +14,11 @@ namespace
 	constexpr unsigned long kDestructorShutdownTimeoutMs = 2000;
 }
 
-KCaptureService::KCaptureService(QObject *pParent, KHdrConversionMode hdrMode)
+KCaptureService::KCaptureService(QObject *pParent, KHdrConversionMode hdrMode,
+	std::shared_ptr<KVideoFramePathState> spFramePath)
 	: KCaptureController(pParent)
 	, m_hdrMode(hdrMode)
+	, m_spFramePath(std::move(spFramePath))
 {
 }
 
@@ -55,6 +57,8 @@ void KCaptureService::startCapture()
 void KCaptureService::startWebRtcCapture(quint64 nGeneration)
 {
 	m_nGeneration = nGeneration;
+	if (m_spFramePath)
+		m_spFramePath->begin(nGeneration);
 	startCaptureWithMode(KCaptureWorker::RemoteVideoWorkMode);
 }
 
@@ -72,8 +76,14 @@ void KCaptureService::startCaptureWithMode(KCaptureWorker::WorkMode mode)
 
 	clearPendingWebRtcFrame();
 	m_bAcceptWebRtcFrames = (mode == KCaptureWorker::RemoteVideoWorkMode);
+	clearPendingCursorShape();
+	{
+		std::lock_guard<std::mutex> guard(m_cursorMutex);
+		m_nCursorGeneration = m_nGeneration;
+		m_bAcceptCursorShapes = m_bAcceptWebRtcFrames;
+	}
 	m_pCaptureThread = new QThread(this);
-	m_pCaptureWorker = new KCaptureWorker(mode, nullptr, m_hdrMode);
+	m_pCaptureWorker = new KCaptureWorker(mode, nullptr, m_hdrMode, m_spFramePath);
 	m_pCaptureWorker->setStreamConfig(m_streamConfig);
 	m_pCaptureWorker->setInputTraceState(m_nLastInputSeq, m_nLastInputInjectedMs);
 	m_pCaptureWorker->moveToThread(m_pCaptureThread);
@@ -88,6 +98,12 @@ void KCaptureService::startCaptureWithMode(KCaptureWorker::WorkMode mode)
 		this, &KCaptureService::decodedFrameReady);
 	connect(m_pCaptureWorker, &KCaptureWorker::videoFrameReady,
 		this, &KCaptureService::enqueueWebRtcFrame, Qt::QueuedConnection);
+	const quint64 nWorkerGeneration = m_nGeneration;
+	connect(m_pCaptureWorker, &KCaptureWorker::cursorShapeReady, this,
+		[this, nWorkerGeneration](const KCursorShape &shape)
+		{
+			enqueueCursorShape(nWorkerGeneration, shape);
+		}, Qt::DirectConnection);
 	connect(m_pCaptureWorker, &KCaptureWorker::frameReady,
 		this, &KCaptureService::frameReady);
 	connect(m_pCaptureWorker, &KCaptureWorker::workFinished,
@@ -119,6 +135,7 @@ void KCaptureService::requestStopCapture(quint64 nGeneration)
 	m_bStartPending = false;
 	m_bAcceptWebRtcFrames = false;
 	clearPendingWebRtcFrame();
+	clearPendingCursorShape();
 	m_pCaptureWorker->stopWork();
 }
 
@@ -150,6 +167,7 @@ void KCaptureService::clearWorker()
 	const KCaptureWorker::WorkMode pendingMode = m_pendingMode;
 	m_bAcceptWebRtcFrames = false;
 	clearPendingWebRtcFrame();
+	clearPendingCursorShape();
 	m_pCaptureThread = nullptr;
 	m_pCaptureWorker = nullptr;
 	m_nStoppingGeneration = 0;
@@ -158,6 +176,51 @@ void KCaptureService::clearWorker()
 	emit captureShutdownFinished(nFinishedGeneration);
 	if (bRestart)
 		startCaptureWithMode(pendingMode);
+}
+
+void KCaptureService::enqueueCursorShape(quint64 nGeneration, const KCursorShape &shape)
+{
+	if (!shape.isValid() || shape.nGeneration != nGeneration)
+		return;
+	bool bNeedQueue = false;
+	{
+		std::lock_guard<std::mutex> guard(m_cursorMutex);
+		if (!m_bAcceptCursorShapes || nGeneration != m_nCursorGeneration)
+			return;
+		m_pendingCursorShape = shape;
+		if (!m_bCursorFlushQueued)
+		{
+			m_bCursorFlushQueued = true;
+			bNeedQueue = true;
+		}
+	}
+	if (bNeedQueue)
+		QMetaObject::invokeMethod(this, &KCaptureService::flushLatestCursorShape, Qt::QueuedConnection);
+}
+
+void KCaptureService::flushLatestCursorShape()
+{
+	KCursorShape shape;
+	quint64 nGeneration = 0;
+	{
+		std::lock_guard<std::mutex> guard(m_cursorMutex);
+		m_bCursorFlushQueued = false;
+		if (!m_bAcceptCursorShapes)
+			return;
+		shape = std::move(m_pendingCursorShape);
+		m_pendingCursorShape = {};
+		nGeneration = m_nCursorGeneration;
+	}
+	if (shape.isValid())
+		emit cursorShapeReady(nGeneration, shape);
+}
+
+void KCaptureService::clearPendingCursorShape()
+{
+	std::lock_guard<std::mutex> guard(m_cursorMutex);
+	m_pendingCursorShape = {};
+	m_bAcceptCursorShapes = false;
+	// Keep the queued flag until its callback drains; a restart can reuse it.
 }
 
 void KCaptureService::enqueueWebRtcFrame(const KVideoFrame &frame)

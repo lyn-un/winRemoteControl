@@ -7,6 +7,39 @@
 class KVideoRenderWidgetTestAccess
 {
 public:
+	static bool verifyCursor(KVideoRenderWidget &widget)
+	{
+		widget.hide();
+		widget.setSeparatedCursorEnabled(true);
+		KCursorShape shape;
+		shape.nSequence = 1;
+		shape.kind = ColorCursorShape;
+		shape.nWidth = shape.nHeight = 4;
+		shape.nStride = 20;
+		shape.nHotspotX = 2;
+		shape.nHotspotY = 3;
+		shape.data = QByteArray(80, '\xff');
+		widget.setRemoteCursorShape(shape);
+		if (!widget.m_remoteCursor.isReady())
+			return false;
+		ICONINFO info = {};
+		if (!::GetIconInfo(widget.m_remoteCursor.handle(), &info))
+			return false;
+		BITMAP bitmap = {};
+		::GetObjectW(info.hbmColor, sizeof(bitmap), &bitmap);
+		const bool bDimensions = bitmap.bmWidth == 4 && bitmap.bmHeight == 4
+			&& info.xHotspot == 2 && info.yHotspot == 3;
+		::DeleteObject(info.hbmMask);
+		::DeleteObject(info.hbmColor);
+		widget.setSeparatedCursorEnabled(false);
+		const bool bDisabled = !widget.m_remoteCursor.isReady();
+		widget.setRemoteCursorShape(shape);
+		const bool bIgnored = !widget.m_remoteCursor.isReady();
+		widget.setSeparatedCursorEnabled(true);
+		widget.setRemoteCursorShape(shape);
+		widget.clearFrame();
+		return bDimensions && bDisabled && bIgnored && !widget.m_remoteCursor.isReady();
+	}
 	static bool verify(KVideoRenderWidget &widget)
 	{
 		if (!widget.m_spSwapChain)
@@ -136,5 +169,6 @@ int main(int argc, char **argv)
 	ProcessEvents();
 	bSuccess &= KVideoRenderWidgetTestAccess::verify(widget);
 	widget.close();
+	bSuccess &= KVideoRenderWidgetTestAccess::verifyCursor(widget);
 	return bSuccess ? 0 : 1;
 }

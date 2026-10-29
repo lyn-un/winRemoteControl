@@ -4,6 +4,7 @@
 #include "core/media/latestdecodedframequeue.h"
 #include "render/remotemouseclicktracker.h"
 #include "render/d3di420pipeline.h"
+#include "render/nativecursor.h"
 
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QPoint>
@@ -34,6 +35,9 @@ public slots:
 	void presentFrame(const KDecodedVideoFrame &frame);
 	void suspendRemoteInput();
 	void clearFrame();
+	void setSeparatedCursorEnabled(bool bEnabled);
+	void setRemoteCursorShape(const KCursorShape &shape);
+	void clearRemoteCursor();
 
 signals:
 	void renderError(const QString &strMessage);
@@ -53,6 +57,7 @@ signals:
 
 protected:
 	bool event(QEvent *pEvent) override;
+	bool nativeEvent(const QByteArray &eventType, void *pMessage, qintptr *pResult) override;
 	void resizeEvent(QResizeEvent *pEvent) override;
 	void showEvent(QShowEvent *pEvent) override;
 	void hideEvent(QHideEvent *pEvent) override;
@@ -74,6 +79,12 @@ private slots:
 
 private:
 	friend class KVideoRenderWidgetTestAccess;
+	bool applyNativeCursor();
+	void restoreLocalCursor();
+	KNativeCursor m_remoteCursor;
+	bool m_bSeparatedCursorEnabled = false;
+	bool m_bRemoteCursorApplied = false;
+	bool m_bCursorFallbackLogged = false;
 	struct KVertex
 	{
 		float fPositionX = 0.0f;

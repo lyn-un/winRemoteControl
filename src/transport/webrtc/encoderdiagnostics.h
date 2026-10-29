@@ -43,6 +43,8 @@ private:
 	qint64 m_nEncodeMaxUs = 0;
 	qint64 m_nFfmpegTotalUs = 0;
 	qint64 m_nFfmpegMaxUs = 0;
+	qint64 m_nGpuSubmitCpuTotalUs = 0;
+	qint64 m_nGpuSubmitCpuMaxUs = 0;
 	std::chrono::steady_clock::time_point m_encodeSince = {};
 	QString m_strRates;
 	QString m_strLastError;

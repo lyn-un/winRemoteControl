@@ -1,4 +1,7 @@
 #include "transport/webrtc/webrtcpeer.h"
+#include "transport/webrtc/webrtcdatachannel.h"
+
+#include <api/make_ref_counted.h>
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QElapsedTimer>
@@ -21,11 +24,60 @@ public:
 	{
 		return pPeer->m_nInvalidSessionMessages.load();
 	}
+	static void setRole(KWebRtcPeer *pPeer, KSessionRole role)
+	{
+		pPeer->m_role = role;
+	}
+	static void setSessionChannel(KWebRtcPeer *pPeer,
+		webrtc::scoped_refptr<webrtc::DataChannelInterface> spChannel)
+	{
+		pPeer->m_pSessionDataChannel->setBufferWatermarks(0, 1);
+		pPeer->m_pSessionDataChannel->setChannel(std::move(spChannel));
+	}
+	static qsizetype cursorQueueSize(const KWebRtcPeer *pPeer)
+	{
+		return pPeer->m_cursorShapeMessages.size();
+	}
 };
 
 namespace
 {
 	int g_nFailureCount = 0;
+
+	class KFakeCursorDataChannel : public webrtc::DataChannelInterface
+	{
+	public:
+		void RegisterObserver(webrtc::DataChannelObserver *pObserver) override { m_pObserver = pObserver; }
+		void UnregisterObserver() override { m_pObserver = nullptr; }
+		std::string label() const override { return "session"; }
+		bool reliable() const override { return true; }
+		int id() const override { return 1; }
+		DataState state() const override { return kOpen; }
+		uint32_t messages_sent() const override { return static_cast<uint32_t>(sent.size()); }
+		uint64_t bytes_sent() const override { return 0; }
+		uint32_t messages_received() const override { return 0; }
+		uint64_t bytes_received() const override { return 0; }
+		uint64_t buffered_amount() const override { return m_nBuffered; }
+		void Close() override {}
+		bool Send(const webrtc::DataBuffer &buffer) override
+		{
+			sent.push_back(QString::fromUtf8(reinterpret_cast<const char *>(buffer.data.data()),
+				static_cast<qsizetype>(buffer.data.size())));
+			m_nBuffered = bBlockOnSend ? 1 : 0;
+			return true;
+		}
+		void drain()
+		{
+			m_nBuffered = 0;
+			if (m_pObserver != nullptr)
+				m_pObserver->OnBufferedAmountChange(1);
+		}
+		QVector<QString> sent;
+		bool bBlockOnSend = true;
+	private:
+		webrtc::DataChannelObserver *m_pObserver = nullptr;
+		uint64_t m_nBuffered = 0;
+	};
 
 	void Check(bool bCondition, const QString &strDescription)
 	{
@@ -120,6 +172,91 @@ namespace
 			QStringLiteral("terminal command results do not trigger a protocol violation"));
 	}
 
+	void TestCursorShapeRouting()
+	{
+		KWebRtcPeer peer;
+		int nReceived = 0;
+		QObject::connect(&peer, &KWebRtcPeer::cursorShapeMessageReceived,
+			[&](quint64, const KCursorShapeMessage &message)
+			{
+				if (message.isValid())
+					++nReceived;
+			});
+		KCursorShape shape;
+		shape.nSequence = 1;
+		const auto messages = KCursorShapeMessageCodec::split(shape);
+		const QString strMessage = KCursorShapeMessageCodec::encode(messages[0]);
+		KWebRtcPeerTestAccess::routeSessionMessage(&peer, strMessage);
+		Check(nReceived == 1 && KWebRtcPeerTestAccess::invalidSessionMessageCount(&peer) == 0,
+			QStringLiteral("valid cursor shape reaches controller session route"));
+		KWebRtcPeerTestAccess::setRole(&peer, ControlledSessionRole);
+		KWebRtcPeerTestAccess::routeSessionMessage(&peer, strMessage);
+		Check(nReceived == 1 && KWebRtcPeerTestAccess::invalidSessionMessageCount(&peer) == 1,
+			QStringLiteral("controlled peer rejects incoming cursor shapes"));
+		KWebRtcPeerTestAccess::setRole(&peer, ControllerSessionRole);
+		QString strInvalid = strMessage;
+		strInvalid.replace(QStringLiteral("\"visible\":true"), QStringLiteral("\"visible\":3"));
+		KWebRtcPeerTestAccess::routeSessionMessage(&peer, strInvalid);
+		Check(nReceived == 1 && KWebRtcPeerTestAccess::invalidSessionMessageCount(&peer) == 2,
+			QStringLiteral("malformed cursor shape rejected without delivery"));
+	}
+
+	void TestCursorBackpressure()
+	{
+		KWebRtcPeer peer;
+		KWebRtcPeerTestAccess::setRole(&peer, ControlledSessionRole);
+		auto spChannel = webrtc::make_ref_counted<KFakeCursorDataChannel>();
+		KWebRtcPeerTestAccess::setSessionChannel(&peer, spChannel);
+		KCursorShape shape;
+		shape.kind = ColorCursorShape;
+		shape.nWidth = shape.nHeight = 256;
+		shape.nStride = 1024;
+		shape.nSequence = 1;
+		shape.data = QByteArray(256 * 1024, '\xff');
+		Check(peer.sendCursorShape(shape) && spChannel->sent.size() == 1,
+			QStringLiteral("cursor sender stops at data-channel high watermark"));
+		for (quint64 nSequence = 2; nSequence <= 50; ++nSequence)
+		{
+			shape.nSequence = nSequence;
+			Check(peer.sendCursorShape(shape) && KWebRtcPeerTestAccess::cursorQueueSize(&peer) == 32,
+				QStringLiteral("cursor sender keeps one bounded latest shape while backpressured"));
+		}
+		KSessionMessage command;
+		command.type = DeviceInfoRequestSessionMessageType;
+		Check(peer.sendSessionMessage(command) == KRemotePeerTransport::SessionMessageAccepted,
+			QStringLiteral("session command accepted while cursor is blocked"));
+		spChannel->drain();
+		QCoreApplication::processEvents();
+		Check(spChannel->sent.size() == 2 && spChannel->sent[1].contains(QStringLiteral("deviceInfoRequest")),
+			QStringLiteral("session command takes priority over pending cursor chunks"));
+		spChannel->bBlockOnSend = false;
+		spChannel->drain();
+		QCoreApplication::processEvents();
+		Check(spChannel->sent.size() == 34 && KWebRtcPeerTestAccess::cursorQueueSize(&peer) == 0,
+			QStringLiteral("low watermark drains exactly one complete latest shape"));
+		KCursorShapeAssembler assembler;
+		KCursorShape result;
+		QString strError;
+		for (qsizetype nIndex = 0; nIndex < spChannel->sent.size(); ++nIndex)
+		{
+			if (nIndex == 1)
+				continue;
+			KCursorShapeMessage message;
+			Check(KCursorShapeMessageCodec::decode(spChannel->sent[nIndex], &message, &strError),
+				QStringLiteral("queued cursor chunk remains valid"));
+			assembler.accept(message, nIndex, &result, &strError);
+		}
+		Check(result.nSequence == 50 && result.data == shape.data,
+			QStringLiteral("partial superseded shape cannot corrupt latest cursor assembly"));
+		spChannel->bBlockOnSend = true;
+		shape.nSequence = 51;
+		peer.sendCursorShape(shape);
+		peer.clearCursorShapeQueue();
+		Check(KWebRtcPeerTestAccess::cursorQueueSize(&peer) == 0,
+			QStringLiteral("stop discards pending cursor chunks"));
+		KWebRtcPeerTestAccess::setSessionChannel(&peer, nullptr);
+	}
+
 	void TestFailureStage(KPeerInitializationStage stage,
 		KSessionRole role, quint64 nGeneration)
 	{
@@ -175,6 +312,8 @@ int main(int nArgc, char *pArgv[])
 {
 	QCoreApplication application(nArgc, pArgv);
 	TestTerminalCommandResultRouting();
+	TestCursorShapeRouting();
+	TestCursorBackpressure();
 	const KPeerInitializationStage controllerStages[] = {
 		ThreadsPeerInitializationStage,
 		FactoryPeerInitializationStage,

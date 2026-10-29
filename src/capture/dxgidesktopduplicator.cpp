@@ -17,7 +17,7 @@ namespace
 {
 	struct KSharedD3DDevice
 	{
-		std::mutex mutex;
+		std::shared_ptr<std::recursive_mutex> spMutex = std::make_shared<std::recursive_mutex>();
 		Microsoft::WRL::ComPtr<ID3D11Device> spDevice;
 		Microsoft::WRL::ComPtr<ID3D11DeviceContext> spContext;
 	};
@@ -195,8 +195,10 @@ bool CopyMappedCaptureFrameToBgra(const D3D11_TEXTURE2D_DESC &sourceDesc,
 	return CopyMappedFrameToBgra(sourceDesc, mappedResource, pFrame, fSdrWhiteScale);
 }
 
-KDxgiDesktopDuplicator::KDxgiDesktopDuplicator(KHdrConversionMode mode)
+KDxgiDesktopDuplicator::KDxgiDesktopDuplicator(KHdrConversionMode mode,
+	std::shared_ptr<KVideoFramePathState> spFramePath)
 	: m_hdrMode(mode)
+	, m_spFramePath(std::move(spFramePath))
 {
 }
 
@@ -205,9 +207,83 @@ KDxgiDesktopDuplicator::~KDxgiDesktopDuplicator()
 	shutdown();
 }
 
+bool KDxgiDesktopDuplicator::initializeDevice(QString *pErrorMessage)
+{
+	const D3D_FEATURE_LEVEL featureLevels[] = {
+		D3D_FEATURE_LEVEL_11_1,
+		D3D_FEATURE_LEVEL_11_0
+	};
+	D3D_FEATURE_LEVEL selectedFeatureLevel = D3D_FEATURE_LEVEL_11_0;
+
+	// The shared device survives capture workers and may be used from new threads.
+	UINT nFlags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+	if (m_spFramePath && m_spFramePath->mode() != CpuVideoFramePath)
+		nFlags |= D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
+#if defined(_DEBUG)
+	nFlags |= D3D11_CREATE_DEVICE_DEBUG;
+#endif
+
+	{
+		std::lock_guard<std::recursive_mutex> guard(*g_sharedD3DDevice.spMutex);
+		// A preview may have populated the cache without video support. Device
+		// creation flags cannot be upgraded in place; old owners keep their device.
+		if (g_sharedD3DDevice.spDevice == nullptr
+			|| ((nFlags & D3D11_CREATE_DEVICE_VIDEO_SUPPORT)
+				&& !(g_sharedD3DDevice.spDevice->GetCreationFlags() & D3D11_CREATE_DEVICE_VIDEO_SUPPORT)))
+		{
+			Microsoft::WRL::ComPtr<ID3D11Device> spDevice;
+			Microsoft::WRL::ComPtr<ID3D11DeviceContext> spContext;
+			HRESULT hrCreate = ::D3D11CreateDevice(nullptr,
+				D3D_DRIVER_TYPE_HARDWARE,
+				nullptr,
+				nFlags,
+				featureLevels,
+				2,
+				D3D11_SDK_VERSION,
+				&spDevice,
+				&selectedFeatureLevel,
+				&spContext);
+			if (FAILED(hrCreate) && (nFlags & D3D11_CREATE_DEVICE_VIDEO_SUPPORT)
+				&& m_spFramePath && m_spFramePath->mode() == AutoVideoFramePath)
+			{
+				m_spFramePath->fallback(m_nSourceGeneration, QStringLiteral("capture_video_device_unavailable"));
+				spDevice.Reset();
+				spContext.Reset();
+				hrCreate = ::D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
+					nFlags & ~D3D11_CREATE_DEVICE_VIDEO_SUPPORT, featureLevels, 2, D3D11_SDK_VERSION,
+					&spDevice, &selectedFeatureLevel, &spContext);
+			}
+			if (FAILED(hrCreate))
+			{
+				if (pErrorMessage != nullptr)
+					*pErrorMessage = hresultMessage(
+						QStringLiteral("D3D11CreateDevice failed"), hrCreate);
+				return false;
+			}
+			g_sharedD3DDevice.spDevice = spDevice;
+			g_sharedD3DDevice.spContext = spContext;
+		}
+		m_spDevice = g_sharedD3DDevice.spDevice;
+		m_spContext = g_sharedD3DDevice.spContext;
+	}
+	return true;
+}
+
 bool KDxgiDesktopDuplicator::initialize(QString *pErrorMessage)
 {
 	shutdown();
+	m_nSourceGeneration = m_spFramePath ? m_spFramePath->snapshot().nGeneration : 0;
+	if (m_spFramePath && m_spFramePath->mode() != CpuVideoFramePath
+		&& !m_spFramePath->snapshot().bSeparateCursor)
+	{
+		m_spFramePath->fallback(m_nSourceGeneration, QStringLiteral("peer_cursor_separation_unavailable"));
+		if (m_spFramePath->snapshot().decision == KVideoFramePathState::Failed)
+		{
+			if (pErrorMessage)
+				*pErrorMessage = m_spFramePath->snapshot().strReason;
+			return false;
+		}
+	}
 	const HRESULT hrCom = ::CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 	if (SUCCEEDED(hrCom))
 		m_bComInitialized = true;
@@ -217,44 +293,8 @@ bool KDxgiDesktopDuplicator::initialize(QString *pErrorMessage)
 			*pErrorMessage = hresultMessage(QStringLiteral("CoInitializeEx failed"), hrCom);
 		return false;
 	}
-
-	const D3D_FEATURE_LEVEL featureLevels[] = {
-		D3D_FEATURE_LEVEL_11_1,
-		D3D_FEATURE_LEVEL_11_0
-	};
-	D3D_FEATURE_LEVEL selectedFeatureLevel = D3D_FEATURE_LEVEL_11_0;
-
-	// The shared device survives capture workers and may be used from new threads.
-	UINT nFlags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
-#if defined(_DEBUG)
-	nFlags |= D3D11_CREATE_DEVICE_DEBUG;
-#endif
-
-	{
-		std::lock_guard<std::mutex> guard(g_sharedD3DDevice.mutex);
-		if (g_sharedD3DDevice.spDevice == nullptr)
-		{
-			const HRESULT hrCreate = ::D3D11CreateDevice(nullptr,
-				D3D_DRIVER_TYPE_HARDWARE,
-				nullptr,
-				nFlags,
-				featureLevels,
-				2,
-				D3D11_SDK_VERSION,
-				&g_sharedD3DDevice.spDevice,
-				&selectedFeatureLevel,
-				&g_sharedD3DDevice.spContext);
-			if (FAILED(hrCreate))
-			{
-				if (pErrorMessage != nullptr)
-					*pErrorMessage = hresultMessage(
-						QStringLiteral("D3D11CreateDevice failed"), hrCreate);
-				return false;
-			}
-		}
-		m_spDevice = g_sharedD3DDevice.spDevice;
-		m_spContext = g_sharedD3DDevice.spContext;
-	}
+	if (!initializeDevice(pErrorMessage))
+		return false;
 	HRESULT hr = S_OK;
 
 	Microsoft::WRL::ComPtr<IDXGIDevice> spDxgiDevice;
@@ -276,6 +316,11 @@ bool KDxgiDesktopDuplicator::initialize(QString *pErrorMessage)
 	}
 
 	Microsoft::WRL::ComPtr<IDXGIOutput> spOutput;
+	DXGI_ADAPTER_DESC adapterDescriptor = {};
+	if (FAILED(spAdapter->GetDesc(&adapterDescriptor)))
+		return false;
+	m_nAdapterLuid = (static_cast<quint64>(static_cast<quint32>(adapterDescriptor.AdapterLuid.HighPart)) << 32)
+		| adapterDescriptor.AdapterLuid.LowPart;
 	hr = spAdapter->EnumOutputs(0, &spOutput);
 	if (FAILED(hr))
 	{
@@ -295,11 +340,13 @@ void KDxgiDesktopDuplicator::shutdown()
 {
 	if (m_spContext != nullptr)
 	{
-		std::lock_guard<std::mutex> guard(g_sharedD3DDevice.mutex);
+		std::lock_guard<std::recursive_mutex> guard(*g_sharedD3DDevice.spMutex);
 		m_spContext->Flush();
 	}
 
 	m_hdrConverter.reset();
+	m_nativeFrames.clear();
+	m_nNativePoolDrops = 0;
 	m_bHdrGpuFailed = false;
 	m_lastLoggedFormat = DXGI_FORMAT_UNKNOWN;
 	m_nLastLoggedWidth = 0;
@@ -315,10 +362,16 @@ void KDxgiDesktopDuplicator::shutdown()
 	m_stagingDesc = {};
 	m_nFrameIndex = 0;
 	m_bHdrOutput = false;
+	m_nAcquiredFrames = 0;
+	m_nReleasedFrames = 0;
+	m_hrLastRelease = S_OK;
 	m_captureFormat = DXGI_FORMAT_UNKNOWN;
 	m_outputRect = {};
 	m_pointerPosition = {};
 	m_pointerShapeInfo = {};
+	m_lastCursorShape = {};
+	m_pendingCursorShape = {};
+	m_bHasPendingCursorShape = false;
 	m_vecPointerShapeBuffer.clear();
 	m_nPointerUpdateCount = 0;
 	m_nPointerOnlyFrameCount = 0;
@@ -440,6 +493,18 @@ IKCaptureSource::CaptureResult KDxgiDesktopDuplicator::captureNextFrame(KCapture
 {
 	if (pFrame == nullptr)
 		return ErrorCaptureResult;
+	pFrame->spNativeFrame.reset();
+	const auto path = m_spFramePath ? m_spFramePath->snapshot() : KVideoFramePathState::KSnapshot{};
+	if (path.nGeneration != m_nSourceGeneration)
+		return TimeoutCaptureResult;
+	if (path.decision == KVideoFramePathState::Failed)
+	{
+		if (pErrorMessage)
+			*pErrorMessage = path.strReason;
+		return ErrorCaptureResult;
+	}
+	const bool bNative = m_spFramePath && m_spFramePath->mode() != CpuVideoFramePath
+		&& path.decision != KVideoFramePathState::Cpu && path.bSeparateCursor;
 	if (!m_spDuplication)
 	{
 		if (pErrorMessage != nullptr)
@@ -452,7 +517,7 @@ IKCaptureSource::CaptureResult KDxgiDesktopDuplicator::captureNextFrame(KCapture
 	const HRESULT hrAcquire = m_spDuplication->AcquireNextFrame(100, &frameInfo, &spDesktopResource);
 	if (hrAcquire == DXGI_ERROR_WAIT_TIMEOUT)
 	{
-		if (m_nFrameIndex == 0)
+		if (m_nFrameIndex == 0 && !bNative)
 		{
 			KLatencyTraceLogger::write(QStringLiteral("controlled"),
 				QStringLiteral("initial_frame_fallback"),
@@ -466,14 +531,15 @@ IKCaptureSource::CaptureResult KDxgiDesktopDuplicator::captureNextFrame(KCapture
 	if (FAILED(hrAcquire))
 	{
 		if (pErrorMessage != nullptr)
-			*pErrorMessage = hresultMessage(QStringLiteral("AcquireNextFrame failed"), hrAcquire);
+			*pErrorMessage = hresultMessage(QStringLiteral("AcquireNextFrame failed"), hrAcquire)
+				+ QStringLiteral(" acquired=%1 released=%2 lastRelease=0x%3")
+					.arg(m_nAcquiredFrames).arg(m_nReleasedFrames)
+					.arg(static_cast<quint32>(m_hrLastRelease), 8, 16, QLatin1Char('0'));
 		return ErrorCaptureResult;
 	}
+	++m_nAcquiredFrames;
 	if (!updatePointerState(frameInfo, pErrorMessage))
-	{
-		m_spDuplication->ReleaseFrame();
-		return ErrorCaptureResult;
-	}
+		return releaseCapturedFrame(ErrorCaptureResult, pErrorMessage);
 
 	// Pointer-only updates carry no desktop image (AccumulatedFrames == 0 and the
 	// desktop resource is NULL on spec-conforming drivers). Recompose the cached
@@ -481,7 +547,10 @@ IKCaptureSource::CaptureResult KDxgiDesktopDuplicator::captureNextFrame(KCapture
 	// capture loop would die here whenever only the pointer moves.
 	if (frameInfo.AccumulatedFrames == 0 || !spDesktopResource)
 	{
-		m_spDuplication->ReleaseFrame();
+		if (releaseCapturedFrame(TimeoutCaptureResult, pErrorMessage) == ErrorCaptureResult)
+			return ErrorCaptureResult;
+		if (path.bSeparateCursor)
+			return TimeoutCaptureResult;
 		return capturePointerOnlyFrame(pFrame, pErrorMessage);
 	}
 
@@ -489,10 +558,9 @@ IKCaptureSource::CaptureResult KDxgiDesktopDuplicator::captureNextFrame(KCapture
 	HRESULT hr = spDesktopResource.As(&spDesktopTexture);
 	if (FAILED(hr))
 	{
-		m_spDuplication->ReleaseFrame();
 		if (pErrorMessage != nullptr)
 			*pErrorMessage = hresultMessage(QStringLiteral("Query desktop texture failed"), hr);
-		return ErrorCaptureResult;
+		return releaseCapturedFrame(ErrorCaptureResult, pErrorMessage);
 	}
 
 	D3D11_TEXTURE2D_DESC sourceDesc = {};
@@ -500,15 +568,25 @@ IKCaptureSource::CaptureResult KDxgiDesktopDuplicator::captureNextFrame(KCapture
 	// Keep a clean (pointer-free) GPU copy of the desktop so pointer-only frames
 	// can be recomposed without waiting for the next desktop update. Cache
 	// failure is not fatal: pointer-only frames degrade to timeouts.
-	if (ensureLastDesktopTexture(sourceDesc, pErrorMessage))
+	if (!path.bSeparateCursor && ensureLastDesktopTexture(sourceDesc, pErrorMessage))
 	{
-		std::lock_guard<std::mutex> guard(g_sharedD3DDevice.mutex);
+		std::lock_guard<std::recursive_mutex> guard(*g_sharedD3DDevice.spMutex);
 		m_spContext->CopyResource(m_spLastDesktopTexture.Get(), spDesktopTexture.Get());
 	}
 
+	if (bNative)
+	{
+		const CaptureResult result = copyTextureToNativeFrame(spDesktopTexture.Get(), pFrame, pErrorMessage);
+		if (result != ErrorCaptureResult || m_spFramePath->snapshot().decision != KVideoFramePathState::Cpu)
+		{
+			return releaseCapturedFrame(result, pErrorMessage);
+		}
+		// Auto fallback consumes the still-acquired desktop frame immediately;
+		// otherwise a static desktop might never produce another first frame.
+	}
 	const bool bCopied = copyTextureToBgraFrame(spDesktopTexture.Get(), pFrame, pErrorMessage);
-	m_spDuplication->ReleaseFrame();
-	if (!bCopied)
+	if (releaseCapturedFrame(bCopied ? CapturedCaptureResult : ErrorCaptureResult, pErrorMessage)
+		== ErrorCaptureResult)
 		return ErrorCaptureResult;
 
 	if (pFrame->nFrameIndex == 1)
@@ -522,9 +600,30 @@ IKCaptureSource::CaptureResult KDxgiDesktopDuplicator::captureNextFrame(KCapture
 	return CapturedCaptureResult;
 }
 
+IKCaptureSource::CaptureResult KDxgiDesktopDuplicator::releaseCapturedFrame(
+	CaptureResult result, QString *pErrorMessage)
+{
+	m_hrLastRelease = m_spDuplication->ReleaseFrame();
+	if (SUCCEEDED(m_hrLastRelease))
+	{
+		++m_nReleasedFrames;
+		return result;
+	}
+	if (pErrorMessage != nullptr)
+	{
+		const QString strPriorError = *pErrorMessage;
+		*pErrorMessage = hresultMessage(QStringLiteral("ReleaseFrame failed"), m_hrLastRelease)
+			+ QStringLiteral(" acquired=%1 released=%2").arg(m_nAcquiredFrames).arg(m_nReleasedFrames);
+		if (!strPriorError.isEmpty())
+			*pErrorMessage += QStringLiteral(" prior=") + strPriorError;
+	}
+	return ErrorCaptureResult;
+}
+
 bool KDxgiDesktopDuplicator::captureInitialFrameWithGdi(KCaptureFrame *pFrame,
 	QString *pErrorMessage)
 {
+	pFrame->spNativeFrame.reset();
 	const int nWidth = m_outputRect.right - m_outputRect.left;
 	const int nHeight = m_outputRect.bottom - m_outputRect.top;
 	if (nWidth <= 0 || nHeight <= 0)
@@ -611,6 +710,8 @@ bool KDxgiDesktopDuplicator::captureInitialFrameWithGdi(KCaptureFrame *pFrame,
 bool KDxgiDesktopDuplicator::updatePointerState(const DXGI_OUTDUPL_FRAME_INFO &frameInfo,
 	QString *pErrorMessage)
 {
+	const bool bSeparate = m_spFramePath && m_spFramePath->snapshot().bSeparateCursor;
+	const bool bWasVisible = m_pointerPosition.Visible != FALSE;
 	bool bPointerUpdated = false;
 	if (frameInfo.LastMouseUpdateTime.QuadPart != 0)
 	{
@@ -620,6 +721,13 @@ bool KDxgiDesktopDuplicator::updatePointerState(const DXGI_OUTDUPL_FRAME_INFO &f
 
 	if (frameInfo.PointerShapeBufferSize > 0)
 	{
+		if (bSeparate && frameInfo.PointerShapeBufferSize > KCursorShape::kMaximumBytes)
+		{
+			m_vecPointerShapeBuffer.clear();
+			m_pointerShapeInfo = {};
+			queueCursorShape();
+			return true;
+		}
 		m_vecPointerShapeBuffer.resize(frameInfo.PointerShapeBufferSize);
 		UINT nRequiredSize = 0;
 		HRESULT hr = m_spDuplication->GetFramePointerShape(
@@ -629,6 +737,13 @@ bool KDxgiDesktopDuplicator::updatePointerState(const DXGI_OUTDUPL_FRAME_INFO &f
 			&m_pointerShapeInfo);
 		if (hr == DXGI_ERROR_MORE_DATA && nRequiredSize > m_vecPointerShapeBuffer.size())
 		{
+			if (bSeparate && nRequiredSize > KCursorShape::kMaximumBytes)
+			{
+				m_vecPointerShapeBuffer.clear();
+				m_pointerShapeInfo = {};
+				queueCursorShape();
+				return true;
+			}
 			m_vecPointerShapeBuffer.resize(nRequiredSize);
 			hr = m_spDuplication->GetFramePointerShape(
 				static_cast<UINT>(m_vecPointerShapeBuffer.size()),
@@ -638,12 +753,24 @@ bool KDxgiDesktopDuplicator::updatePointerState(const DXGI_OUTDUPL_FRAME_INFO &f
 		}
 		if (FAILED(hr))
 		{
+			if (bSeparate)
+			{
+				m_vecPointerShapeBuffer.clear();
+				m_pointerShapeInfo = {};
+				queueCursorShape();
+				return true;
+			}
 			if (pErrorMessage != nullptr)
 				*pErrorMessage = hresultMessage(QStringLiteral("GetFramePointerShape failed"), hr);
 			return false;
 		}
 		m_vecPointerShapeBuffer.resize(nRequiredSize);
 		bPointerUpdated = true;
+	}
+	if (bSeparate && (m_lastCursorShape.nSequence == 0 || frameInfo.PointerShapeBufferSize > 0
+		|| bWasVisible != (m_pointerPosition.Visible != FALSE)))
+	{
+		queueCursorShape();
 	}
 
 	if (bPointerUpdated)
@@ -668,6 +795,75 @@ bool KDxgiDesktopDuplicator::updatePointerState(const DXGI_OUTDUPL_FRAME_INFO &f
 		}
 	}
 
+	return true;
+}
+
+void KDxgiDesktopDuplicator::queueCursorShape()
+{
+	KCursorShape shape;
+	shape.nGeneration = m_nSourceGeneration;
+	shape.nSequence = m_lastCursorShape.nSequence;
+	shape.bVisible = m_pointerPosition.Visible != FALSE;
+	if (m_pointerShapeInfo.Width <= KCursorShape::kMaximumDimension
+		&& m_pointerShapeInfo.Height <= KCursorShape::kMaximumDimension * 2
+		&& m_pointerShapeInfo.Pitch <= KCursorShape::kMaximumStride
+		&& m_vecPointerShapeBuffer.size() <= KCursorShape::kMaximumBytes)
+	{
+		if (m_pointerShapeInfo.Type == DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR)
+			shape.kind = ColorCursorShape;
+		else if (m_pointerShapeInfo.Type == DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MONOCHROME)
+			shape.kind = MonochromeCursorShape;
+		else if (m_pointerShapeInfo.Type == DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MASKED_COLOR)
+			shape.kind = MaskedColorCursorShape;
+		if (shape.kind != DefaultCursorShape)
+		{
+			shape.nWidth = static_cast<int>(m_pointerShapeInfo.Width);
+			shape.nHeight = static_cast<int>(m_pointerShapeInfo.Height);
+			if (shape.kind == MonochromeCursorShape)
+				shape.nHeight = shape.nHeight % 2 == 0 ? shape.nHeight / 2 : 0;
+			shape.nStride = static_cast<int>(m_pointerShapeInfo.Pitch);
+			shape.nHotspotX = m_pointerShapeInfo.HotSpot.x;
+			shape.nHotspotY = m_pointerShapeInfo.HotSpot.y;
+			shape.data = QByteArray(reinterpret_cast<const char *>(m_vecPointerShapeBuffer.data()),
+				static_cast<qsizetype>(m_vecPointerShapeBuffer.size()));
+		}
+	}
+	const int nExpected = shape.expectedByteCount();
+	if (nExpected < 0 || shape.data.size() != nExpected)
+	{
+		const bool bVisible = shape.bVisible;
+		shape = {};
+		shape.nGeneration = m_nSourceGeneration;
+		shape.nSequence = m_lastCursorShape.nSequence;
+		shape.bVisible = bVisible;
+	}
+	if (m_lastCursorShape.nSequence != 0 && shape.hasSameMetadata(m_lastCursorShape)
+		&& shape.data == m_lastCursorShape.data)
+	{
+		return;
+	}
+	++shape.nSequence;
+	if (shape.nSequence == 0)
+		return;
+	m_lastCursorShape = shape;
+	m_pendingCursorShape = shape;
+	m_bHasPendingCursorShape = true;
+}
+
+bool KDxgiDesktopDuplicator::takeCursorUpdate(KCursorShape *pShape)
+{
+	if (pShape == nullptr || !m_bHasPendingCursorShape)
+		return false;
+	const auto path = m_spFramePath ? m_spFramePath->snapshot() : KVideoFramePathState::KSnapshot();
+	if (!path.bSeparateCursor || path.nGeneration != m_nSourceGeneration)
+	{
+		m_pendingCursorShape = {};
+		m_bHasPendingCursorShape = false;
+		return false;
+	}
+	*pShape = std::move(m_pendingCursorShape);
+	m_pendingCursorShape = {};
+	m_bHasPendingCursorShape = false;
 	return true;
 }
 
@@ -822,6 +1018,7 @@ bool KDxgiDesktopDuplicator::copyTextureToBgraFrame(ID3D11Texture2D *pSourceText
 {
 	if (pSourceTexture == nullptr || pFrame == nullptr)
 		return false;
+	pFrame->spNativeFrame.reset();
 
 	D3D11_TEXTURE2D_DESC sourceDesc = {};
 	pSourceTexture->GetDesc(&sourceDesc);
@@ -833,7 +1030,7 @@ bool KDxgiDesktopDuplicator::copyTextureToBgraFrame(ID3D11Texture2D *pSourceText
 
 	// Only capture uses this shared immediate context. Serialize the entire
 	// conversion/readback sequence, but never the DXGI AcquireNextFrame wait.
-	std::unique_lock<std::mutex> contextGuard(g_sharedD3DDevice.mutex);
+	std::unique_lock<std::recursive_mutex> contextGuard(*g_sharedD3DDevice.spMutex);
 	Microsoft::WRL::ComPtr<ID3D11Texture2D> spConverted;
 	const DXGI_FORMAT inputFormat = sourceDesc.Format;
 	if (inputFormat != DXGI_FORMAT_R16G16B16A16_FLOAT
@@ -925,7 +1122,105 @@ bool KDxgiDesktopDuplicator::copyTextureToBgraFrame(ID3D11Texture2D *pSourceText
 
 	m_spContext->Unmap(m_spStagingTexture.Get(), 0);
 	contextGuard.unlock();
+	if (m_spFramePath && m_spFramePath->snapshot().bSeparateCursor)
+		return true;
 	return composePointer(pFrame, pErrorMessage);
+}
+
+IKCaptureSource::CaptureResult KDxgiDesktopDuplicator::copyTextureToNativeFrame(
+	ID3D11Texture2D *pSourceTexture, KCaptureFrame *pFrame, QString *pErrorMessage)
+{
+	std::lock_guard<std::recursive_mutex> guard(*g_sharedD3DDevice.spMutex);
+	const auto path = m_spFramePath->snapshot();
+	D3D11_TEXTURE2D_DESC descriptor = {};
+	pSourceTexture->GetDesc(&descriptor);
+	const DXGI_FORMAT inputFormat = descriptor.Format;
+	Microsoft::WRL::ComPtr<ID3D11Texture2D> spConverted;
+	HRESULT hr = m_spDevice->GetDeviceRemovedReason();
+	if (SUCCEEDED(hr) && descriptor.Format == DXGI_FORMAT_R16G16B16A16_FLOAT)
+	{
+		hr = m_hdrMode == CpuHdrConversionMode ? DXGI_ERROR_UNSUPPORTED
+			: m_hdrConverter.convert(m_spDevice.Get(), m_spContext.Get(), pSourceTexture,
+				m_fSdrWhiteScale, &spConverted);
+		if (SUCCEEDED(hr))
+		{
+			pSourceTexture = spConverted.Get();
+			pSourceTexture->GetDesc(&descriptor);
+		}
+	}
+	if (SUCCEEDED(hr) && descriptor.Format != DXGI_FORMAT_B8G8R8A8_UNORM
+		&& descriptor.Format != DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
+		&& descriptor.Format != DXGI_FORMAT_B8G8R8A8_TYPELESS)
+		hr = DXGI_ERROR_UNSUPPORTED;
+	if (FAILED(hr))
+	{
+		const HRESULT hDevice = m_spDevice->GetDeviceRemovedReason();
+		const QString strError = hresultMessage(QStringLiteral("GPU capture initialization"), hr);
+		if (pErrorMessage)
+			*pErrorMessage = strError;
+		if (SUCCEEDED(hDevice))
+			m_spFramePath->fallback(path.nGeneration, strError);
+		return ErrorCaptureResult;
+	}
+	if (!m_nativeFrames.empty() && (m_nativeFrames[0]->width() != static_cast<int>(descriptor.Width)
+		|| m_nativeFrames[0]->height() != static_cast<int>(descriptor.Height)
+		|| m_nativeFrames[0]->generation() != path.nGeneration))
+		m_nativeFrames.clear();
+	std::shared_ptr<KD3D11BgraFrame> spFrame;
+	for (const auto &spCandidate : m_nativeFrames)
+	{
+		if (spCandidate.use_count() == 1)
+		{
+			spFrame = spCandidate;
+			break;
+		}
+	}
+	if (!spFrame && m_nativeFrames.size() < 4)
+	{
+		descriptor.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+		descriptor.Usage = D3D11_USAGE_DEFAULT;
+		descriptor.BindFlags = descriptor.CPUAccessFlags = descriptor.MiscFlags = 0;
+		Microsoft::WRL::ComPtr<ID3D11Texture2D> spTexture;
+		hr = m_spDevice->CreateTexture2D(&descriptor, nullptr, &spTexture);
+		if (FAILED(hr))
+		{
+			const QString strError = hresultMessage(QStringLiteral("GPU capture pool allocation"), hr);
+			m_spFramePath->fallback(path.nGeneration, strError);
+			if (pErrorMessage)
+				*pErrorMessage = strError;
+			return ErrorCaptureResult;
+		}
+		spFrame = std::make_shared<KD3D11BgraFrame>(spTexture.Get(), g_sharedD3DDevice.spMutex,
+			path.nGeneration, m_nAdapterLuid);
+		m_nativeFrames.push_back(spFrame);
+	}
+	if (!spFrame)
+	{
+		++m_nNativePoolDrops;
+		if (m_nNativePoolDrops == 1 || m_nNativePoolDrops % 30 == 0)
+			KSessionTraceLogger::write(QStringLiteral("controlled"), QStringLiteral("gpu_capture_pool_drop"),
+				QStringLiteral("dropped=%1 capacity=4").arg(m_nNativePoolDrops));
+		return TimeoutCaptureResult;
+	}
+	// Both producer and converter submit to the same immediate context under
+	// this mutex. A later reuse copy is ordered after the consumer's input copy;
+	// the asynchronous encoder reads its separate AVFrame-backed NV12 pool.
+	m_spContext->CopyResource(spFrame->texture(), pSourceTexture);
+	m_spContext->Flush();
+	pFrame->vecBgraBuffer.clear();
+	pFrame->spNativeFrame = spFrame;
+	pFrame->nWidth = spFrame->width();
+	pFrame->nHeight = spFrame->height();
+	pFrame->nFrameIndex = ++m_nFrameIndex;
+	pFrame->nTimestampMs = QDateTime::currentMSecsSinceEpoch();
+	if (m_nFrameIndex == 1 || m_nFrameIndex % 300 == 0)
+		KSessionTraceLogger::write(QStringLiteral("controlled"), QStringLiteral("gpu_capture_watch"),
+			QStringLiteral("frame=%1 width=%2 height=%3 captureLuid=%4 readbackBytes=0 cpuConversion=0 pool=%5 "
+				"inputFormat=%6 hdrGpu=%7 sdrWhiteScale=%8")
+				.arg(m_nFrameIndex).arg(pFrame->nWidth).arg(pFrame->nHeight).arg(m_nAdapterLuid)
+				.arg(m_nativeFrames.size()).arg(static_cast<int>(inputFormat)).arg(spConverted ? 1 : 0)
+				.arg(m_fSdrWhiteScale));
+	return CapturedCaptureResult;
 }
 
 bool KDxgiDesktopDuplicator::createStagingTexture(const D3D11_TEXTURE2D_DESC &sourceDesc, QString *pErrorMessage)

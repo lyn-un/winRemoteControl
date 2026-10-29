@@ -2,6 +2,7 @@
 #define _WINREMOTECONTROL_CORE_MEDIA_CAPTURESOURCE_H_
 
 #include "core/media/captureframe.h"
+#include "core/media/cursorshape.h"
 
 #include <QtCore/QString>
 
@@ -18,6 +19,7 @@ public:
 	virtual ~IKCaptureSource() = default;
 	virtual bool initialize(QString *pErrorMessage) = 0;
 	virtual CaptureResult captureNextFrame(KCaptureFrame *pFrame, QString *pErrorMessage) = 0;
+	virtual bool takeCursorUpdate(KCursorShape *) { return false; }
 	virtual void shutdown() = 0;
 };
 

@@ -7,6 +7,7 @@
 #include <QtCore/QMetaObject>
 #include <QtCore/QString>
 #include <QtGui/QFocusEvent>
+#include <QtGui/QCursor>
 #include <QtGui/QHideEvent>
 #include <QtGui/QInputMethodEvent>
 #include <QtGui/QKeyEvent>
@@ -76,6 +77,7 @@ KVideoRenderWidget::KVideoRenderWidget(QWidget *pParent)
 
 KVideoRenderWidget::~KVideoRenderWidget()
 {
+	clearRemoteCursor();
 	setAttribute(Qt::WA_InputMethodEnabled, true);
 	cancelPendingMouseMove();
 	releaseAll();
@@ -288,6 +290,7 @@ void KVideoRenderWidget::suspendRemoteInput()
 
 void KVideoRenderWidget::clearFrame()
 {
+	clearRemoteCursor();
 	suspendRemoteInput();
 	const KLatestDecodedFrameQueueStats renderStats = m_frameQueue.clear();
 	m_i420Pipeline.clear();
@@ -376,6 +379,7 @@ void KVideoRenderWidget::showEvent(QShowEvent *pEvent)
 
 void KVideoRenderWidget::hideEvent(QHideEvent *pEvent)
 {
+	restoreLocalCursor();
 	m_mouseClickTracker.clear();
 	releaseRemoteKeys();
 	QWidget::hideEvent(pEvent);
@@ -566,10 +570,81 @@ void KVideoRenderWidget::wheelEvent(QWheelEvent *pEvent)
 
 void KVideoRenderWidget::leaveEvent(QEvent *pEvent)
 {
+	restoreLocalCursor();
 	// No further move events arrive once the cursor leaves the widget, so
 	// flush the latest pending position immediately.
 	flushPendingMouseMove();
 	QWidget::leaveEvent(pEvent);
+}
+
+void KVideoRenderWidget::setSeparatedCursorEnabled(bool bEnabled)
+{
+	m_bSeparatedCursorEnabled = bEnabled;
+	if (!bEnabled)
+		clearRemoteCursor();
+}
+
+void KVideoRenderWidget::setRemoteCursorShape(const KCursorShape &shape)
+{
+	if (!m_bSeparatedCursorEnabled)
+		return;
+	restoreLocalCursor();
+	QString strError;
+	if (!m_remoteCursor.initialize(shape, &strError))
+	{
+		if (!m_bCursorFallbackLogged)
+		{
+			KSessionTraceLogger::write(QStringLiteral("controller"), QStringLiteral("cursor_shape"),
+				QStringLiteral("default_fallback"), -1, strError);
+			m_bCursorFallbackLogged = true;
+		}
+		KCursorShape fallback;
+		fallback.nSequence = 1;
+		m_remoteCursor.initialize(fallback, nullptr);
+	}
+	applyNativeCursor();
+}
+
+void KVideoRenderWidget::clearRemoteCursor()
+{
+	restoreLocalCursor();
+	m_remoteCursor.reset();
+	m_bCursorFallbackLogged = false;
+}
+
+bool KVideoRenderWidget::applyNativeCursor()
+{
+	if (!m_bSeparatedCursorEnabled || !m_remoteCursor.isReady() || !isVisible()
+		|| !underMouse() || m_nFrameWidth <= 0 || m_frameDisplayRect.isEmpty()
+		|| !m_frameDisplayRect.contains(mapFromGlobal(QCursor::pos())))
+	{
+		return false;
+	}
+	::SetCursor(m_remoteCursor.handle());
+	m_bRemoteCursorApplied = true;
+	return true;
+}
+
+void KVideoRenderWidget::restoreLocalCursor()
+{
+	if (m_bRemoteCursorApplied && ::GetCursor() == m_remoteCursor.handle())
+		::SetCursor(::LoadCursorW(nullptr, IDC_ARROW));
+	m_bRemoteCursorApplied = false;
+}
+
+bool KVideoRenderWidget::nativeEvent(const QByteArray &eventType, void *pMessage, qintptr *pResult)
+{
+	const auto *pNativeMessage = static_cast<const MSG *>(pMessage);
+	if (pNativeMessage != nullptr && pNativeMessage->message == WM_SETCURSOR
+		&& LOWORD(pNativeMessage->lParam) == HTCLIENT && applyNativeCursor())
+	{
+		if (pResult != nullptr)
+			*pResult = TRUE;
+		return true;
+	}
+	if (pNativeMessage != nullptr && pNativeMessage->message == WM_SETCURSOR)
+		restoreLocalCursor();
+	return QWidget::nativeEvent(eventType, pMessage, pResult);
 }
 
 void KVideoRenderWidget::flushPendingMouseMove()

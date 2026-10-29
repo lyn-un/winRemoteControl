@@ -49,6 +49,41 @@ Session DataChannel 打开后交换 `KSessionCapabilities`，包括：
 
 `orderedMouseDrag` 只有双方都声明支持且实时输入可用时才启用。字段缺失默认为关闭：空闲移动继续使用 `input-realtime`，按钮和旧版拖拽保持原兼容行为。启用后，按钮 `Down/Up` 与按住期间的移动统一走可靠 `input`；接收端会丢弃按钮按住期间迟到的实时移动，同时推进实时序号水位。
 
+### 独立指针形状（GPU 发送路径仍在验收）
+
+`cursorShapeV1` 是新增的可选布尔能力，缺失视为 false，只有双方都声明才得到交集。
+Windows 应用在采集及原生显示模块就绪、最终权限包含 viewScreen 时发布该能力。
+会话收发及原生指针显示已接线，双机视觉及真实输入仍需单独验收；该能力不授予输入权限。
+
+形状消息类型为 `cursorShape`，走可靠、有序的 `session` 通道，复用 version=1
+信封与十进制字符串 `seq`，不带 requestId，不使用会话命令 ACK。字段为 `kind`、
+`width/height/stride`、`hotspotX/hotspotY`、`visible`、`offset/totalBytes`、`data`。
+`kind` 取 0 默认箭头、1 预乘透明度的彩色 BGRA、2 单色 AND/XOR、3 MaskedColor。单色高度表示一层
+掩码的逻辑高度，数据依次为等尺寸 AND、XOR 两层；MaskedColor 保留其特殊掩码语义，
+不得视为普通透明度混合。消息不含远端鼠标位置或可改变本地授权的 generation。
+
+宽高各不超过 256，stride 不超过 2048，完整原始数据不超过 256 KiB；每块最多
+8192 字节，非尾块必须满块，offset 按 8192 对齐。数据为严格、规范 Base64，单条 JSON
+仍受 Session 的 160 KiB 上限约束。默认箭头或隐藏默认指针允许零尺寸、零数据消息。
+有形状时热点必须在可见尺寸内，尺寸与 stride 推导的数据长度必须与 totalBytes 一致。
+
+重组器至多保留一份形状，缓存上限 256 KiB，首次分块后 5 秒超时。更高序号的首块可
+替换未完成旧形状；乱序/重复分块、元数据变化会拒绝并清理本次重组，已完成/失效序号的
+迟到消息忽略。会话层使用单次定时器清理无人继续发送的半份形状；暂停清理未完成数据但
+保留序号水位，完整会话换代才 reset。发送端对采集事件重新分配会话内递增序号，避免
+同一会话停止再启动采集时形状序号从 1 重来。接收限控制端、Streaming、当前 generation、
+已协商能力且有 viewScreen 权限；发送限被控端同等授权状态。连续三次重组错误按协议错误
+结束会话，像素不进入错误日志。
+
+发送端只缓存最新一份形状（最多 32 个分块），未提交的旧形状可被替换；session 命令队列
+优先，DataChannel 达高水位时停止提交，低水位回调恢复。停止推流、通道关闭和断开时清空。
+旧客户端缺少能力时仍使用原 CPU 指针合成路径，新客户端不全局隐藏被控端鼠标。
+
+控制端使用 Windows 原生光标：单色双掩码和 MaskedColor 保留背景 AND/XOR，彩色
+DXGI 预乘 BGRA 转为原生光标所需颜色表示。形状尺寸、热点按原始物理像素保留，不随视频
+缩小；Qt 逻辑坐标只用于判定光标是否位于视频内容区。离开视频区、隐藏窗口、停止和断开
+恢复本地指针；默认/隐藏/不支持形状有明确退回，不调用全局 ShowCursor 或修改系统指针。
+
 隐私控制使用 `setPrivacyMode`、`privacyModeState`、`setPostSessionAction` 和 `postSessionActionState`。命令复用 Session Command 的 UUID、1 秒超时、一次重试和结果缓存；状态事件始终携带远端真实 `effectiveMode`。旧客户端缺少能力字段时按仅支持 `disabled`、不支持结束锁屏处理。生产构建默认不发布 `displayoff`，因此控制端不会显示该入口。
 
 ## DataChannel

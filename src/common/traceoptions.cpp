@@ -37,6 +37,9 @@ void KTraceOptionsParser::addOptions(QCommandLineParser *pParser)
 		return;
 	pParser->addOption(QCommandLineOption(QStringLiteral("video-renderer"),
 		QStringLiteral("Receiver renderer: auto or bgra."), QStringLiteral("mode"), QStringLiteral("auto")));
+	pParser->addOption(QCommandLineOption(QStringLiteral("video-frame-path"),
+		QStringLiteral("Experimental sender frame path: auto, cpu or gpu."),
+		QStringLiteral("mode"), QStringLiteral("cpu")));
 
 	pParser->addOption(QCommandLineOption(QString::fromLatin1(kTraceOptionName),
 		QStringLiteral("Enable all developer trace logs.")));
@@ -87,6 +90,19 @@ KTraceOptions KTraceOptionsParser::options(const QCommandLineParser &parser,
 		|| IsEnvironmentEnabled(kResourceTraceEnvironmentName);
 	options.bDesktopInputTraceEnabled = bEnableAll
 		|| parser.isSet(QString::fromLatin1(kDesktopInputTraceOptionName));
+	const QString strFramePath = parser.value(QStringLiteral("video-frame-path"));
+	if (strFramePath == QStringLiteral("auto"))
+		options.videoFramePath = AutoVideoFramePath;
+	else if (strFramePath == QStringLiteral("gpu"))
+		options.videoFramePath = GpuVideoFramePath;
+	else if (strFramePath != QStringLiteral("cpu"))
+		options.strValidationError = QStringLiteral("Invalid video frame path. Expected auto, cpu or gpu.");
+	if (options.bLatencyTraceEnabled)
+	{
+		if (options.videoFramePath == GpuVideoFramePath)
+			options.strValidationError = QStringLiteral("GPU frame path cannot be combined with latency tracing.");
+		options.videoFramePath = CpuVideoFramePath;
+	}
 
 	const QString strRequestedDirectory = parser.value(
 		QString::fromLatin1(kLogDirectoryOptionName)).trimmed();

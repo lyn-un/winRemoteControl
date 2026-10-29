@@ -1,9 +1,33 @@
 #include "capture/captureworker.h"
+#include "capture/captureservice.h"
+#include "common/sessiontracelogger.h"
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QDir>
+#include <QtCore/QFile>
+#include <QtCore/QScopeGuard>
+#include <QtCore/QTemporaryDir>
 
 #include <iostream>
 #include <memory>
+
+struct KCaptureServiceTestAccess
+{
+	static void accept(KCaptureService *pService, quint64 nGeneration)
+	{
+		std::lock_guard<std::mutex> guard(pService->m_cursorMutex);
+		pService->m_bAcceptCursorShapes = true;
+		pService->m_nCursorGeneration = nGeneration;
+	}
+	static void enqueue(KCaptureService *pService, quint64 nGeneration, const KCursorShape &shape)
+	{
+		pService->enqueueCursorShape(nGeneration, shape);
+	}
+	static void stop(KCaptureService *pService)
+	{
+		pService->clearPendingCursorShape();
+	}
+};
 
 namespace
 {
@@ -32,7 +56,7 @@ namespace
 				return CapturedCaptureResult;
 			}
 			if (pErrorMessage != nullptr)
-				*pErrorMessage = QStringLiteral("finished");
+				*pErrorMessage = strFailure;
 			return ErrorCaptureResult;
 		}
 
@@ -46,6 +70,7 @@ namespace
 		bool bBufferReused = false;
 		unsigned char *pFirstBuffer = nullptr;
 		int nCaptureCalls = 0;
+		QString strFailure = QStringLiteral("finished");
 	};
 
 	class KFakeCaptureFrameSink : public IKCaptureFrameSink
@@ -91,6 +116,29 @@ namespace
 		int nStreamConfigCount = 0;
 	};
 
+	class KFakeCursorCaptureSource : public KFakeCaptureSource
+	{
+	public:
+		CaptureResult captureNextFrame(KCaptureFrame *pFrame, QString *) override
+		{
+			++nCalls;
+			if (nCalls == 1)
+				return TimeoutCaptureResult;
+			if (nCalls > 2)
+				return ErrorCaptureResult;
+			pFrame->nWidth = pFrame->nHeight = 2;
+			pFrame->vecBgraBuffer.resize(16);
+			return CapturedCaptureResult;
+		}
+		bool takeCursorUpdate(KCursorShape *pShape) override
+		{
+			*pShape = {};
+			pShape->nSequence = nCalls;
+			return true;
+		}
+		int nCalls = 0;
+	};
+
 	bool require(bool bCondition, const char *pMessage)
 	{
 		if (bCondition)
@@ -103,6 +151,11 @@ namespace
 int main(int argc, char *argv[])
 {
 	QCoreApplication application(argc, argv);
+	QTemporaryDir traceDirectory;
+	if (!traceDirectory.isValid())
+		return 1;
+	KSessionTraceLogger::configure(true, traceDirectory.path());
+	const auto traceGuard = qScopeGuard([]() { KSessionTraceLogger::configure(false, QString()); });
 	auto upSource = std::make_unique<KFakeCaptureSource>();
 	auto upSink = std::make_unique<KFakeCaptureFrameSink>();
 	KFakeCaptureSource *pSource = upSource.get();
@@ -111,6 +164,69 @@ int main(int argc, char *argv[])
 	worker.startWork();
 
 	bool bSuccess = true;
+	QFile traceFile(QDir(traceDirectory.path()).filePath(QStringLiteral("session_trace_app.log")));
+	const bool bTraceReadable = traceFile.open(QIODevice::ReadOnly);
+	const QByteArray trace = bTraceReadable ? traceFile.readAll() : QByteArray();
+	traceFile.close();
+	bSuccess &= require(trace.contains("stage=capture_pipeline_error type=capture")
+		&& trace.contains("detail=finished"), "capture failure native detail is retained in the session trace");
+	auto upLongErrorSource = std::make_unique<KFakeCaptureSource>();
+	upLongErrorSource->strFailure = QStringLiteral("line1\nINJECTED\r\t") + QString(600, QLatin1Char('x'));
+	KCaptureWorker longErrorWorker(std::move(upLongErrorSource), std::make_unique<KFakeCaptureFrameSink>());
+	longErrorWorker.startWork();
+	const bool bLongTraceReadable = traceFile.open(QIODevice::ReadOnly);
+	const QByteArray boundedTrace = bLongTraceReadable ? traceFile.readAll() : QByteArray();
+	traceFile.close();
+	bSuccess &= require(boundedTrace.count("stage=capture_pipeline_error") == 2
+		&& boundedTrace.contains("detail=line1 INJECTED  ") && !boundedTrace.contains("\nINJECTED")
+		&& !boundedTrace.contains(QByteArray(513, 'x')), "capture error trace is single-line and bounded");
+	auto upCursorSource = std::make_unique<KFakeCursorCaptureSource>();
+	auto upCursorSink = std::make_unique<KFakeCaptureFrameSink>();
+	KFakeCaptureFrameSink *pCursorSink = upCursorSink.get();
+	KCaptureWorker cursorWorker(std::move(upCursorSource), std::move(upCursorSink));
+	int nCursorEvents = 0;
+	QObject::connect(&cursorWorker, &KCaptureWorker::cursorShapeReady,
+		[&nCursorEvents](const KCursorShape &) { ++nCursorEvents; });
+	cursorWorker.startWork();
+	bSuccess &= require(nCursorEvents == 2 && pCursorSink->nProcessedFrames == 1 && pCursorSink->nTimeouts == 1,
+		"cursor events survive capture timeout without producing duplicate video frames");
+	KCaptureService cursorService;
+	int nDeliveredShapes = 0;
+	quint64 nDeliveredGeneration = 0;
+	quint64 nDeliveredSequence = 0;
+	QObject::connect(&cursorService, &KCaptureService::cursorShapeReady,
+		[&](quint64 nGeneration, const KCursorShape &shape)
+		{
+			++nDeliveredShapes;
+			nDeliveredGeneration = nGeneration;
+			nDeliveredSequence = shape.nSequence;
+		});
+	KCaptureServiceTestAccess::accept(&cursorService, 1);
+	KCursorShape shape;
+	shape.nGeneration = 1;
+	for (quint64 nSequence = 1; nSequence <= 200; ++nSequence)
+	{
+		shape.nSequence = nSequence;
+		KCaptureServiceTestAccess::enqueue(&cursorService, 1, shape);
+	}
+	QCoreApplication::processEvents();
+	bSuccess &= require(nDeliveredShapes == 1 && nDeliveredSequence == 200,
+		"capture cursor handoff coalesces to one latest shape");
+	shape.nSequence = 201;
+	KCaptureServiceTestAccess::enqueue(&cursorService, 1, shape);
+	KCaptureServiceTestAccess::stop(&cursorService);
+	KCaptureServiceTestAccess::accept(&cursorService, 2);
+	KCaptureServiceTestAccess::enqueue(&cursorService, 1, shape);
+	shape.nGeneration = 2;
+	shape.nSequence = 1;
+	KCaptureServiceTestAccess::enqueue(&cursorService, 2, shape);
+	QCoreApplication::processEvents();
+	bSuccess &= require(nDeliveredShapes == 2 && nDeliveredGeneration == 2 && nDeliveredSequence == 1,
+		"capture cursor restart drains queued callback without accepting stale generation");
+	KCaptureServiceTestAccess::stop(&cursorService);
+	KCaptureServiceTestAccess::enqueue(&cursorService, 2, shape);
+	QCoreApplication::processEvents();
+	bSuccess &= require(nDeliveredShapes == 2, "stopped capture cannot publish cursor shapes");
 	bSuccess &= require(pSource->bInitialized, "capture source was not initialized");
 	bSuccess &= require(pSource->bShutdown, "capture source was not shut down");
 	bSuccess &= require(pSink->bInitialized, "capture sink was not initialized");

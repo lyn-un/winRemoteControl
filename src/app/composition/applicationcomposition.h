@@ -3,6 +3,7 @@
 
 #include "core/media/videoencoderpreference.h"
 #include "core/media/hdrconversionmode.h"
+#include "core/media/videoframepath.h"
 
 #include <QtCore/QObject>
 #include <QtCore/QPointer>
@@ -38,7 +39,8 @@ class KApplicationComposition : public QObject
 
 public:
 	explicit KApplicationComposition(KVideoEncoderPreference encoderPreference,
-		QObject *pParent = nullptr, KHdrConversionMode hdrMode = AutoHdrConversionMode);
+		QObject *pParent = nullptr, KHdrConversionMode hdrMode = AutoHdrConversionMode,
+		KVideoFramePathMode framePath = CpuVideoFramePath);
 	~KApplicationComposition() override;
 
 	KApplicationComposition(const KApplicationComposition &) = delete;
@@ -63,6 +65,7 @@ private:
 	void tryFinishShutdown();
 	void handleShutdownDeadline();
 
+	std::shared_ptr<KVideoFramePathState> m_spFramePath;
 	KCaptureService *m_pCaptureService = nullptr;
 	KApplicationCommandRegistry *m_pApplicationCommandRegistry = nullptr;
 	KAutomationHostBridge *m_pAutomationHostBridge = nullptr;

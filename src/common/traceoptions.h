@@ -2,6 +2,7 @@
 #define _WINREMOTECONTROL_COMMON_TRACEOPTIONS_H_
 
 #include <QtCore/QString>
+#include "core/media/videoframepath.h"
 
 class QCommandLineParser;
 
@@ -12,6 +13,7 @@ struct KTraceOptions
 	bool bResourceTraceEnabled = false;
 	bool bDesktopInputTraceEnabled = false;
 	bool bForceBgraVideoRenderer = false;
+	KVideoFramePathMode videoFramePath = CpuVideoFramePath;
 	QString strLogDirectory;
 	QString strLatencyScenario;
 	QString strValidationError;

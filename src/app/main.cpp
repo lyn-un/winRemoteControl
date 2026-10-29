@@ -78,6 +78,11 @@ int main(int nArgc, char *pArgv[])
 	g_bForceBgraVideoRenderer.store(traceOptions.bForceBgraVideoRenderer);
 	KSessionTraceLogger::configure(
 		traceOptions.bSessionTraceEnabled, traceOptions.strLogDirectory);
+	KSessionTraceLogger::write(QStringLiteral("app"), QStringLiteral("video_frame_path_config"),
+		QStringLiteral("requested=%1 effective=%2 reason=%3")
+			.arg(parser.value(QStringLiteral("video-frame-path")),
+				QString::fromLatin1(VideoFramePathName(traceOptions.videoFramePath)),
+				traceOptions.bLatencyTraceEnabled ? QStringLiteral("latency_trace") : QStringLiteral("none")));
 	KLatencyTraceLogger::configure(
 		traceOptions.bLatencyTraceEnabled,
 		traceOptions.strLogDirectory,
@@ -121,7 +126,7 @@ int main(int nArgc, char *pArgv[])
 		return 2;
 	}
 
-	KMainWindow mainWindow(encoderPreference, nullptr, hdrMode);
+	KMainWindow mainWindow(encoderPreference, nullptr, hdrMode, traceOptions.videoFramePath);
 	mainWindow.resize(1280, 760);
 	mainWindow.show();
 

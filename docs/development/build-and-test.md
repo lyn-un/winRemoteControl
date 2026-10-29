@@ -1,5 +1,118 @@
 # 构建与测试
 
+## 指针分离测试
+
+2026-10-29提交前复核：普通Release全量构建通过，完整CTest102项中76通过、26显式跳过、
+0失败（139.81秒）；真实输入与厂商硬件专项未在本次复跑中启用。历史硬件/双机结果及
+手动锁屏触发的ACCESS_LOST见下文和视频链路GPU-CAP-001，不把本次默认测试代替硬件验收。
+
+`wrc_cursor_shape_tests` 不访问桌面、不注入输入。覆盖默认/彩色/单色/MaskedColor、
+完整 64 位序号、最大 256 KiB 数据的分块重组、带 padding 的 stride、非法尺寸与热点、
+严格 Base64、错通道/版本、缺块/乱序/重复、5 秒超时、替换、reset 及旧序号清理。
+
+`wrc_capture_cursor_shape_tests` 只向采集对象提供合成 DXGI 元数据，不初始化真实
+Duplication；检查单色双高度、可见性变化、不回传位置、最新形状覆盖、异常形状回退、
+generation 和 shutdown 清理。`wrc_capture_pipeline_tests` 另覆盖 Timeout 时仍转交
+指针事件，service 的 200 次更新合并、停止拒绝及重启时旧回调排空。
+
+```powershell
+ctest --preset release -R '^wrc_(cursor_shape|capture_cursor_shape|capture_pipeline|protocol|p1_core)_tests$' --output-on-failure
+```
+
+`wrc_native_cursor_tests` 使用自有离屏 DIB，不捕获桌面、不安装或移动真实鼠标指针。
+精确检查单色四种 AND/XOR 组合、MaskedColor 复制/XOR、半透明预乘颜色、热点和默认/
+隐藏/无效输入；另循环创建/销毁 200 次，检查 USER/GDI 对象没有超限累积。彩色像素在
+生成原生光标前做反预乘，避免离屏 DrawIconEx 中再次乘透明度变暗；已在本机和远端
+Intel 的实际 Windows 环境通过，不以主观截图替代像素检查。
+
+`wrc_session_service_tests` 使用假采集/输入、授权回环连接，覆盖新旧能力、只读观看、
+未 Streaming/旧 generation/错误角色/重复事件拒绝、停止重启的连续序号、真实 Qt
+5 秒定时器清理和错误重组后恢复。采集事件用会话 generation，Peer 回调用独立的
+Peer generation 校验，测试包含被控端监听后接入导致两者不同的情形。
+
+`wrc_webrtc_peer_initialization_tests` 用假 DataChannel 验证水位暂停与恢复：最大形状
+32 块、连续替换 50 份仍只缓存最新一份，session 命令优先，部分旧形状不会污染新形状，
+停止清空；另检查控制端路由和错误角色/字段拒绝。`wrc_video_render_size_*` 分别以
+1、1.25、1.5、2 的缩放比例继续验证物理缓冲和输入映射，
+并检查独立指针的物理尺寸/热点不随视频缩小、禁用/清帧后释放。
+
+应用现已发布 `cursorShapeV1`，但这些测试仍不是双机视觉或真实输入验收。默认发送路径
+仍为 cpu；与旧端兼容时继续 CPU 合成，双方新版可通过 auto/gpu 显式测试 GPU 链路。
+
+2026-10-27 本阶段普通 Release 全量构建通过；完整 CTest 98 项，74 通过、24 显式
+跳过、0 失败（112.88 秒，真实输入显式关闭）。相关 5 项测试另单独通过；远端 Intel
+实跑同一指针协议测试退出 0。硬件专项的默认跳过不等于本轮重新完成三后端硬件验收。
+
+接线阶段最新结果：普通 Release 全量构建通过；完整 CTest 99 项，75 通过、24 显式
+跳过、0 失败（122.05 秒，真实输入仍显式关闭）。原生指针离屏测试另在远端 Intel
+通过；真实桌面指针显示、输入和新 GPU 会话性能仍未纳入该结论。
+
+另完成首轮真实 QSV GPU 双机只读验证：双方同一构建，经配对码比对和明确接入/开始推流；
+Intel 被控端强制 gpu/qsv，本机控制。1152×720 切换到原始 1920×1200，请求 30FPS/8Mbps，
+可见合成动画期间持续解码，日志确认 actual=gpu、readbackBytes=0、cpuConversion=0、采集池
+4槽；未记录捕获/编码错误。同会话停止/恢复、停止后的帧数安静窗口、正常断开通过。
+没有注入键鼠；并非固定场景性能对比，也不代表反向 AMD/NVIDIA、跨适配器、主观画质和
+30分钟长稳或20次重连已验收。测试程序和动画均已退出，日志保持本地忽略。
+
+反向 NVENC 基础验证另已通过：Intel控制本机，实际采集适配器为NVIDIA，
+1280×720切换2560×1440、强制gpu/h264_nvenc、仅观看；20次同会话停止/恢复通过，
+另完成1808秒/89样本长稳。新版实际HDR复验确认inputFormat=10、hdrGpu=1、
+读回/CPU转色0；约56秒采集1675帧/错误0，原画尺寸持续接收。这些不代表主观色彩验收。
+AMF auto实际双机已确认跨卡CPU回退（111810→103674），90样本持续收帧观察结束，
+首末样本跨度1809.44秒，最终采集/编码错误0。脚本最后读宿主状态因driver session空闲
+过期报错退出1，保留失败；该宿主此前30分钟没有被脚本轮询，不能解释成视频断流。
+末段资源仅21样本/418.86秒，不能当全程连续峰值。物理键盘及100%/150%DPI用户明确暂缓。
+强制AMF/gpu另以可见本机回环验证：capture_pipeline_error明确cross_adapter，编码输出0、
+接收帧0，经原错误链断开；没有静默CPU回退。不是AMF同卡真实桌面验收。
+
+## GPU 硬件帧接入专项（发送链路显式启用）
+
+`wrc_gpu_nv12_tests` 和 `wrc_gpu_nv12_warp_tests` 验证独立的 BGRA→NV12 GPU
+模块：BT.601 limited-range、双线性缩放、2×2 UV 平均、奇数源尺寸、输入 stride
+padding、输出对齐填充及无效参数。对比独立标量参考，Y/UV 最大误差门限为 3；
+1:1 另与现有 `SWS_FAST_BILINEAR` BGRA→I420 实际输出比较，Y/UV 门限也为 3，
+并核对本构建 swscale 默认矩阵和 range。缩放情况的 swscaleMaxY/UV=-1 表示未用
+swscale 作逐像素参考；这部分对比显式标量采样算法。尚未覆盖真实桌面清晰度或完整 HDR 串联。
+
+`wrc_gpu_hardware_frame_probe h264_qsv|h264_amf|h264_nvenc [--rgb]` 仅在
+`WRC_RUN_GPU_FRAME_TEST=1` 时运行，未启用或没有相应厂商显卡时返回 77；有显卡但
+初始化失败则失败，不拿软件编码替代。默认在 GPU 清空 Y/UV 平面生成 NV12；`--rgb`
+在 GPU 生成 BGRA 并经新转换器输出 NV12。两者都编码 1280×720、30 FPS、90 帧，
+按 PTS 连续软件解码并验证尺寸、帧数、重复 PTS 与采样 YUV，最大误差门限 6
+（包含有损 H.264）。输入无 CPU 像素上传或 GPU 读回，软件解码只用于验证输出。
+
+探针复用 `KD3D11HardwareFrames`：8 张独立 NV12 纹理，D3D11 直接输入 AMF/NVENC，
+QSV 使用 D3D11 派生设备与 DIRECT 映射。先验证池满背压、编码器额外 AVFrame 引用
+阻止提前重用、池 reset 后旧帧存活及 generation 更换，再运行实际编码。
+这些测试不证明任意驱动的异步实现无缺陷、跨显卡共享或长时间无资源增长。
+探针使用独立低延迟编码配置，不替代真实应用的 level、动态码率及主动 IDR 回归。
+
+```powershell
+cmake --build --preset release --target wrc_gpu_nv12_tests wrc_gpu_hardware_frame_probe
+ctest --preset release -R '^wrc_gpu_nv12' -V
+$env:WRC_RUN_GPU_FRAME_TEST = '1'
+ctest --preset release -R '^wrc_(qsv|amf|nvenc)_gpu_.*frame_tests$' -V
+```
+
+`wrc_webrtc_gpu_frame_tests h264_qsv|h264_amf|h264_nvenc` 同样由上述环境变量显式启用。
+它生成 GPU BGRA，通过真实自定义 WebRTC 编码适配器和解码适配器验证 320×240、
+30 FPS 媒体时间的 96 次提交，要求最先 90 帧完整、RTP 元数据无重复、采样亮度误差≤6。
+额外 6 帧用于覆盖异步尾部，保留现有 teardown 丢弃挂起回调语义，不声称 Release 排空全部尾帧。
+第 45 帧主动请求关键帧；正式码率准确性/不重建回归仍由原有码率测试覆盖。
+固定 gpu 模式下任何 ToI420 请求都会锁定失败，因此成功不能悄悄来自 CPU 格式回退。
+
+默认 `wrc_webrtc_native_fallback_tests` 用 WARP 验证 auto 的读回/I420 兼容、原生缩放
+不立即读回，以及 gpu 拒绝隐式转换；`wrc_video_frame_path_tests` 验证 generation、
+回退锁定和运行期失败。`wrc_native_capture_tests` 不初始化 DXGI duplication，仅用
+合成 BGRA/FP16 纹理验证 4 槽采集池背压、迟到释放、换代及 HDR GPU 输出。
+该专项另连续20次交替64×48/80×50，保留前一帧引用检查尺寸重建及shutdown后读回仍有效；
+以不支持的合成RGBA格式分别验证auto初始化固定CPU回退、已经选GPU后的失败锁存及强制gpu
+失败，再检查新generation可以恢复。已构建/专项通过，不采集桌面；这是错误边界测试，
+不是主动移除真实显卡设备或驱动重置验收。
+
+以上合成专项不采集桌面、不注入输入。指针能力协商与实验采集/编码均已接入，
+正常程序默认CPU，auto/gpu需显式选择；真实运行覆盖单独记录，不能由合成测试推断。
+
 配置生命周期专项：`wrc_application_paths_tests` 验证临时目录检查及文件保留，
 Python SDK 单测验证启动前拒绝复用；`wrc_device_identity_tests` 使用独立子进程建立、
 重载签名信任库并验证篡改拒绝，最后仅清理本次测试身份。该测试依赖当前用户 Windows CNG。
@@ -386,7 +499,75 @@ AMD GPU 机器将参数换为 `h264_amf`，日志另取 `amf-*.log`；不要按 
 远端旧程序备份为 `build/intel-diagnostics/winRemoteControl-before-fps-feedback-20261011.exe`。
 未重编/替换FFmpeg、未自动启动远控或输入；修复后QSV双机画面持续性仍待用户复验。
 
+## 跨适配器共享入口探针
+
+`wrc_gpu_cross_adapter_probe` 通过 `WRC_RUN_GPU_FRAME_TEST=1` 显式启用，默认返回77。
+它只使用前两个不同LUID的硬件适配器创建64×48合成BGRA/NV12纹理，不采集桌面或注入输入；
+少于两个合适适配器时显式跳过。每个源适配器分别跑同卡第二设备对照与另一适配器，双向共8例。
+
+入口限定为当前D3D11 render-target纹理的NT共享句柄/keyed mutex；先检查创建、导出和打开，
+打开后经目标设备复制、诊断读回逐字节比对。`validProbe=true`表示探针结果可用，不表示
+跨卡支持；必须逐例看 `opened`、`verifiedBytes`、失败阶段和HRESULT。
+同卡BGRA基线失败或打开后数据不一致会使探针失败，不能归为“硬件不支持”后跳过。
+NV12共享纹理创建失败与跨卡打开失败分开报告，不能推断所有跨卡方案都不可行。
+
+同步遵守[CreateSharedHandle](https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgiresource1-createsharedhandle)、
+[OpenSharedResource1](https://learn.microsoft.com/en-us/windows/win32/api/d3d11_1/nf-d3d11_1-id3d11device1-opensharedresource1)及
+[AcquireSync](https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgikeyedmutex-acquiresync)契约：
+NT句柄由RAII关闭，mutex只接受S_OK，等待上限500ms，不把WAIT_TIMEOUT等非负值当作成功。
+结果不证明FFmpeg后端可直接编码该资源，也不覆盖D3D12跨卡复制；不改变现有CPU回退策略。
+该探针已构建并显式运行通过（0.88秒）：本机同卡BGRA/NV12逐字节对照通过，
+AMD/NVIDIA双向跨卡均在打开目标资源阶段返回0x80070057，当前入口不通；不推断所有跨卡
+实现都不可能。新增后的普通Release全量构建通过，完整CTest101项75通过、26显式跳过、
+0失败（115.21秒）；该硬件探针另显式执行通过，不把默认跳过当作硬件通过。
+
+## DXGI 帧释放边界
+
+DXGI帧释放专项`wrc_dxgi_frame_lifetime_tests`使用fake duplication，不创建显卡设备或采集桌面。
+覆盖200次成功获取/释放、连续200次纹理接口查询失败仍平衡释放、超时不释放、
+释放失败立即报错、处理/释放双错误保留及后续获取
+失败的前次释放诊断。分离指针模式会容忍形状读取失败并回退箭头，因此原始形状错误传播
+用例显式采用旧合成模式；不为断言通过改变正常兼容行为。该专项已构建并运行通过。
+
+## 真实输入测试范围
+
+`wrc_windows_input_double_click_test` 仍需显式设置 `WRC_RUN_INPUT_E2E=1`。
+它只对自身创建的空白窗口发送测试双击；每次注入前检查窗口归属当前进程、位于前台，
+且目标点命中该窗口。失焦或被遮挡时拒绝继续，不把焦点抢回后盲目重试。
+新增保护已构建并实跑：本次窗口未取得前台，保护拒绝注入，按钮/双击计数均为0，
+因此不能记实际双击功能通过。需正常激活测试窗口再验，不能去掉保护凑通过。
+该平台注入测试不等同于双机传输、键盘、滚轮或指针形状验收。
+
+测试可执行文件新增可选 `--wait-for-focus`（不是主程序参数）：最多等待30秒供操作者
+正常激活自有空白窗口，期间不注入。超时仍由原有前台/命中保护拒绝，不强抢焦点；
+默认CTest行为不变。此可选等待模式已构建并直接运行退出0，源测试全部断言通过，
+窗口随后关闭；无需额外点击或放宽保护。此前CTest失焦拒绝记录仍保留，不能以这次通过
+推断所有启动上下文都能自动取得前台，也不代表双机输入链路通过。
+
+`wrc_remote_input_fixture` 是独立的可见、只接收事件的空白窗口，不加入默认CTest。
+仅在 `WRC_RUN_INPUT_E2E=1` 时打开，否则返回77；35分钟自动关闭。五个水平区域分别
+显示箭头、文本、水平调整大小、忙碌及隐藏指针。100ms合成重绘仅用来保持明确画面变化。
+它不注入输入、不安装全局hook、不保存字符或键值，仅输出点击/滚轮/按键/字符数量。
+双机输入测试必须另经用户授权、正常配对并授权输入，确认远端目标点处于该窗口客户区且
+前台仍为该窗口后才发送。键盘只用无个人内容的测试字符；失焦、窗口关闭或遮挡立即停止。
+计数用于确认实际到达远端，不能把本地发送成功当作输入成功。目前该夹具已编译、部署Intel
+并核对哈希，两机未启用保护均返回77；双机实跑尚未完成。新增后普通Release全量构建、
+完整CTest101项（75通过/26显式跳过/0失败，119.20秒）及diff检查通过；100%/150%
+系统DPI真机检查不能由Qt离屏比例测试替代。
+
+随后真实双机基础输入：AMD控制Intel，正常配对仅viewScreen/inputControl，Intel显示独立
+空白夹具；经本机原生视频窗口点击、滚轮后远端夹具计数增长，未操作其他软件。
+文本、水平调整大小、忙碌及隐藏区域已观察到对应光标变化，返回箭头区域恢复。
+Intel夹具实测DPI120（125%），不是100%/150%矩阵完成；截图中另有带光晕箭头，来源未
+隔离，不以此宣称所有外部指针叠加已消除。键盘自动注入因既有LLKHF_INJECTED过滤被忽略，
+未移除保护；物理键盘待单独确认，不把自动键未到达直接判为产品键盘失败。
+
 ## HDR GPU 转色测试
+
+GPU 采集设备缓存另有 `wrc_capture_device_probe_tests`，使用
+`WRC_RUN_GPU_FRAME_TEST=1` 显式启用。它只创建设备和合成纹理，不初始化 DXGI duplication、
+不采集桌面、不注入输入；检查先预览再 GPU 的 VIDEO_SUPPORT 升级、旧设备所有权及后续缓存复用。
+默认 CTest 未启用时返回77。该探针已构建并在本机、Intel端显式运行通过；不替代真实采集。
 
 `wrc_hdr_gpu_bgra_tests` 在硬件 D3D11 上验证离屏转换，`wrc_hdr_gpu_bgra_warp_tests` 使用 WARP。
 两者不采集桌面、不注入输入；覆盖全部 FP16 位模式、CPU 原公式与独立参考对照、最大 1 色阶

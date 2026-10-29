@@ -1,5 +1,8 @@
 #include "codec/h264encoder.h"
 #include "codec/h264levelpolicy.h"
+#include "codec/d3d11hardwareframes.h"
+#include "capture/d3d11bgraframe.h"
+#include "capture/gpunv12converter.h"
 
 #include <d3d11.h>
 
@@ -344,7 +347,7 @@ bool KH264Encoder::encodeBgraFrame(const unsigned char *pBgraData,
 	qint64 nTimestampMs,
 	QString *pErrorMessage)
 {
-	if (!isOpen() || pBgraData == nullptr)
+	if (!isOpen() || usesGpuFrames() || pBgraData == nullptr)
 	{
 		if (pErrorMessage != nullptr)
 			*pErrorMessage = QStringLiteral("H.264 encoder is not open");
@@ -400,7 +403,7 @@ bool KH264Encoder::encodeI420Frame(const unsigned char *pYData,
 	bool bForceKeyFrame,
 	QString *pErrorMessage)
 {
-	if (!isOpen() || pYData == nullptr || pUData == nullptr || pVData == nullptr)
+	if (!isOpen() || usesGpuFrames() || pYData == nullptr || pUData == nullptr || pVData == nullptr)
 	{
 		if (pErrorMessage != nullptr)
 			*pErrorMessage = QStringLiteral("H.264 encoder is not open");
@@ -445,6 +448,117 @@ bool KH264Encoder::encodeI420Frame(const unsigned char *pYData,
 		return false;
 
 	return submitFrame(m_pFrame, pErrorMessage);
+}
+
+bool KH264Encoder::usesGpuFrames() const
+{
+	return m_upGpuFrames != nullptr;
+}
+
+int KH264Encoder::gpuFramePoolCapacity() const
+{
+	return m_upGpuFrames ? m_upGpuFrames->capacity() : 0;
+}
+
+int KH264Encoder::gpuFramePoolPeakInUse() const
+{
+	return m_upGpuFrames ? m_upGpuFrames->peakInUse() : 0;
+}
+
+bool KH264Encoder::enableGpuFrames(const KD3D11BgraFrame &source, QString *pErrorMessage)
+{
+	if (!isOpen() || m_nLastPts >= 0 || usesGpuFrames()
+		|| !source.texture() || !source.contextMutex() || source.generation() == 0
+		|| (m_strEncoderName != QStringLiteral("h264_qsv") && m_strEncoderName != QStringLiteral("h264_amf")
+			&& m_strEncoderName != QStringLiteral("h264_nvenc")))
+	{
+		if (pErrorMessage)
+			*pErrorMessage = QStringLiteral("GPU input requires a vendor encoder before its first frame");
+		return false;
+	}
+	if (source.adapterLuid() != m_candidate.adapter.nLuid)
+	{
+		if (pErrorMessage)
+			*pErrorMessage = QStringLiteral("cross_adapter captureLuid=%1 encoderLuid=%2")
+				.arg(source.adapterLuid()).arg(m_candidate.adapter.nLuid);
+		return false;
+	}
+	Microsoft::WRL::ComPtr<ID3D11Device> spDevice;
+	source.texture()->GetDevice(&spDevice);
+	auto upFrames = std::make_unique<KD3D11HardwareFrames>();
+	if (!upFrames->initialize(spDevice.Get(), m_strEncoderName, m_nEncodedWidth, m_nEncodedHeight,
+		source.generation(), pErrorMessage, source.contextMutex()))
+		return false;
+	// Validate the shader and plane views before replacing the working CPU codec.
+	auto upConverter = std::make_unique<KGpuNv12Converter>();
+	std::shared_ptr<KD3D11HardwareFrame> spTrial;
+	if (upFrames->acquire(&spTrial, pErrorMessage) != KD3D11HardwareFrames::AcquiredResult)
+		return false;
+	upFrames->lockContext();
+	const HRESULT hr = upConverter->convert(upFrames->immediateContext(), source.texture(),
+		spTrial->texture(), m_nEncodedWidth, m_nEncodedHeight);
+	upFrames->immediateContext()->Flush();
+	upFrames->unlockContext();
+	if (FAILED(hr))
+	{
+		if (pErrorMessage)
+			*pErrorMessage = QStringLiteral("Initialize GPU NV12 conversion HRESULT=0x%1")
+				.arg(static_cast<quint32>(hr), 8, 16, QLatin1Char('0'));
+		return false;
+	}
+	AVCodecContext *pCpuContext = m_pCodecContext;
+	m_pCodecContext = nullptr;
+	m_upGpuFrames = std::move(upFrames);
+	const QByteArray name = m_strEncoderName.toLatin1();
+	if (!openCodec(name.constData(), true, pErrorMessage))
+	{
+		avcodec_free_context(&m_pCodecContext);
+		m_upGpuFrames.reset();
+		m_pCodecContext = pCpuContext;
+		return false;
+	}
+	avcodec_free_context(&pCpuContext);
+	av_frame_unref(m_pFrame);
+	sws_freeContext(m_pSwsContext);
+	m_pSwsContext = nullptr;
+	m_upGpuConverter = std::move(upConverter);
+	m_nGpuGeneration = source.generation();
+	m_nGpuAdapterLuid = source.adapterLuid();
+	return true;
+}
+
+KH264Encoder::KGpuEncodeResult KH264Encoder::encodeGpuFrame(const KD3D11BgraFrame &source,
+	qint64 nTimestampMs, bool bForceKeyFrame, QString *pErrorMessage)
+{
+	if (!isOpen() || !usesGpuFrames() || !source.texture() || source.generation() != m_nGpuGeneration
+		|| source.adapterLuid() != m_nGpuAdapterLuid)
+	{
+		if (pErrorMessage)
+			*pErrorMessage = QStringLiteral("GPU input format, adapter or generation mismatch");
+		return FailedGpuEncodeResult;
+	}
+	std::shared_ptr<KD3D11HardwareFrame> spFrame;
+	const auto result = m_upGpuFrames->acquire(&spFrame, pErrorMessage);
+	if (result == KD3D11HardwareFrames::PoolBusyResult)
+		return BusyGpuEncodeResult;
+	if (result != KD3D11HardwareFrames::AcquiredResult)
+		return FailedGpuEncodeResult;
+	m_upGpuFrames->lockContext();
+	const HRESULT hr = m_upGpuConverter->convert(m_upGpuFrames->immediateContext(), source.texture(),
+		spFrame->texture(), m_nEncodedWidth, m_nEncodedHeight);
+	m_upGpuFrames->immediateContext()->Flush();
+	m_upGpuFrames->unlockContext();
+	if (FAILED(hr))
+	{
+		if (pErrorMessage)
+			*pErrorMessage = QStringLiteral("GPU NV12 conversion HRESULT=0x%1")
+				.arg(static_cast<quint32>(hr), 8, 16, QLatin1Char('0'));
+		return FailedGpuEncodeResult;
+	}
+	prepareFrame(nTimestampMs, bForceKeyFrame, pErrorMessage);
+	spFrame->encoderFrame()->pts = m_pFrame->pts;
+	spFrame->encoderFrame()->pict_type = m_pFrame->pict_type;
+	return submitFrame(spFrame->encoderFrame(), pErrorMessage) ? SubmittedGpuEncodeResult : FailedGpuEncodeResult;
 }
 
 bool KH264Encoder::setLevelLimit(int nLevel)
@@ -623,7 +737,8 @@ bool KH264Encoder::openCodec(const char *pCodecName, bool bHardware, QString *pE
 	m_pCodecContext->codec_type = AVMEDIA_TYPE_VIDEO;
 	m_pCodecContext->width = m_nEncodedWidth;
 	m_pCodecContext->height = m_nEncodedHeight;
-	m_pCodecContext->pix_fmt = AV_PIX_FMT_NV12;
+	m_pCodecContext->pix_fmt = m_upGpuFrames
+		? (std::strcmp(pCodecName, "h264_qsv") == 0 ? AV_PIX_FMT_QSV : AV_PIX_FMT_D3D11) : AV_PIX_FMT_NV12;
 	m_pCodecContext->time_base = AVRational{ 1, m_nFps };
 	m_pCodecContext->framerate = AVRational{ m_nFps, 1 };
 	m_pCodecContext->gop_size = m_nFps * 2;
@@ -668,7 +783,20 @@ bool KH264Encoder::openCodec(const char *pCodecName, bool bHardware, QString *pE
 		// FFmpeg baseline, strict < normal maps to NalHrdConformance=OFF.
 		if (!bAmf && !bNvenc)
 			m_pCodecContext->strict_std_compliance = FF_COMPLIANCE_UNOFFICIAL;
-		const int nDeviceResult = CreateVendorDevice(m_pCodecContext, QString::fromLatin1(pCodecName), m_candidate.adapter);
+		const int nDeviceResult = m_upGpuFrames ? 0
+			: CreateVendorDevice(m_pCodecContext, QString::fromLatin1(pCodecName), m_candidate.adapter);
+		if (m_upGpuFrames)
+		{
+			m_pCodecContext->hw_device_ctx = av_buffer_ref(m_upGpuFrames->deviceContext());
+			m_pCodecContext->hw_frames_ctx = av_buffer_ref(m_upGpuFrames->framesContext());
+			if (!m_pCodecContext->hw_device_ctx || !m_pCodecContext->hw_frames_ctx)
+			{
+				if (pErrorMessage)
+					*pErrorMessage = QStringLiteral("Reference hardware encoder frame context failed");
+				avcodec_free_context(&m_pCodecContext);
+				return false;
+			}
+		}
 		if (nDeviceResult < 0)
 		{
 			if (pErrorMessage != nullptr)
@@ -777,6 +905,19 @@ bool KH264Encoder::openCodec(const char *pCodecName, bool bHardware, QString *pE
 			return false;
 		}
 		m_pCodecContext->level = m_nLevelLimit;
+		// NVENC reads its private AVOption, not AVCodecContext::level. Keep the
+		// already-computed session envelope rather than driver auto-selection.
+		if (bNvenc)
+		{
+			const int nResult = av_opt_set_int(m_pCodecContext->priv_data, "level", m_nLevelLimit, 0);
+			if (nResult < 0)
+			{
+				if (pErrorMessage)
+					*pErrorMessage = ffmpegErrorMessage(QStringLiteral("Set NVENC level failed"), nResult);
+				avcodec_free_context(&m_pCodecContext);
+				return false;
+			}
+		}
 		m_pCodecContext->refs = 1;
 	}
 	const int nOpenResult = avcodec_open2(m_pCodecContext, pCodec, nullptr);
@@ -865,6 +1006,10 @@ void KH264Encoder::release()
 		avcodec_free_context(&m_pCodecContext);
 		m_pCodecContext = nullptr;
 	}
+	m_upGpuConverter.reset();
+	m_upGpuFrames.reset();
+	m_nGpuGeneration = 0;
+	m_nGpuAdapterLuid = 0;
 
 	m_dataCallback = DataCallback();
 	m_packetCallback = PacketCallback();

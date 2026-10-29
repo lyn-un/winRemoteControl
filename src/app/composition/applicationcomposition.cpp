@@ -135,14 +135,15 @@ namespace
 }
 
 KApplicationComposition::KApplicationComposition(KVideoEncoderPreference encoderPreference,
-	QObject *pParent, KHdrConversionMode hdrMode)
+	QObject *pParent, KHdrConversionMode hdrMode, KVideoFramePathMode framePath)
 	: QObject(pParent)
-	, m_pCaptureService(new KCaptureService(this, hdrMode))
+	, m_spFramePath(std::make_shared<KVideoFramePathState>(framePath))
+	, m_pCaptureService(new KCaptureService(this, hdrMode, m_spFramePath))
 	, m_pApplicationCommandRegistry(new KApplicationCommandRegistry(this))
 	, m_pSessionService(new KSessionCoordinator(
 		std::make_unique<KWindowsDeviceInfoProvider>(),
 		std::make_unique<KWindowsInputInjector>(),
-		std::make_unique<KWebRtcPeer>(encoderPreference, nullptr),
+		std::make_unique<KWebRtcPeer>(encoderPreference, nullptr, m_spFramePath),
 		std::make_unique<KTcpSignalingTransport>(),
 		std::make_unique<KWindowsDeviceIdentityProvider>(
 			SecurityDirectoryPath(), KApplicationPaths::isAutomationTestProfile()),
@@ -724,6 +725,17 @@ void KApplicationComposition::wireRemoteDesktopWindow(KRemoteDesktopWindow *pWin
 		pWebViewWidget, &KWebViewWidget::sendSessionCapabilitiesChanged);
 	connect(m_pSessionService, &KSessionCoordinator::sessionCapabilitiesChanged,
 		pWindow, &KRemoteDesktopWindow::handleSessionCapabilitiesChanged);
+	connect(m_pSessionService, &KSessionCoordinator::sessionCapabilitiesChanged,
+		pWindow->videoRenderWidget(), [pWindow](const KNegotiatedCapabilities &capabilities)
+		{
+			pWindow->videoRenderWidget()->setSeparatedCursorEnabled(capabilities.bCursorShapeV1);
+		});
+	pWindow->videoRenderWidget()->setSeparatedCursorEnabled(
+		m_pSessionService->negotiatedCapabilities().bCursorShapeV1);
+	connect(m_pSessionService, &KSessionCoordinator::cursorShapeChanged,
+		pWindow->videoRenderWidget(), &KVideoRenderWidget::setRemoteCursorShape);
+	connect(m_pSessionService, &KSessionCoordinator::cursorShapeCleared,
+		pWindow->videoRenderWidget(), &KVideoRenderWidget::clearRemoteCursor);
 	connect(m_pSessionService, &KSessionCoordinator::privacyModeStatusChanged,
 		pWindow, &KRemoteDesktopWindow::handlePrivacyModeStatusChanged);
 	connect(m_pSessionService, &KSessionCoordinator::postSessionActionStatusChanged,
@@ -1016,6 +1028,16 @@ void KApplicationComposition::handleShutdownDeadline()
 
 void KApplicationComposition::wireServices()
 {
+	m_pSessionService->setCursorShapeAvailable(true);
+	connect(m_pSessionService, &KSessionCoordinator::sessionCapabilitiesChanged,
+		this, [this](const KNegotiatedCapabilities &capabilities)
+		{
+			const quint64 nGeneration = m_pSessionService->sessionGeneration();
+			m_spFramePath->begin(nGeneration);
+			m_spFramePath->setSeparateCursor(nGeneration, capabilities.bCursorShapeV1);
+		});
+	connect(m_pCaptureService, &KCaptureService::cursorShapeReady,
+		m_pSessionService, &KSessionCoordinator::publishCursorShape);
 	connect(m_pRemoteKeyboardRoutingService,
 		&KRemoteKeyboardRoutingService::remoteKeyRequested,
 		m_pSessionViewModel, &KSessionViewModel::sendRemoteKey);

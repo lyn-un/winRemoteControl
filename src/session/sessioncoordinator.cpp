@@ -136,6 +136,12 @@ KSessionCoordinator::KSessionCoordinator(
 	Q_ASSERT(m_spIdentityProvider != nullptr);
 	Q_ASSERT(m_spTrustedDeviceStore != nullptr);
 	m_spTrustedDeviceStore->setIdentityProvider(m_spIdentityProvider.get());
+	m_cursorClock.start();
+	m_pCursorAssemblyTimer = new QTimer(this);
+	m_pCursorAssemblyTimer->setSingleShot(true);
+	m_pCursorAssemblyTimer->setTimerType(Qt::PreciseTimer);
+	connect(m_pCursorAssemblyTimer, &QTimer::timeout, this,
+		[this]() { m_cursorShapeAssembler.expire(m_cursorClock.elapsed()); });
 	m_pAccessSessionFlow->setApplicationSettings(m_applicationSettings);
 	initializeProtocolRoutes();
 	initializeSessionHandlers();
@@ -485,6 +491,13 @@ void KSessionCoordinator::initializeSessionHandlers()
 void KSessionCoordinator::publishSessionState()
 {
 	const KSessionState state = m_sessionStateMachine.state();
+	if (state != StreamingSessionState && state != ReconnectingSessionState)
+	{
+		m_cursorShapeAssembler.discardPending();
+		m_pCursorAssemblyTimer->stop();
+		m_spRemotePeerTransport->clearCursorShapeQueue();
+		emit cursorShapeCleared();
+	}
 	emit sessionStateChanged(state);
 }
 
@@ -926,6 +939,71 @@ void KSessionCoordinator::pushVideoFrame(const KVideoFrame &frame)
 	if (hasPermission(ViewScreenPermissionScope)
 		&& m_sessionStateMachine.canSendVideo())
 		m_spRemotePeerTransport->pushVideoFrame(frame);
+}
+
+void KSessionCoordinator::setCursorShapeAvailable(bool bAvailable)
+{
+	if (isIdle())
+		m_bCursorShapeAvailable = bAvailable;
+}
+
+void KSessionCoordinator::publishCursorShape(quint64 nGeneration, const KCursorShape &shape)
+{
+	if (nGeneration != sessionGeneration() || shape.nGeneration != nGeneration
+		|| !hasPermission(ViewScreenPermissionScope) || !m_sessionStateMachine.canSendVideo()
+		|| !negotiatedCapabilities().bCursorShapeV1 || !m_bSessionChannelOpen || !shape.isValid())
+	{
+		return;
+	}
+	KCursorShape transmitted = shape;
+	// Capture can restart within the same session; wire IDs must not restart with it.
+	transmitted.nSequence = ++m_nSentCursorSequence;
+	if (transmitted.nSequence == 0)
+		return;
+	if (!m_spRemotePeerTransport->sendCursorShape(transmitted))
+	{
+		if (!m_bCursorSendFailureLogged)
+		{
+			KSessionTraceLogger::write(QStringLiteral("controlled"), QStringLiteral("cursor_shape"),
+				QStringLiteral("send_failed"), -1, QStringLiteral("generation=%1").arg(nGeneration));
+			m_bCursorSendFailureLogged = true;
+		}
+	}
+}
+
+void KSessionCoordinator::handleCursorShapeMessage(quint64 nGeneration, const KCursorShapeMessage &message)
+{
+	if (nGeneration != m_nActivePeerGeneration || sessionRole() != ControllerSessionRole
+		|| m_sessionStateMachine.state() != StreamingSessionState || !m_bSessionChannelOpen
+		|| !hasPermission(ViewScreenPermissionScope) || !negotiatedCapabilities().bCursorShapeV1)
+	{
+		return;
+	}
+	KCursorShape shape;
+	QString strError;
+	const auto result = m_cursorShapeAssembler.accept(message, m_cursorClock.elapsed(), &shape, &strError);
+	if (result == KCursorShapeAssembler::CompleteResult)
+	{
+		m_pCursorAssemblyTimer->stop();
+		shape.nGeneration = sessionGeneration();
+		emit cursorShapeChanged(shape);
+	}
+	else if (result == KCursorShapeAssembler::IncompleteResult && message.nOffset == 0)
+	{
+		m_pCursorAssemblyTimer->start(static_cast<int>(KCursorShapeAssembler::kTimeoutMs));
+	}
+	else if (result == KCursorShapeAssembler::RejectedResult)
+	{
+		m_pCursorAssemblyTimer->stop();
+		m_cursorShapeAssembler.discardPending();
+		if (++m_nInvalidCursorShapes >= KProtocolConstraints::kMaximumInvalidMessages)
+		{
+			finishSession(ConnectFailedSessionEndReason, QStringLiteral("protocol_violation"),
+				m_sessionStateMachine.shouldKeepListening(), false, false);
+			reportSessionError(ProtocolSessionErrorDomain, ProtocolViolationSessionErrorCode,
+				ConnectedSessionErrorStage, false, strError);
+		}
+	}
 }
 
 void KSessionCoordinator::sendInputMessage(const KInputMessage &message)
@@ -1371,6 +1449,12 @@ void KSessionCoordinator::continueStoppingTeardown()
 	}
 	m_pRecoveryController->clear();
 	m_pCapabilitySessionFlow->reset();
+	m_cursorShapeAssembler.reset();
+	m_pCursorAssemblyTimer->stop();
+	m_nSentCursorSequence = 0;
+	m_nInvalidCursorShapes = 0;
+	m_bCursorSendFailureLogged = false;
+	emit cursorShapeCleared();
 	m_pAccessSessionFlow->setConnected(false);
 	m_pAccessSessionFlow->clearApproval(strReason);
 	m_bDeviceInfoRequested = false;
@@ -1654,6 +1738,8 @@ void KSessionCoordinator::wirePeer()
 			if (nGeneration == m_nActivePeerGeneration)
 				handleInputMessage(message);
 		});
+	connect(pTransport, &KRemotePeerTransport::cursorShapeMessageReceived,
+		this, &KSessionCoordinator::handleCursorShapeMessage);
 	connect(m_pInputInjector, &KInputInjector::inputInjected,
 		this, &KSessionCoordinator::handleInputInjected);
 	connect(pTransport, &KRemotePeerTransport::inputChannelChanged,
@@ -2077,6 +2163,7 @@ KSessionCapabilities KSessionCoordinator::localCapabilities() const
 	KSessionCapabilities capabilities;
 	capabilities.bInputRealtime = true;
 	capabilities.bOrderedMouseDrag = true;
+	capabilities.bCursorShapeV1 = m_bCursorShapeAvailable && hasPermission(ViewScreenPermissionScope);
 	capabilities.supportedCodecs = { QStringLiteral("h264") };
 	capabilities.supportedChannels = {
 		QStringLiteral("video"), QStringLiteral("session"), QStringLiteral("input"),

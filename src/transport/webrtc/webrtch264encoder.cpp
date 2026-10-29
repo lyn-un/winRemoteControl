@@ -3,6 +3,8 @@
 #include "common/latencytracelogger.h"
 #include "common/sessiontracelogger.h"
 #include "transport/webrtc/encoderdiagnostics.h"
+#include "transport/webrtc/webrtcnativeframebuffer.h"
+#include "capture/d3d11bgraframe.h"
 #include <QtCore/QScopeGuard>
 #include "core/protocol/protocolconstraints.h"
 
@@ -65,7 +67,14 @@ KWebRtcH264Encoder::KWebRtcH264Encoder(KVideoEncoderPreference preference)
 }
 
 KWebRtcH264Encoder::KWebRtcH264Encoder(KVideoEncoderPreference preference, int nNegotiatedLevel)
+	: KWebRtcH264Encoder(preference, nNegotiatedLevel, nullptr)
+{
+}
+
+KWebRtcH264Encoder::KWebRtcH264Encoder(KVideoEncoderPreference preference, int nNegotiatedLevel,
+	std::shared_ptr<KVideoFramePathState> spFramePath)
 	: m_encoder(preference)
+	, m_spFramePath(std::move(spFramePath))
 	, m_nNegotiatedLevel(nNegotiatedLevel)
 	, m_spsGuard(nNegotiatedLevel)
 {
@@ -97,6 +106,8 @@ int KWebRtcH264Encoder::InitEncode(const webrtc::VideoCodec *pCodecSettings,
 	m_nTargetFps = m_nConfiguredFps;
 	m_nBitrateKbps = std::max(1, bitrateKbpsFromCodec(pCodecSettings));
 	m_nEncodedFrameCount = 0;
+	m_bGpuAttempted = false;
+	m_nGpuPoolDrops = 0;
 	m_pendingFrames.clear();
 	m_nNoOutputCount = 0;
 	m_nRateTargetChangeCount = 0;
@@ -246,8 +257,38 @@ int32_t KWebRtcH264Encoder::Encode(const webrtc::VideoFrame &frame,
 		return WEBRTC_VIDEO_CODEC_UNINITIALIZED;
 	}
 
-	webrtc::scoped_refptr<webrtc::I420BufferInterface> spI420 = frame.video_frame_buffer()->ToI420();
-	if (!spI420)
+	std::shared_ptr<IKNativeVideoFrame> spNative;
+	if (frame.video_frame_buffer()->type() == webrtc::VideoFrameBuffer::Type::kNative)
+	{
+		// This encoder's native frames originate exclusively in KWebRtcVideoSource.
+		spNative = static_cast<KWebRtcNativeFrameBuffer *>(frame.video_frame_buffer().get())->nativeFrame();
+		if (!spNative || !m_spFramePath || spNative->nativeType() != IKNativeVideoFrame::D3D11BgraNativeType
+			|| spNative->generation() != m_spFramePath->snapshot().nGeneration)
+			return WEBRTC_VIDEO_CODEC_ERR_PARAMETER;
+		if (!m_bGpuAttempted && m_spFramePath->snapshot().decision != KVideoFramePathState::Cpu)
+		{
+			m_bGpuAttempted = true;
+			QString strGpuError;
+			const bool bGpu = m_encoder.enableGpuFrames(*static_cast<KD3D11BgraFrame *>(spNative.get()), &strGpuError);
+			if (bGpu)
+				m_spFramePath->selectGpu(spNative->generation());
+			else
+				m_spFramePath->fallback(spNative->generation(), strGpuError);
+			KSessionTraceLogger::write(QStringLiteral("controlled"), QStringLiteral("video_frame_path"),
+				QStringLiteral("requested=%1 actual=%2 encoder=%3 captureLuid=%4 reason=%5")
+					.arg(QString::fromLatin1(VideoFramePathName(m_spFramePath->mode())))
+					.arg(bGpu ? QStringLiteral("gpu") : (m_spFramePath->snapshot().decision == KVideoFramePathState::Failed
+						? QStringLiteral("failed") : QStringLiteral("cpu")))
+					.arg(m_encoder.encoderName()).arg(spNative->adapterLuid()).arg(strGpuError));
+		}
+		if (m_spFramePath->snapshot().decision == KVideoFramePathState::Failed)
+			return WEBRTC_VIDEO_CODEC_ERROR;
+	}
+	const bool bGpuFrame = spNative && m_encoder.usesGpuFrames();
+	webrtc::scoped_refptr<webrtc::I420BufferInterface> spI420;
+	if (!bGpuFrame)
+		spI420 = frame.video_frame_buffer()->ToI420();
+	if (!bGpuFrame && !spI420)
 	{
 		if (m_spDiagnostics)
 			m_spDiagnostics->error(QStringLiteral("reason=to_i420_failed"));
@@ -275,8 +316,26 @@ int32_t KWebRtcH264Encoder::Encode(const webrtc::VideoFrame &frame,
 	QElapsedTimer encodeTimer;
 	encodeTimer.start();
 	if (m_spDiagnostics)
-		m_spDiagnostics->phase("ffmpeg_encode");
-	if (!m_encoder.encodeI420Frame(spI420->DataY(),
+		m_spDiagnostics->phase(bGpuFrame ? "gpu_convert_submit" : "ffmpeg_encode");
+	bool bEncodeOk = false;
+	if (bGpuFrame)
+	{
+		const auto result = m_encoder.encodeGpuFrame(*static_cast<KD3D11BgraFrame *>(spNative.get()),
+			frame.timestamp_us() / 1000, bForceKeyFrame, &strError);
+		if (result == KH264Encoder::BusyGpuEncodeResult)
+		{
+			bDiagnosticSuccess = true;
+			m_encoder.setPacketCallback(KH264Encoder::PacketCallback());
+			++m_nGpuPoolDrops;
+			if (m_nGpuPoolDrops == 1 || m_nGpuPoolDrops % 30 == 0)
+				KSessionTraceLogger::write(QStringLiteral("controlled"), QStringLiteral("gpu_encode_pool_drop"),
+					QStringLiteral("dropped=%1").arg(m_nGpuPoolDrops));
+			return WEBRTC_VIDEO_CODEC_OK;
+		}
+		bEncodeOk = result == KH264Encoder::SubmittedGpuEncodeResult;
+	}
+	else
+		bEncodeOk = m_encoder.encodeI420Frame(spI420->DataY(),
 			spI420->StrideY(),
 			spI420->DataU(),
 			spI420->StrideU(),
@@ -286,8 +345,11 @@ int32_t KWebRtcH264Encoder::Encode(const webrtc::VideoFrame &frame,
 			spI420->height(),
 			frame.timestamp_us() / 1000,
 			bForceKeyFrame,
-			&strError))
+			&strError);
+	if (!bEncodeOk)
 	{
+		if (bGpuFrame && m_spFramePath)
+			m_spFramePath->fail(spNative->generation(), strError);
 		if (m_spDiagnostics)
 			m_spDiagnostics->error(QStringLiteral("reason=encode_failed detail=%1").arg(strError));
 		m_encoder.setPacketCallback(KH264Encoder::PacketCallback());
@@ -484,7 +546,7 @@ webrtc::VideoEncoder::EncoderInfo KWebRtcH264Encoder::GetEncoderInfo() const
 	info.is_hardware_accelerated = strEncoderName == QStringLiteral("h264_mf")
 		|| strEncoderName == QStringLiteral("h264_qsv") || strEncoderName == QStringLiteral("h264_amf")
 		|| strEncoderName == QStringLiteral("h264_nvenc");
-	info.supports_native_handle = false;
+	info.supports_native_handle = m_spFramePath && m_spFramePath->mode() != CpuVideoFramePath;
 	info.requested_resolution_alignment = 2;
 	info.apply_alignment_to_all_simulcast_layers = true;
 	info.scaling_settings = webrtc::VideoEncoder::ScalingSettings::kOff;
@@ -698,8 +760,10 @@ bool KWebRtcH264Encoder::isKeyFrame(const QByteArray &encodedData)
 	return false;
 }
 
-KWebRtcH264EncoderFactory::KWebRtcH264EncoderFactory(KVideoEncoderPreference preference)
+KWebRtcH264EncoderFactory::KWebRtcH264EncoderFactory(KVideoEncoderPreference preference,
+	std::shared_ptr<KVideoFramePathState> spFramePath)
 	: m_preference(preference)
+	, m_spFramePath(std::move(spFramePath))
 {
 }
 
@@ -725,7 +789,7 @@ std::unique_ptr<webrtc::VideoEncoder> KWebRtcH264EncoderFactory::Create(const we
 	if (!isH264Format(format))
 		return nullptr;
 
-	return std::make_unique<KWebRtcH264Encoder>(m_preference, NegotiatedH264Level(format));
+	return std::make_unique<KWebRtcH264Encoder>(m_preference, NegotiatedH264Level(format), m_spFramePath);
 }
 
 bool KWebRtcH264EncoderFactory::isH264Format(const webrtc::SdpVideoFormat &format)

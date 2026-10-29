@@ -281,6 +281,15 @@ namespace
 		}
 
 		bool terminalBackpressured() const override { return false; }
+		bool sendCursorShape(const KCursorShape &shape) override
+		{
+			lastCursorShape = shape;
+			++nSentCursorCount;
+			if (onCursorSend)
+				onCursorSend(shape);
+			return true;
+		}
+		void clearCursorShapeQueue() override { ++nCursorQueueClears; }
 
 		KSessionMessageSendStatus sendSessionMessage(
 			const KSessionMessage &message) override
@@ -341,7 +350,7 @@ namespace
 			emit sessionMessageReceived(m_nGeneration, delivered);
 		}
 
-		void deliverDefaultCapabilities()
+		void deliverDefaultCapabilities(bool bCursorShape = false)
 		{
 			KSessionMessage message;
 			message.type = CapabilitiesSessionMessageType;
@@ -352,6 +361,7 @@ namespace
 			};
 			message.capabilities.bInputRealtime = true;
 			message.capabilities.bOrderedMouseDrag = true;
+			message.capabilities.bCursorShapeV1 = bCursorShape;
 			message.capabilities.supportedPrivacyModes = {
 				QStringLiteral("disabled"), QStringLiteral("privacyoverlay"),
 				QStringLiteral("displayoff")
@@ -392,6 +402,10 @@ namespace
 
 		KSessionRole initializedRole = ControllerSessionRole;
 		KSessionMessage lastSentSessionMessage;
+		KCursorShape lastCursorShape;
+		int nSentCursorCount = 0;
+		int nCursorQueueClears = 0;
+		std::function<void(const KCursorShape &)> onCursorSend;
 		QVector<KSessionMessage> sentSessionMessages;
 		KInputMessage lastSentInputMessage;
 		KClipboardMessage lastSentClipboardMessage;
@@ -1130,7 +1144,7 @@ namespace
 			QStringLiteral("late peer completion finishes the isolated shutdown"));
 	}
 
-	void testViewOnlyPermissionBlocksInputAndClipboard()
+	void testViewOnlyPermissionBlocksInputAndClipboard(bool bCursorSupport = true)
 	{
 		auto spControlledInput = std::make_unique<KFakeInputInjector>();
 		KFakeInputInjector *pControlledInput = spControlledInput.get();
@@ -1146,6 +1160,21 @@ namespace
 			std::make_unique<KFakeInputInjector>(), std::move(spControllerPeer),
 			std::make_unique<KTcpSignalingTransport>(),
 			MakeFakeIdentityProvider(), MakeFakeTrustedDeviceStore());
+		controlled.setCursorShapeAvailable(true);
+		controller.setCursorShapeAvailable(true);
+		pControllerPeer->onSessionSend = [&controller, pControllerPeer](const KSessionMessage &message)
+		{
+			if (!KSessionMessageCodec::isCommand(message.type))
+				return;
+			QTimer::singleShot(0, &controller, [pControllerPeer, message]()
+			{
+				KSessionMessage result;
+				result.type = CommandResultSessionMessageType;
+				result.strRequestId = message.strRequestId;
+				result.bSuccess = true;
+				pControllerPeer->deliverSessionMessage(result);
+			});
+		};
 		approvePairingRequests(controlled, ViewScreenPermissionScope);
 		approvePairingRequests(controller);
 		approveAccessRequests(controlled);
@@ -1158,7 +1187,68 @@ namespace
 			QStringLiteral("view-only session completes access approval"));
 
 		pControlledPeer->openSessionChannel();
-		pControlledPeer->deliverDefaultCapabilities();
+		pControlledPeer->deliverDefaultCapabilities(bCursorSupport);
+		pControllerPeer->openSessionChannel();
+		pControllerPeer->deliverDefaultCapabilities(bCursorSupport);
+		check(controlled.negotiatedCapabilities().bCursorShapeV1 == bCursorSupport
+			&& controller.negotiatedCapabilities().bCursorShapeV1 == bCursorSupport,
+			QStringLiteral("cursor shape requires bilateral optional capability"));
+		int nCursorReceived = 0;
+		KCursorShape lastCursor;
+		QObject::connect(&controller, &KSessionCoordinator::cursorShapeChanged,
+			[&](const KCursorShape &shape) { ++nCursorReceived; lastCursor = shape; });
+		pControlledPeer->onCursorSend = [pControllerPeer](const KCursorShape &shape)
+		{
+			for (const auto &message : KCursorShapeMessageCodec::split(shape))
+				emit pControllerPeer->cursorShapeMessageReceived(pControllerPeer->m_nGeneration, message);
+		};
+		KCursorShape cursor;
+		cursor.nSequence = 1;
+		cursor.nGeneration = controlled.sessionGeneration();
+		controlled.publishCursorShape(cursor.nGeneration, cursor);
+		check(pControlledPeer->nSentCursorCount == 0,
+			QStringLiteral("connected state cannot send cursor before explicit streaming"));
+		for (const auto &message : KCursorShapeMessageCodec::split(cursor))
+			emit pControllerPeer->cursorShapeMessageReceived(pControllerPeer->m_nGeneration, message);
+		check(nCursorReceived == 0, QStringLiteral("cursor reception requires streaming"));
+		controller.enterRemoteDesktop(KStreamConfig());
+		KSessionMessage startStreaming;
+		startStreaming.type = StartStreamingSessionMessageType;
+		pControlledPeer->deliverSessionMessage(startStreaming);
+		controlled.publishCursorShape(cursor.nGeneration + 1, cursor);
+		check(pControlledPeer->nSentCursorCount == 0, QStringLiteral("stale source generation cannot send cursor"));
+		controlled.publishCursorShape(cursor.nGeneration, cursor);
+		check(pControlledPeer->nSentCursorCount == (bCursorSupport ? 1 : 0)
+			&& nCursorReceived == (bCursorSupport ? 1 : 0),
+			QStringLiteral("view-only streaming delivers cursor only with negotiated support"));
+		if (bCursorSupport)
+		{
+			check(lastCursor.nGeneration == controller.sessionGeneration(),
+				QStringLiteral("received cursor gets local authorized generation"));
+			for (const auto &message : KCursorShapeMessageCodec::split(pControlledPeer->lastCursorShape))
+			{
+				emit pControllerPeer->cursorShapeMessageReceived(pControllerPeer->m_nGeneration, message);
+				emit pControllerPeer->cursorShapeMessageReceived(pControllerPeer->m_nGeneration + 1, message);
+				emit pControlledPeer->cursorShapeMessageReceived(pControlledPeer->m_nGeneration, message);
+			}
+			check(nCursorReceived == 1, QStringLiteral("duplicate, stale and wrong-role cursor events are ignored"));
+		}
+		controller.leaveRemoteDesktop();
+		KSessionMessage stopStreaming;
+		stopStreaming.type = StopStreamingSessionMessageType;
+		pControlledPeer->deliverSessionMessage(stopStreaming);
+		const int nBeforePause = pControlledPeer->nSentCursorCount;
+		controlled.publishCursorShape(cursor.nGeneration, cursor);
+		check(pControlledPeer->nSentCursorCount == nBeforePause,
+			QStringLiteral("stopped stream cannot send cursor"));
+		controller.enterRemoteDesktop(KStreamConfig());
+		pControlledPeer->deliverSessionMessage(startStreaming);
+		controlled.publishCursorShape(cursor.nGeneration, cursor);
+		if (bCursorSupport)
+		{
+			check(nCursorReceived == 2 && pControlledPeer->lastCursorShape.nSequence == 2,
+				QStringLiteral("capture restart within one session keeps wire cursor sequence increasing"));
+		}
 		pControlledPeer->openInputChannel();
 		pControlledPeer->openClipboardChannel();
 		KInputMessage key;
@@ -1178,6 +1268,34 @@ namespace
 			QStringLiteral("view-only permission blocks input injection"));
 		check(nClipboardReceived == 0,
 			QStringLiteral("view-only permission blocks clipboard delivery"));
+		if (bCursorSupport)
+		{
+			KCursorShape large;
+			large.nSequence = 100;
+			large.kind = ColorCursorShape;
+			large.nWidth = large.nHeight = 64;
+			large.nStride = 256;
+			large.data = QByteArray(16384, '\xff');
+			auto chunks = KCursorShapeMessageCodec::split(large);
+			emit pControllerPeer->cursorShapeMessageReceived(pControllerPeer->m_nGeneration, chunks[0]);
+			QElapsedTimer expiry;
+			expiry.start();
+			check(waitUntil([&]() { return expiry.elapsed() >= 5100; }, 5500),
+				QStringLiteral("cursor assembly timeout event loop completes"));
+			emit pControllerPeer->cursorShapeMessageReceived(pControllerPeer->m_nGeneration, chunks[1]);
+			check(nCursorReceived == 2, QStringLiteral("idle timer expires partial cursor without another first chunk"));
+			large.nSequence = 101;
+			chunks = KCursorShapeMessageCodec::split(large);
+			emit pControllerPeer->cursorShapeMessageReceived(pControllerPeer->m_nGeneration, chunks[0]);
+			chunks[1].shape.nHotspotX = 1;
+			emit pControllerPeer->cursorShapeMessageReceived(pControllerPeer->m_nGeneration, chunks[1]);
+			check(nCursorReceived == 2, QStringLiteral("inconsistent cursor assembly is never rendered"));
+			large.nSequence = 102;
+			for (const auto &message : KCursorShapeMessageCodec::split(large))
+				emit pControllerPeer->cursorShapeMessageReceived(pControllerPeer->m_nGeneration, message);
+			check(nCursorReceived == 3 && lastCursor.data == large.data,
+				QStringLiteral("valid higher cursor sequence recovers after rejected assembly"));
+		}
 		controller.disconnectSession();
 		controlled.disconnectSession();
 	}
@@ -1199,6 +1317,7 @@ int main(int argc, char *argv[])
 	testListenerFailureRollsBackReadyPeer();
 	testShutdownTimeoutIsolationAndLateCompletion();
 	testViewOnlyPermissionBlocksInputAndClipboard();
+	testViewOnlyPermissionBlocksInputAndClipboard(false);
 	if (g_nFailureCount == 0)
 		qInfo() << "All session service tests passed";
 	return g_nFailureCount == 0 ? 0 : 1;

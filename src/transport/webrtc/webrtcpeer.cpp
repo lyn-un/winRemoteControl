@@ -1,4 +1,5 @@
 #include "transport/webrtc/webrtcpeer.h"
+#include "transport/webrtc/webrtcnativeframebuffer.h"
 
 #include "common/latencytracelogger.h"
 #include "common/sessiontracelogger.h"
@@ -141,7 +142,8 @@ namespace
 	class KWebRtcRawVideoSource : public webrtc::VideoSourceInterface<webrtc::VideoFrame>
 	{
 	public:
-		KWebRtcRawVideoSource()
+		explicit KWebRtcRawVideoSource(std::shared_ptr<KVideoFramePathState> spFramePath)
+			: m_spFramePath(std::move(spFramePath))
 		{
 			if (KSessionTraceLogger::isEnabled())
 				m_upDiagnostics = std::make_unique<KVideoStageDiagnostics>(QStringLiteral("source_push_watch"));
@@ -175,14 +177,24 @@ namespace
 
 		void pushFrame(const KVideoFrame &frame)
 		{
-			if (frame.nWidth <= 0 || frame.nHeight <= 0 || frame.spBuffer == nullptr)
+			if (frame.nWidth <= 0 || frame.nHeight <= 0 || (!frame.spBuffer && !frame.spNativeFrame)
+				|| (frame.spBuffer && frame.spNativeFrame))
 				return;
 
 			QElapsedTimer pushTimer;
 			pushTimer.start();
-			std::shared_ptr<KI420FrameBuffer> spFrameBuffer = frame.spBuffer;
-			webrtc::scoped_refptr<webrtc::I420BufferInterface> spBuffer =
-				webrtc::WrapI420Buffer(frame.nWidth,
+			webrtc::scoped_refptr<webrtc::VideoFrameBuffer> spBuffer;
+			if (frame.spNativeFrame)
+			{
+				if (!m_spFramePath || frame.spNativeFrame->generation() != m_spFramePath->snapshot().nGeneration)
+					return;
+				spBuffer = webrtc::make_ref_counted<KWebRtcNativeFrameBuffer>(frame.spNativeFrame,
+					m_spFramePath, frame.nWidth, frame.nHeight);
+			}
+			else
+			{
+				std::shared_ptr<KI420FrameBuffer> spFrameBuffer = frame.spBuffer;
+				spBuffer = webrtc::WrapI420Buffer(frame.nWidth,
 					frame.nHeight,
 					reinterpret_cast<const uint8_t *>(spFrameBuffer->yPlane.constData()),
 					spFrameBuffer->nStrideY,
@@ -191,6 +203,7 @@ namespace
 					reinterpret_cast<const uint8_t *>(spFrameBuffer->vPlane.constData()),
 					spFrameBuffer->nStrideV,
 					[spFrameBuffer]() mutable { spFrameBuffer.reset(); });
+			}
 
 			const webrtc::VideoFrame videoFrame = webrtc::VideoFrame::Builder()
 				.set_video_frame_buffer(spBuffer)
@@ -232,6 +245,7 @@ namespace
 		};
 
 		std::mutex m_mutex;
+		std::shared_ptr<KVideoFramePathState> m_spFramePath;
 		std::vector<SinkItem> m_vecSinks;
 		std::unique_ptr<KVideoStageDiagnostics> m_upDiagnostics;
 	};
@@ -347,8 +361,9 @@ private:
 class KWebRtcVideoSource : public webrtc::VideoTrackSource
 {
 public:
-	KWebRtcVideoSource()
+	explicit KWebRtcVideoSource(std::shared_ptr<KVideoFramePathState> spFramePath)
 		: VideoTrackSource(false)
+		, m_source(std::move(spFramePath))
 	{
 		SetState(kLive);
 	}
@@ -372,7 +387,8 @@ KWebRtcPeer::KWebRtcPeer(QObject *pParent)
 {
 }
 
-KWebRtcPeer::KWebRtcPeer(KVideoEncoderPreference encoderPreference, QObject *pParent)
+KWebRtcPeer::KWebRtcPeer(KVideoEncoderPreference encoderPreference, QObject *pParent,
+	std::shared_ptr<KVideoFramePathState> spFramePath)
 	: KRemotePeerTransport(pParent)
 	, m_spCallbackGate(std::make_shared<KWebRtcCallbackGate>())
 	, m_pInputDataChannel(new KWebRtcDataChannel(
@@ -390,6 +406,7 @@ KWebRtcPeer::KWebRtcPeer(KVideoEncoderPreference encoderPreference, QObject *pPa
 	, m_pRemoteFrameProcessor(new KWebRtcRemoteFrameProcessor(this))
 	, m_spLatencyProbe(std::make_unique<KWebRtcLatencyProbe>())
 	, m_encoderPreference(encoderPreference)
+	, m_spFramePath(spFramePath ? std::move(spFramePath) : std::make_shared<KVideoFramePathState>())
 {
 	const KProtocolRouter::Guard allowMessage =
 		[](const KProtocolEnvelope &, const KProtocolRouteContext &) { return true; };
@@ -403,6 +420,17 @@ KWebRtcPeer::KWebRtcPeer(KVideoEncoderPreference encoderPreference, QObject *pPa
 		{
 			return context.nRole == static_cast<int>(ControllerSessionRole);
 		};
+	m_protocolRouter.registerHandler(SessionProtocolChannel,
+		KCursorShapeMessageCodec::typeName(), allowControllerMessage,
+		[this](const KProtocolEnvelope &envelope, const KProtocolRouteContext &)
+		{
+			KCursorShapeMessage message;
+			QString strError;
+			if (!KCursorShapeMessageCodec::decode(envelope, &message, &strError))
+				return KProtocolHandlerResult::failure(ProtocolHandlerDecodeFailed, strError);
+			emit cursorShapeMessageReceived(m_nGeneration.load(), message);
+			return KProtocolHandlerResult::success();
+		});
 	for (KInputMessageType type : { MouseMoveInputMessageType, MouseButtonInputMessageType,
 		MouseWheelInputMessageType, KeyInputMessageType, TextInputMessageType })
 	{
@@ -654,6 +682,7 @@ KPeerInitializationResult KWebRtcPeer::initialize(KSessionRole role,
 
 	m_lifecycleState = InitializingWebRtcPeerLifecycleState;
 	m_nGeneration = nGeneration;
+	m_spFramePath->begin(nGeneration);
 	m_spCallbackGate->open(this, nGeneration);
 	m_bProtocolTerminationPending = false;
 	m_mouseInputRoutingState.setOrderedMouseDragEnabled(false);
@@ -778,6 +807,7 @@ void KWebRtcPeer::requestShutdown(quint64 nGeneration)
 	m_inputSendQueue.clear();
 	m_realtimeInputSendQueue.clear();
 	m_sessionSendQueue.clear();
+	clearCursorShapeQueue();
 	m_clipboardSendQueue.clear();
 	m_nInvalidSignalingMessages = 0;
 	m_nInvalidInputMessages = 0;
@@ -1182,6 +1212,44 @@ void KWebRtcPeer::flushSessionQueue()
 			return;
 		}
 	}
+	flushCursorShapeQueue();
+}
+
+bool KWebRtcPeer::sendCursorShape(const KCursorShape &shape)
+{
+	if (m_role != ControlledSessionRole || !m_pSessionDataChannel->isOpen())
+		return false;
+	const auto messages = KCursorShapeMessageCodec::split(shape);
+	if (messages.isEmpty())
+		return false;
+	QVector<QString> encoded;
+	encoded.reserve(messages.size());
+	for (const auto &message : messages)
+		encoded.push_back(KCursorShapeMessageCodec::encode(message));
+	// One latest shape only. Session commands have priority and use their own bounded queue.
+	m_cursorShapeMessages = std::move(encoded);
+	m_nCursorShapeMessageIndex = 0;
+	return flushCursorShapeQueue();
+}
+
+bool KWebRtcPeer::flushCursorShapeQueue()
+{
+	while (m_pSessionDataChannel->isOpen() && !m_pSessionDataChannel->isBackpressured()
+		&& m_sessionSendQueue.isEmpty() && m_nCursorShapeMessageIndex < m_cursorShapeMessages.size())
+	{
+		if (!m_pSessionDataChannel->sendText(m_cursorShapeMessages[m_nCursorShapeMessageIndex]))
+			return false;
+		++m_nCursorShapeMessageIndex;
+	}
+	if (m_nCursorShapeMessageIndex == m_cursorShapeMessages.size())
+		clearCursorShapeQueue();
+	return true;
+}
+
+void KWebRtcPeer::clearCursorShapeQueue()
+{
+	m_cursorShapeMessages.clear();
+	m_nCursorShapeMessageIndex = 0;
 }
 
 KRemotePeerTransport::KSessionMessageSendStatus KWebRtcPeer::sendSessionMessage(
@@ -1615,7 +1683,10 @@ void KWebRtcPeer::handleSessionChannelChanged(bool bOpen)
 	if (bOpen)
 		flushSessionQueue();
 	else
+	{
 		m_sessionSendQueue.clear();
+		clearCursorShapeQueue();
+	}
 	emit stateChanged(m_nGeneration.load(), bOpen
 		? QStringLiteral("SessionChannelOpen")
 		: QStringLiteral("SessionChannelClosed"));
@@ -1764,7 +1835,9 @@ void KWebRtcPeer::routeDataMessage(KProtocolChannel channel,
 	context.nRole = static_cast<int>(m_role);
 	context.bRealtimeInput = bRealtimeInput;
 	const KProtocolRouteResult result = m_protocolRouter.route(channel, strMessage, context);
-	KSessionTraceLogger::write(roleToString(m_role),
+	if (result.envelope.strType != KCursorShapeMessageCodec::typeName())
+	{
+		KSessionTraceLogger::write(roleToString(m_role),
 		QStringLiteral("protocol_route"),
 		KProtocolEnvelopeCodec::channelName(channel),
 		strMessage.toUtf8().size(),
@@ -1772,6 +1845,7 @@ void KWebRtcPeer::routeDataMessage(KProtocolChannel channel,
 			.arg(result.envelope.strType)
 			.arg(static_cast<int>(result.status))
 			.arg(static_cast<int>(result.handlerResult.status)));
+	}
 	if (result.status == HandledProtocolRouteStatus)
 	{
 		if (pInvalidCount != nullptr)
@@ -1902,7 +1976,7 @@ bool KWebRtcPeer::createFactory(QString *pErrorMessage)
 	deps.audio_encoder_factory = webrtc::CreateBuiltinAudioEncoderFactory();
 	deps.audio_decoder_factory = webrtc::CreateBuiltinAudioDecoderFactory();
 	deps.video_encoder_factory = std::make_unique<KWebRtcH264EncoderFactory>(
-		m_encoderPreference);
+		m_encoderPreference, m_spFramePath);
 	deps.video_decoder_factory = std::make_unique<KWebRtcH264DecoderFactory>();
 	webrtc::EnableMedia(deps);
 	m_spFactory = webrtc::CreateModularPeerConnectionFactory(std::move(deps));
@@ -2069,7 +2143,7 @@ bool KWebRtcPeer::createFileTransferDataDataChannel(QString *pErrorMessage)
 
 bool KWebRtcPeer::addLocalVideoTrack(QString *pErrorMessage)
 {
-	m_spVideoSource = webrtc::make_ref_counted<KWebRtcVideoSource>();
+	m_spVideoSource = webrtc::make_ref_counted<KWebRtcVideoSource>(m_spFramePath);
 	webrtc::scoped_refptr<webrtc::VideoTrackInterface> spVideoTrack =
 		m_spFactory->CreateVideoTrack(m_spVideoSource, kVideoLabel);
 

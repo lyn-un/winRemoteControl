@@ -226,6 +226,10 @@ add_library(wrc_protocol STATIC
 	src/core/protocol/accessmessage.h
 	src/core/protocol/clipboardmessage.cpp
 	src/core/protocol/clipboardmessage.h
+	src/core/media/cursorshape.cpp
+	src/core/media/cursorshape.h
+	src/core/protocol/cursorshapemessage.cpp
+	src/core/protocol/cursorshapemessage.h
 	src/core/protocol/filetransfercontrolmessage.cpp
 	src/core/protocol/filetransfercontrolmessage.h
 	src/core/protocol/filetransferdataframe.cpp
@@ -805,7 +809,19 @@ target_link_libraries(wrc_udp_discovery_adapter PUBLIC
 	ws2_32
 )
 
+add_library(wrc_d3d11_video STATIC
+	src/capture/d3d11bgraframe.cpp
+	src/capture/d3d11bgraframe.h
+	src/capture/gpunv12converter.cpp
+	src/capture/gpunv12converter.h
+)
+target_include_directories(wrc_d3d11_video PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_definitions(wrc_d3d11_video PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(wrc_d3d11_video PUBLIC Qt6::Core d3d11 d3dcompiler)
+
 add_library(wrc_ffmpeg_adapter STATIC
+	src/codec/d3d11hardwareframes.cpp
+	src/codec/d3d11hardwareframes.h
 	src/codec/h264levelpolicy.cpp
 	src/codec/h264levelpolicy.h
 	src/codec/h264decoder.cpp
@@ -831,17 +847,22 @@ target_link_directories(wrc_ffmpeg_adapter PUBLIC
 )
 
 target_link_libraries(wrc_ffmpeg_adapter PUBLIC
+	wrc_d3d11_video
 	wrc_foundation
 	wrc_diagnostics
 	Qt6::Core
 	avcodec
 	avutil
 	swscale
+	d3d11
+	d3dcompiler
 	dxgi
 	"${WEBRTC_OUT}/obj/webrtc.lib"
 )
 
 add_library(wrc_webrtc_adapter STATIC
+	src/transport/webrtc/webrtcnativeframebuffer.cpp
+	src/transport/webrtc/webrtcnativeframebuffer.h
 	src/transport/webrtc/webrtch264format.cpp
 	src/transport/webrtc/webrtch264format.h
 	src/transport/webrtc/webrtccallbackgate.cpp
@@ -918,6 +939,7 @@ target_include_directories(wrc_windows_capture_adapter PUBLIC
 )
 
 target_link_libraries(wrc_windows_capture_adapter PUBLIC
+	wrc_d3d11_video
 	d3dcompiler
 	wrc_diagnostics
 	wrc_core
@@ -977,6 +999,8 @@ add_library(wrc_qt_presentation STATIC
 	src/render/remotemouseclicktracker.cpp
 	src/render/remotemouseclicktracker.h
 	src/render/videorenderwidget.cpp
+	src/render/nativecursor.cpp
+	src/render/nativecursor.h
 	src/render/d3di420pipeline.cpp
 	src/render/d3di420pipeline.h
 	src/render/videorenderwidget.h
@@ -1100,6 +1124,18 @@ target_link_libraries(winRemoteControl PRIVATE
 endif() # WRC_BUILD_APP
 
 if(WRC_BUILD_TESTS)
+	add_executable(wrc_native_cursor_tests tests/unit/nativecursortest.cpp src/render/nativecursor.cpp)
+	target_compile_definitions(wrc_native_cursor_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+	target_link_libraries(wrc_native_cursor_tests PRIVATE wrc_protocol Qt6::Core user32 gdi32)
+	add_test(NAME wrc_native_cursor_tests COMMAND wrc_native_cursor_tests)
+	add_executable(wrc_cursor_shape_tests tests/unit/cursorshapetest.cpp)
+	target_link_libraries(wrc_cursor_shape_tests PRIVATE wrc_protocol Qt6::Core)
+	add_test(NAME wrc_cursor_shape_tests COMMAND wrc_cursor_shape_tests)
+	set_tests_properties(wrc_cursor_shape_tests PROPERTIES
+		ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+	add_executable(wrc_video_frame_path_tests tests/unit/videoframepathtest.cpp)
+	target_link_libraries(wrc_video_frame_path_tests PRIVATE wrc_foundation Qt6::Core)
+	add_test(NAME wrc_video_frame_path_tests COMMAND wrc_video_frame_path_tests)
 	add_executable(wrc_automation_host_bridge_tests
 		tests/unit/automationhostbridgetest.cpp
 	)
@@ -1389,6 +1425,10 @@ if(WRC_BUILD_TESTS)
 	add_executable(wrc_windows_input_double_click_test
 		tests/manual/windowsinputdoubleclicktest.cpp
 	)
+	# Visible receive-only fixture; never injects input and is not a default CTest.
+	add_executable(wrc_remote_input_fixture tests/manual/remoteinputfixture.cpp)
+	target_link_libraries(wrc_remote_input_fixture PRIVATE user32 gdi32)
+	target_compile_definitions(wrc_remote_input_fixture PRIVATE UNICODE _UNICODE)
 	target_link_libraries(wrc_windows_input_double_click_test PRIVATE
 		wrc_windows_adapters
 		Qt6::Core
@@ -1475,6 +1515,43 @@ if(WRC_BUILD_TESTS)
 		set_tests_properties(wrc_${backend}_startup_rate_tests PROPERTIES
 			SKIP_RETURN_CODE 77 TIMEOUT 120 LABELS "vendor-hardware")
 	endforeach()
+	add_executable(wrc_gpu_hardware_frame_probe tests/unit/gpuhardwareframeprobetest.cpp)
+	add_executable(wrc_webrtc_gpu_frame_tests tests/unit/webrtcgpuframetest.cpp)
+	target_compile_definitions(wrc_webrtc_gpu_frame_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+	target_link_libraries(wrc_webrtc_gpu_frame_tests PRIVATE wrc_webrtc_adapter Qt6::Core d3d11 dxgi)
+	set_target_properties(wrc_webrtc_gpu_frame_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+	add_test(NAME wrc_webrtc_native_fallback_tests COMMAND wrc_webrtc_gpu_frame_tests --compat)
+	set_tests_properties(wrc_webrtc_native_fallback_tests PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 30)
+	foreach(backend IN ITEMS qsv amf nvenc)
+		add_test(NAME wrc_webrtc_${backend}_gpu_tests COMMAND wrc_webrtc_gpu_frame_tests h264_${backend})
+		set_tests_properties(wrc_webrtc_${backend}_gpu_tests PROPERTIES
+			SKIP_RETURN_CODE 77 TIMEOUT 120 LABELS "vendor-hardware;gpu-frame")
+	endforeach()
+	target_compile_definitions(wrc_gpu_hardware_frame_probe PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+	target_include_directories(wrc_gpu_hardware_frame_probe PRIVATE "${FFMPEG_ROOT}/include")
+	target_link_libraries(wrc_gpu_hardware_frame_probe PRIVATE wrc_ffmpeg_adapter Qt6::Core d3d11 dxgi d3dcompiler)
+	set_target_properties(wrc_gpu_hardware_frame_probe PROPERTIES
+		RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests")
+	foreach(backend IN ITEMS qsv amf nvenc)
+		add_test(NAME wrc_${backend}_gpu_frame_tests COMMAND wrc_gpu_hardware_frame_probe h264_${backend})
+		set_tests_properties(wrc_${backend}_gpu_frame_tests PROPERTIES
+			SKIP_RETURN_CODE 77 TIMEOUT 120 LABELS "vendor-hardware;gpu-frame")
+		add_test(NAME wrc_${backend}_gpu_rgb_frame_tests COMMAND wrc_gpu_hardware_frame_probe h264_${backend} --rgb)
+		set_tests_properties(wrc_${backend}_gpu_rgb_frame_tests PROPERTIES
+			SKIP_RETURN_CODE 77 TIMEOUT 120 LABELS "vendor-hardware;gpu-frame")
+	endforeach()
+	add_executable(wrc_gpu_nv12_tests tests/unit/gpunv12test.cpp)
+	add_executable(wrc_gpu_cross_adapter_probe tests/unit/gpucrossadapterprobetest.cpp)
+	target_compile_definitions(wrc_gpu_cross_adapter_probe PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+	target_link_libraries(wrc_gpu_cross_adapter_probe PRIVATE Qt6::Core d3d11 dxgi)
+	add_test(NAME wrc_gpu_cross_adapter_probe COMMAND wrc_gpu_cross_adapter_probe)
+	set_tests_properties(wrc_gpu_cross_adapter_probe PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 30 LABELS "gpu-frame;interop-probe")
+	target_compile_definitions(wrc_gpu_nv12_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+	target_include_directories(wrc_gpu_nv12_tests PRIVATE "${FFMPEG_ROOT}/include")
+	target_link_libraries(wrc_gpu_nv12_tests PRIVATE wrc_ffmpeg_adapter Qt6::Core d3d11 d3dcompiler)
+	add_test(NAME wrc_gpu_nv12_tests COMMAND wrc_gpu_nv12_tests)
+	add_test(NAME wrc_gpu_nv12_warp_tests COMMAND wrc_gpu_nv12_tests --warp)
+	set_tests_properties(wrc_gpu_nv12_tests wrc_gpu_nv12_warp_tests PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 
 	foreach(policy IN ITEMS 11 10 00 01)
 		string(SUBSTRING "${policy}" 0 1 reset)
@@ -1513,6 +1590,26 @@ if(WRC_BUILD_TESTS)
 	add_executable(wrc_capture_pipeline_tests
 		tests/unit/capturepipelinetest.cpp
 	)
+	add_executable(wrc_native_capture_tests tests/unit/nativecapturetest.cpp)
+	add_executable(wrc_dxgi_frame_lifetime_tests tests/unit/dxgiframelifetimetest.cpp)
+	target_compile_definitions(wrc_dxgi_frame_lifetime_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+	target_link_libraries(wrc_dxgi_frame_lifetime_tests PRIVATE wrc_windows_capture_adapter Qt6::Core)
+	add_test(NAME wrc_dxgi_frame_lifetime_tests COMMAND wrc_dxgi_frame_lifetime_tests)
+	set_tests_properties(wrc_dxgi_frame_lifetime_tests PROPERTIES TIMEOUT 30
+		ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+	add_executable(wrc_capture_device_probe_tests tests/unit/capturedeviceprobetest.cpp)
+	target_compile_definitions(wrc_capture_device_probe_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+	target_link_libraries(wrc_capture_device_probe_tests PRIVATE wrc_windows_capture_adapter Qt6::Core d3d11)
+	add_test(NAME wrc_capture_device_probe_tests COMMAND wrc_capture_device_probe_tests)
+	set_tests_properties(wrc_capture_device_probe_tests PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 30)
+	add_executable(wrc_capture_cursor_shape_tests tests/unit/capturecursorshapetest.cpp)
+	target_compile_definitions(wrc_capture_cursor_shape_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+	target_link_libraries(wrc_capture_cursor_shape_tests PRIVATE wrc_windows_capture_adapter Qt6::Core)
+	add_test(NAME wrc_capture_cursor_shape_tests COMMAND wrc_capture_cursor_shape_tests)
+	target_compile_definitions(wrc_native_capture_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+	target_link_libraries(wrc_native_capture_tests PRIVATE wrc_windows_capture_adapter Qt6::Core d3d11)
+	add_test(NAME wrc_native_capture_tests COMMAND wrc_native_capture_tests)
+	set_tests_properties(wrc_native_capture_tests PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 30)
 	add_executable(wrc_hdr_gpu_bgra_tests tests/unit/hdrgpubgratest.cpp)
 	add_executable(wrc_hdr_capture_benchmark tests/performance/hdrcapturebenchmark.cpp)
 	target_compile_definitions(wrc_hdr_capture_benchmark PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
@@ -1532,7 +1629,7 @@ if(WRC_BUILD_TESTS)
 		WRC_HDR_FAULT_TESTS UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 	target_include_directories(wrc_hdr_capture_fault_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 	target_link_libraries(wrc_hdr_capture_fault_tests PRIVATE
-		wrc_diagnostics wrc_core Qt6::Core Qt6::Gui d3dcompiler d3d11 dxgi dxguid ole32 psapi)
+		wrc_d3d11_video wrc_diagnostics wrc_core Qt6::Core Qt6::Gui d3dcompiler d3d11 dxgi dxguid ole32 psapi)
 	add_test(NAME wrc_hdr_capture_fault_tests COMMAND wrc_hdr_capture_fault_tests --warp)
 	set_tests_properties(wrc_hdr_capture_fault_tests PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 	set_tests_properties(wrc_hdr_gpu_bgra_tests wrc_hdr_gpu_bgra_warp_tests

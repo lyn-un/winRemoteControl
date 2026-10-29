@@ -28,7 +28,7 @@ public:
 bool TestHardwareLevels(KVideoEncoderPreference preference, bool bStartupRates)
 {
 	struct KCase { int nWidth; int nHeight; int nFps; int nLevel; };
-	const KCase cases[] = {{1280, 720, 30, 31}, {1920, 1080, 30, 40}, {1920, 1080, 60, 42},
+	const KCase cases[] = {{320, 240, 30, 30}, {1280, 720, 30, 31}, {1920, 1080, 30, 40}, {1920, 1080, 60, 42},
 		{1152, 720, 30, 31}, {1920, 1200, 30, 50}, {2560, 1440, 30, 50}};
 	for (const auto &test : cases)
 	{

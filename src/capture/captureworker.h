@@ -4,6 +4,7 @@
 #include "capture/captureframesink.h"
 #include "core/media/capturesource.h"
 #include "core/media/hdrconversionmode.h"
+#include "core/media/videoframepath.h"
 
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QObject>
@@ -25,7 +26,8 @@ public:
 	};
 
 	explicit KCaptureWorker(WorkMode mode = LocalPreviewWorkMode, QObject *pParent = nullptr,
-		KHdrConversionMode hdrMode = AutoHdrConversionMode);
+		KHdrConversionMode hdrMode = AutoHdrConversionMode,
+		std::shared_ptr<KVideoFramePathState> spFramePath = nullptr);
 	KCaptureWorker(std::unique_ptr<IKCaptureSource> upSource,
 		std::unique_ptr<IKCaptureFrameSink> upSink,
 		QObject *pParent = nullptr);
@@ -46,6 +48,7 @@ signals:
 	void captureError(const QString &strMessage);
 	void decodedFrameReady(const KDecodedVideoFrame &frame);
 	void videoFrameReady(const KVideoFrame &frame);
+	void cursorShapeReady(const KCursorShape &shape);
 	void frameReady(int nWidth, int nHeight, quint64 nFrameIndex, qint64 nTimestampMs);
 	void workFinished();
 

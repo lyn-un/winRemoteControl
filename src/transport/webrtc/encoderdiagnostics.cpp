@@ -29,8 +29,14 @@ void KEncoderDiagnostics::phase(const char *pPhase)
 		m_nFfmpegTotalUs += nUs;
 		m_nFfmpegMaxUs = std::max(m_nFfmpegMaxUs, static_cast<qint64>(nUs));
 	}
+	else if (std::strcmp(m_pPhase, "gpu_convert_submit") == 0)
+	{
+		const auto nUs = std::chrono::duration_cast<std::chrono::microseconds>(now - m_phaseSince).count();
+		m_nGpuSubmitCpuTotalUs += nUs;
+		m_nGpuSubmitCpuMaxUs = std::max(m_nGpuSubmitCpuMaxUs, static_cast<qint64>(nUs));
+	}
 	m_pPhase = pPhase;
-	if (std::strcmp(pPhase, "ffmpeg_encode") == 0)
+	if (std::strcmp(pPhase, "ffmpeg_encode") == 0 || std::strcmp(pPhase, "gpu_convert_submit") == 0)
 		++m_nSubmissions;
 	m_phaseSince = std::chrono::steady_clock::now();
 }
@@ -59,6 +65,12 @@ void KEncoderDiagnostics::finish(bool bSuccess)
 		const auto nFfmpegUs = std::chrono::duration_cast<std::chrono::microseconds>(now - m_phaseSince).count();
 		m_nFfmpegTotalUs += nFfmpegUs;
 		m_nFfmpegMaxUs = std::max(m_nFfmpegMaxUs, static_cast<qint64>(nFfmpegUs));
+	}
+	else if (std::strcmp(m_pPhase, "gpu_convert_submit") == 0)
+	{
+		const auto nUs = std::chrono::duration_cast<std::chrono::microseconds>(now - m_phaseSince).count();
+		m_nGpuSubmitCpuTotalUs += nUs;
+		m_nGpuSubmitCpuMaxUs = std::max(m_nGpuSubmitCpuMaxUs, static_cast<qint64>(nUs));
 	}
 	m_pPhase = "idle";
 	m_phaseSince = std::chrono::steady_clock::now();
@@ -130,6 +142,8 @@ void KEncoderDiagnostics::run()
 			strSummary += QStringLiteral(" outputBytes=%1 keyFrames=%2 windowUs=%3 measuredOutputBps=%4 encodeTotalUs=%5 encodeMaxUs=%6 ffmpegTotalUs=%7 ffmpegMaxUs=%8")
 				.arg(m_nOutputBytes).arg(m_nKeyFrames).arg(nWindowUs).arg(fOutputBps, 0, 'f', 0)
 				.arg(m_nEncodeTotalUs).arg(m_nEncodeMaxUs).arg(m_nFfmpegTotalUs).arg(m_nFfmpegMaxUs);
+			strSummary += QStringLiteral(" gpuSubmitCpuTotalUs=%1 gpuSubmitCpuMaxUs=%2")
+				.arg(m_nGpuSubmitCpuTotalUs).arg(m_nGpuSubmitCpuMaxUs);
 			lastSummary = now;
 			nLastBytes = m_nOutputBytes;
 			nextSummary = now + std::chrono::seconds(1);

@@ -3,6 +3,7 @@
 
 #include "core/media/videoencoderpreference.h"
 #include "core/media/hdrconversionmode.h"
+#include "core/media/videoframepath.h"
 
 #include <QtCore/QRect>
 #include <QtCore/QString>
@@ -19,7 +20,8 @@ class KMainWindow : public QMainWindow
 
 public:
 	explicit KMainWindow(KVideoEncoderPreference encoderPreference,
-		QWidget *pParent = nullptr, KHdrConversionMode hdrMode = AutoHdrConversionMode);
+		QWidget *pParent = nullptr, KHdrConversionMode hdrMode = AutoHdrConversionMode,
+		KVideoFramePathMode framePath = CpuVideoFramePath);
 	~KMainWindow() override;
 
 	KMainWindow(const KMainWindow &) = delete;

@@ -70,6 +70,7 @@ private:
 
 	SinkMode m_mode = LocalPreviewSinkMode;
 	std::unique_ptr<KVideoStageDiagnostics> m_upConversionDiagnostics;
+	std::unique_ptr<KVideoStageDiagnostics> m_upNativeDiagnostics;
 	mutable std::mutex m_configMutex;
 	mutable std::mutex m_inputTraceMutex;
 	KStreamConfig m_streamConfig;

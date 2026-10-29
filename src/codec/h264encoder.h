@@ -9,11 +9,15 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 
 struct AVCodecContext;
 struct AVFrame;
 struct AVPacket;
 struct SwsContext;
+class KD3D11BgraFrame;
+class KD3D11HardwareFrames;
+class KGpuNv12Converter;
 
 struct KNvencReconfiguration
 {
@@ -59,6 +63,14 @@ public:
 		qint64 nTimestampMs,
 		bool bForceKeyFrame,
 		QString *pErrorMessage);
+	// May only switch before the first submitted frame, after backend selection.
+	bool enableGpuFrames(const KD3D11BgraFrame &source, QString *pErrorMessage);
+	enum KGpuEncodeResult { SubmittedGpuEncodeResult, BusyGpuEncodeResult, FailedGpuEncodeResult };
+	KGpuEncodeResult encodeGpuFrame(const KD3D11BgraFrame &source, qint64 nTimestampMs,
+		bool bForceKeyFrame, QString *pErrorMessage);
+	bool usesGpuFrames() const;
+	int gpuFramePoolCapacity() const;
+	int gpuFramePoolPeakInUse() const;
 	void setBitrateKbps(int nBitrateKbps);
 	bool setLevelLimit(int nLevel);
 	void setDataCallback(const DataCallback &callback);
@@ -102,6 +114,10 @@ private:
 	KVideoEncoderPreference m_preference = AutoVideoEncoderPreference;
 	KVideoEncoderCandidate m_candidate;
 	KNvencReconfiguration m_nvencReconfiguration;
+	std::unique_ptr<KD3D11HardwareFrames> m_upGpuFrames;
+	std::unique_ptr<KGpuNv12Converter> m_upGpuConverter;
+	quint64 m_nGpuGeneration = 0;
+	quint64 m_nGpuAdapterLuid = 0;
 };
 
 #endif // _WINREMOTECONTROL_H264ENCODER_H_

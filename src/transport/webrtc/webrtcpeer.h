@@ -7,6 +7,7 @@
 #include "core/transport/outboundmessagequeue.h"
 #include "core/protocol/protocolrouter.h"
 #include "codec/h264encoder.h"
+#include "core/media/videoframepath.h"
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
@@ -45,7 +46,8 @@ class KWebRtcPeer : public KRemotePeerTransport
 
 public:
 	explicit KWebRtcPeer(QObject *pParent = nullptr);
-	KWebRtcPeer(KVideoEncoderPreference encoderPreference, QObject *pParent);
+	KWebRtcPeer(KVideoEncoderPreference encoderPreference, QObject *pParent,
+		std::shared_ptr<KVideoFramePathState> spFramePath = nullptr);
 	~KWebRtcPeer() override;
 
 	KWebRtcPeer(const KWebRtcPeer &) = delete;
@@ -72,6 +74,8 @@ public:
 		const KFileTransferControlMessage &message) override;
 	bool sendFileTransferData(const QByteArray &data) override;
 	bool fileTransferBackpressured() const override;
+	bool sendCursorShape(const KCursorShape &shape) override;
+	void clearCursorShapeQueue() override;
 	KSessionMessageSendStatus sendSessionMessage(const KSessionMessage &message) override;
 	void setInputRealtimeEnabled(bool bEnabled) override;
 	void setOrderedMouseDragEnabled(bool bEnabled) override;
@@ -162,6 +166,7 @@ private:
 	void flushInputQueue();
 	void flushRealtimeInputQueue();
 	void flushSessionQueue();
+	bool flushCursorShapeQueue();
 	void flushClipboardQueue();
 	bool enqueueInputMessage(const QString &strPayload,
 		const QString &strCoalescingKey);
@@ -193,6 +198,7 @@ private:
 	KWebRtcRemoteFrameProcessor *m_pRemoteFrameProcessor = nullptr;
 	std::unique_ptr<KWebRtcLatencyProbe> m_spLatencyProbe;
 	KVideoEncoderPreference m_encoderPreference = AutoVideoEncoderPreference;
+	std::shared_ptr<KVideoFramePathState> m_spFramePath;
 	webrtc::scoped_refptr<KWebRtcVideoSource> m_spVideoSource;
 	webrtc::scoped_refptr<webrtc::RtpSenderInterface> m_spVideoSender;
 	webrtc::scoped_refptr<webrtc::VideoTrackInterface> m_spRemoteVideoTrack;
@@ -211,6 +217,8 @@ private:
 	KOutboundMessageQueue m_inputSendQueue { 256, 64 * 1024 };
 	KOutboundMessageQueue m_realtimeInputSendQueue { 2, 4 * 1024 };
 	KOutboundMessageQueue m_sessionSendQueue { 32, 512 * 1024 };
+	QVector<QString> m_cursorShapeMessages;
+	qsizetype m_nCursorShapeMessageIndex = 0;
 	KOutboundMessageQueue m_clipboardSendQueue { 8, 1024 * 1024 };
 	KProtocolRouter m_protocolRouter;
 
