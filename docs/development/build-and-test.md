@@ -596,7 +596,10 @@ ctest --preset release -R '^wrc_hdr_' -V
 ```
 
 `wrc_hdr_capture_benchmark` 是显式运行的合成基准，不属于默认 CTest。程序参数依次为
-`cpu|gpu width height fps repetition`，固定预热 5 秒、采样约 30 秒。运行前将 Qt bin 加入 PATH。
+`cpu|gpu|desktop|d2d width height fps repetition`，固定预热 10 秒、采样约 60 秒。运行前将 Qt bin 加入 PATH。
+`gpu`保留旧GPU裁剪基线，`desktop`使用产品默认的新肩部映射，CPU为旧标量裁剪。
+`d2d` 是未通过桌面颜色门槛的隔离候选，不是产品路径。2026-10-31 前的历史结果使用 5/30 秒，
+不能将不同采样时长的 CPU 总量直接比较；当前 JSON 明确记录时长。
 输出 JSON 包含实际设备/驱动、帧数、错过截止时间、CPU 时间、帧耗时分位数、Map 等待、
 CPU 转色/行复制时间和延迟读取的 GPU timestamp 数据。末尾 8 个 query 不等待回收，另列不可用结果。
 CPU 路径包含真实旧标量转换和 FP16 staging；GPU 路径包含输入复制、离屏绘制和 BGRA8 读回。
@@ -608,7 +611,9 @@ CPU 路径包含真实旧标量转换和 FP16 staging；GPU 路径包含输入�
 ```
 
 完整矩阵为 1080p/1440p、30/60 FPS、CPU/GPU、各 3 次，串行运行，避免其他编译或测试干扰。
+新肩部映射的矩阵将比较模式换为 `gpu`/`desktop`，同样为24组，其余采样条件不变。
 上述测试不证明真实 HDR 桌面帧率、双机画质或输入延迟；这些必须经用户启动/接受的会话验证。
+Direct2D 候选的停止条件、结果与重现见 [HDR 色调映射评估](hdr-tone-mapping-evaluation.md)。
 
 2026-10-12 经用户授权，另以现有自动化驱动运行真实 HDR 双机基础 A/B：独立配置，
 正常配对并仅授予 viewScreen，AMD 被控端、Intel 控制端，libx264，2560×1440，
@@ -629,3 +634,14 @@ CPU 路径包含真实旧标量转换和 FP16 staging；GPU 路径包含输入�
 检查请求，用户确认没有这些异常，帧数正常。该反馈是人工验收依据，不是客观色彩测量。
 观察期间控制端发送画质配置变化及 stopStreaming；采样脚本随后因不再全程 Streaming
 而断言失败，保留失败记录，不把人工观察会话称为三分钟自动化全通过。
+
+## HDR 白电平参数回归
+
+`wrc_hdr_display_parameter_tests` 不采集桌面、不修改显示设置；覆盖 80/160/200/320 nit
+换算、重复值、零值、查询失败保留和输出重置策略，以及查询 API 非法参数。
+真实显示路径匹配及 Windows 亮度滑块变化仍需要设备验证，不能以该单元测试代替。
+
+`wrc_hdr_desktop_mapping_tests`及WARP变体覆盖全65536种FP16位模式的混合RGB、
+异常值净化、奇数尺寸、四档白电平与reset，对独立双精度CPU参考最大误差要求<=2。
+它同时固定中灰、白及超白阶梯门槛；不替代真实桌面主观观察。
+既有旧算法精度测试显式关闭新映射，资源循环默认覆盖新映射，共用纹理生命周期。

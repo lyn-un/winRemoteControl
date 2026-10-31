@@ -146,21 +146,35 @@ flowchart LR
 `KDxgiDesktopDuplicator` 从当前默认输出采集桌面和指针，生成与 WebRTC 无关的 BGRA `KCaptureFrame`。CaptureLoop 负责帧率、超时和取消；`KCaptureService` 管理线程、generation、Sink 选择和停止。
 
 HDR FP16 输入默认先经过 `KHdrGpuBgraConverter` 离屏绘制：复制到可复用的 FP16 SRV 纹理，
-着色器按像素读取、除以固定白电平 2.5 并裁剪，以线性 RGB 写入 sRGB RTV。硬件进行 sRGB
-曲线编码，输出 BGRA8 再复制到 CPU staging。有效读回图像数据为 4 B/像素，旧 CPU 路径为
-8 B/像素；该数值不是总线实测流量。鼠标仍在 CPU 的 BGRA 帧上合成，后续缩放和编码不变。
+着色器按像素读取、除以被采集输出的 SDR 白电平，做灰轴色域收缩及固定肩部高光压缩，
+以线性 RGB 写入 sRGB RTV。硬件进行 sRGB
+曲线编码。CPU 编码链路将 BGRA8 复制到 staging，有效读回图像数据为 4 B/像素，
+旧标量路径为8 B/像素；该数值不是总线实测流量。GPU 硬件帧链路直接使用 BGRA8 纹理，
+不进行这次读回。指针分离及兼容CPU合成行为不因本次色调映射改变。
 
 `--hdr-conversion=cpu` 保留旧标量转换用于对照；默认 `auto` 在 GPU 专属初始化失败后，
 该采集初始化周期固定回退 CPU，不逐帧重试。设备移除和公共 Map 失败仍报告采集错误。
-NaN/负无穷转黑、正无穷转白；普通有限值沿用旧算法。固定白电平与高光裁剪的色彩限制
-没有修复，这不是 HDR 端到端传输或完整色调映射。
+旧CPU诊断保持原特殊值及裁剪行为。新GPU映射将NaN归零，无穷先限到有符号FP16有限边界，
+再做色域和肩部映射，而非把每个超白通道直接裁白。白电平通过活动 DisplayConfig
+路径匹配采集输出的 GDI 设备名，再查询 target 的 `DISPLAYCONFIG_SDR_WHITE_LEVEL`；
+scale 为返回值 / 1000，白亮度为 scale × 80 nit。每秒最多查询一次，在帧边界更新。
+首次失败使用兼容默认 2.5，同一输出后续失败保留最后有效值；切换输出清除旧值。
+克隆显示匹配多个 target 时返回不支持，不猜测目标。仅在参数或错误状态变化时输出
+`HDR white level` 摘要，包含来源、查询错误和保留状态，不记录画面。
+GPU 默认采用 `desktop_reinhard_shoulder`：最大 RGB 分量不超过0.75时保持不变，
+超出后使用平移缩放的Reinhard肩部统一压缩RGB；普通白输出约240，为超白阶梯预留空间。
+不是HDR端到端传输或完整感知色域管理。CPU强制诊断及GPU不可用回退仍使用旧裁剪，
+不能把两者当成完全同色对照。Direct2D候选未接入产品。
+公式、取舍及验证状态见 [HDR 色调映射评估](../development/hdr-tone-mapping-evaluation.md)。
 
 采集共享设备不再声明 SINGLETHREADED；共享 immediate context 的复制、转换、读回及
 关闭 Flush 使用同一 mutex 串行化，不覆盖 AcquireNextFrame 等待。转换器只使用采集上下文，
 显式设置并解除自身资源绑定，不清除其他使用者的整套状态。性能及真实桌面验收状态见
 [HDR GPU 转色方案](../plans/hdr-gpu-capture.md)。
 
-WebRTC FrameSink 使用 FFmpeg `swscale` 按协商流配置缩放并转换为 I420。I420 帧通过核心媒体类型交给 WebRTC VideoSource，因此 DXGI adapter 不需要包含 WebRTC/libyuv 头文件。
+CPU链路的 WebRTC FrameSink 使用 FFmpeg `swscale` 按协商流配置缩放并转换为 I420。
+I420帧通过核心媒体类型交给WebRTC VideoSource；GPU链路使用原生帧，见本页前文。
+DXGI adapter 不需要包含 WebRTC/libyuv 头文件。
 
 静态桌面启动时，首帧后的短保护期可重推最近帧并刷新时间戳，避免软件编码器尚未输出时长期黑屏。保护期结束后仍以桌面变化驱动为主，不持续发送重复帧。
 

@@ -345,3 +345,13 @@ AMF 更新成功日志按进程最多每秒一条采样，错误不采样；采�
 开启 `--session-trace` 后，上述路径信息同时写入 `session_trace_controlled.log`，
 `stage=capture`，类型为 `hdr_conversion` / `hdr_conversion_fallback`。仅初始化、
 尺寸/格式变化和一次性失败时写入，不记录像素或指针内容，不新增逐帧落盘。
+
+## HDR 白电平查询
+
+HDR 采集启动及运行期间每秒最多查询一次当前采集输出的 SDR 白电平。
+`HDR white level` 仅在白电平或查询错误状态变化时记录，包含输出 GDI 名称、scale、
+参考亮度 nits、来源 `display_config` / `compatibility_default`、Win32 `query_error`
+和 `retained` 标志。查询失败时同屏保留已有值；无有效值时保留兼容默认 2.5。
+日志不包含画面、像素或桌面内容。`hdr_conversion`/`gpu_capture_watch` 的 `mapping`
+区分 GPU `desktop_reinhard_shoulder` 与 `legacy_or_sdr`/`sdr`；不将兼容CPU裁剪
+宣称为同一色调映射。白电平数值本身不代表高光画质验收通过。
