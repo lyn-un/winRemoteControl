@@ -1,4 +1,5 @@
 #include "capture/hdrgpubgraconverter.h"
+#include "capture/hdrtonemapper.h"
 #include "capture/mappedframeconversion.h"
 
 #include <QtCore/QCoreApplication>
@@ -65,10 +66,12 @@ int main(int nArgc, char **pArgv)
 	const auto args = app.arguments();
 	if (args.size() != 6)
 	{
-		std::cerr << "Usage: benchmark cpu|gpu width height fps repetition\n";
+		std::cerr << "Usage: benchmark cpu|gpu|desktop|d2d width height fps repetition\n";
 		return 2;
 	}
-	const bool bGpu = args[1] == QStringLiteral("gpu");
+	const bool bToneMap = args[1] == QStringLiteral("d2d");
+	const bool bDesktop = args[1] == QStringLiteral("desktop");
+	const bool bGpu = args[1] == QStringLiteral("gpu") || bToneMap || bDesktop;
 	const int nWidth = args[2].toInt(), nHeight = args[3].toInt(), nFps = args[4].toInt();
 	if ((!bGpu && args[1] != QStringLiteral("cpu")) || nWidth <= 0 || nHeight <= 0
 		|| nWidth > 4096 || nHeight > 4096 || nFps <= 0 || nFps > 144)
@@ -126,21 +129,27 @@ int main(int nArgc, char **pArgv)
 			return 1;
 	}
 	KHdrGpuBgraConverter converter;
+	converter.setDesktopToneMapping(bDesktop);
+	KHdrToneMapper toneMapper;
 	KCaptureFrame frame;
 	KMeasurements measurements;
 	std::uint64_t nFrame = 0, nMissed = 0, nInvalidQueries = 0;
 	UINT nRowPitch = 0;
 	const auto start = Clock::now();
-	const auto sampleStart = start + std::chrono::seconds(5);
-	const auto end = sampleStart + std::chrono::seconds(30);
+	const auto sampleStart = start + std::chrono::seconds(10);
+	const auto end = sampleStart + std::chrono::seconds(60);
 	const auto interval = std::chrono::microseconds(1000000 / nFps);
 	auto deadline = start;
 	double fCpuStart = -1, fCpuEnd = -1;
+	DWORD nHandlesStart = 0;
 	while (Clock::now() < end)
 	{
 		const bool bSample = Clock::now() >= sampleStart;
 		if (bSample && fCpuStart < 0)
+		{
 			fCpuStart = CpuMilliseconds();
+			GetProcessHandleCount(GetCurrentProcess(), &nHandlesStart);
+		}
 		auto &query = queries[nFrame % queries.size()];
 		if (query.bPending)
 		{
@@ -167,7 +176,12 @@ int main(int nArgc, char **pArgv)
 		spContext->Begin(query.disjoint.Get());
 		spContext->End(query.start.Get());
 		ComPtr<ID3D11Texture2D> spConverted;
-		if (bGpu && FAILED(converter.convert(spDevice.Get(), spContext.Get(), spInput.Get(), 2.5f, &spConverted)))
+		ComPtr<ID3D11Texture2D> spToneMapped;
+		if (bToneMap && FAILED(toneMapper.convert(spDevice.Get(), spContext.Get(),
+			spInput.Get(), 2.5f, 1000.0f, &spToneMapped)))
+			return 1;
+		if (bGpu && FAILED(converter.convert(spDevice.Get(), spContext.Get(),
+			bToneMap ? spToneMapped.Get() : spInput.Get(), 2.5f, &spConverted)))
 			return 1;
 		spContext->End(query.converted.Get());
 		spContext->CopyResource(spStaging.Get(), bGpu ? spConverted.Get() : spInput.Get());
@@ -204,6 +218,8 @@ int main(int nArgc, char **pArgv)
 	fCpuEnd = CpuMilliseconds();
 	PROCESS_MEMORY_COUNTERS memory = {};
 	GetProcessMemoryInfo(GetCurrentProcess(), &memory, sizeof(memory));
+	DWORD nHandlesEnd = 0;
+	GetProcessHandleCount(GetCurrentProcess(), &nHandlesEnd);
 	QJsonObject result;
 	result["mode"] = args[1];
 	result["width"] = nWidth;
@@ -218,8 +234,17 @@ int main(int nArgc, char **pArgv)
 	result["effectiveBytesPerFrame"] = static_cast<qint64>(nWidth) * nHeight * (bGpu ? 4 : 8);
 	result["rowPitch"] = static_cast<qint64>(nRowPitch);
 	result["workingSetBytes"] = static_cast<qint64>(memory.WorkingSetSize);
+	result["handlesAtSampleStart"] = static_cast<qint64>(nHandlesStart);
+	result["handlesAtSampleEnd"] = static_cast<qint64>(nHandlesEnd);
 	result["invalidQueries"] = static_cast<qint64>(nInvalidQueries);
 	result["queryTailExcluded"] = 8;
+	result["warmupSeconds"] = 10;
+	result["sampleSeconds"] = 60;
+	if (bToneMap)
+	{
+		result["referencePeakNits"] = 1000;
+		result["referencePeakSource"] = "fixed_evaluation_policy_not_content_measurement";
+	}
 	measurements.write(result, "total", measurements.total);
 	measurements.write(result, "cpuSubmit", measurements.submit);
 	measurements.write(result, "mapWait", measurements.map);

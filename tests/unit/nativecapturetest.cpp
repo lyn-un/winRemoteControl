@@ -122,7 +122,8 @@ int main(int nArgc, char **pArgv)
 		return 1;
 	std::vector<unsigned char> pixels;
 	if (FAILED(static_cast<KD3D11BgraFrame *>(hdr.spNativeFrame.get())->copyBgra(&pixels))
-		|| pixels[0] != 255 || pixels[1] != 0 || pixels[2] != 255 || pixels[3] != 255)
+		|| std::abs(static_cast<int>(pixels[0]) - 249) > 1 || pixels[1] != 0
+		|| std::abs(static_cast<int>(pixels[2]) - 202) > 1 || pixels[3] != 255)
 		return 1;
 	// Alternate physical source dimensions while the preceding frame remains
 	// owned by a consumer. Rebuilding the active pool must not invalidate it.

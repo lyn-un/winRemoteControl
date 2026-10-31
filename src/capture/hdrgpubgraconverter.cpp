@@ -9,7 +9,7 @@ namespace
 {
 constexpr char kShader[] = R"(
 Texture2D<float4> desktop : register(t0);
-cbuffer Parameters : register(b0) { float whiteScale; float3 padding; };
+cbuffer Parameters : register(b0) { float whiteScale; float toneMapping; float2 padding; };
 float4 VS(uint id : SV_VertexID) : SV_Position
 {
     float2 position = float2((id << 1) & 2, id & 2);
@@ -20,9 +20,37 @@ float CleanChannel(float value)
     // NaN has no meaningful luminance. Infinities are clipped by saturate.
     return isnan(value) ? 0.0f : saturate(value / whiteScale);
 }
+float FiniteChannel(float value)
+{
+    uint bits = asuint(value);
+    if ((bits & 0x7f800000u) == 0x7f800000u)
+        return (bits & 0x007fffffu) != 0 ? 0.0f : ((bits & 0x80000000u) != 0 ? -65504.0f : 65504.0f);
+    return value;
+}
 float4 PS(float4 position : SV_Position) : SV_Target
 {
     float3 color = desktop.Load(int3(int2(position.xy), 0)).rgb;
+    if (toneMapping > 0.5f)
+    {
+        // Finite FP16 bounds make special-value handling independent of the driver.
+        color = float3(FiniteChannel(color.r), FiniteChannel(color.g), FiniteChannel(color.b));
+        color = clamp(color / whiteScale, -65504.0f, 65504.0f);
+        // Project negative scRGB components toward the neutral axis, preserving luminance.
+        float luminance = max(dot(color, float3(0.2126f, 0.7152f, 0.0722f)), 0.0f);
+        float minimum = min(color.r, min(color.g, color.b));
+        if (minimum < 0)
+            color = lerp(luminance.xxx, color, luminance / (luminance - minimum));
+        color = max(color, 0);
+        float peak = max(color.r, max(color.g, color.b));
+        // Shifted/scaled Reinhard shoulder: identity below .75, C1 continuous at knee.
+        if (peak > 0.75f)
+        {
+            float excess = peak - 0.75f;
+            float mapped = 0.75f + 0.25f * excess / (excess + 0.25f);
+            color *= mapped / peak;
+        }
+        return float4(saturate(color), 1);
+    }
     return float4(CleanChannel(color.r), CleanChannel(color.g), CleanChannel(color.b), 1);
 }
 )";
@@ -38,6 +66,12 @@ HRESULT CompileShader(const char *pEntry, const char *pTarget, ID3DBlob **ppCode
 		pEntry, pTarget, D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_IEEE_STRICTNESS
 			| D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, ppCode, nullptr);
 }
+}
+
+void KHdrGpuBgraConverter::setDesktopToneMapping(bool bEnabled)
+{
+	m_bDesktopToneMapping = bEnabled;
+	m_fWhiteScale = 0.0f;
 }
 
 void KHdrGpuBgraConverter::reset()
@@ -197,7 +231,7 @@ HRESULT KHdrGpuBgraConverter::convert(ID3D11Device *pDevice, ID3D11DeviceContext
 	}
 	if (m_fWhiteScale != fWhiteScale)
 	{
-		const float parameters[4] = { fWhiteScale, 0, 0, 0 };
+		const float parameters[4] = { fWhiteScale, m_bDesktopToneMapping ? 1.0f : 0.0f, 0, 0 };
 		pContext->UpdateSubresource(m_spConstants.Get(), 0, nullptr, parameters, 0, 0);
 		m_fWhiteScale = fWhiteScale;
 	}

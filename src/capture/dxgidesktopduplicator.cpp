@@ -345,6 +345,11 @@ void KDxgiDesktopDuplicator::shutdown()
 	}
 
 	m_hdrConverter.reset();
+	m_hdrWhiteLevel = {};
+	m_fSdrWhiteScale = m_hdrWhiteLevel.scale();
+	m_strOutputDeviceName.clear();
+	m_nNextWhiteQuery = 0;
+	m_nLastWhiteQueryError = -1;
 	m_nativeFrames.clear();
 	m_nNativePoolDrops = 0;
 	m_bHdrGpuFailed = false;
@@ -380,6 +385,29 @@ void KDxgiDesktopDuplicator::shutdown()
 		::CoUninitialize();
 		m_bComInitialized = false;
 	}
+}
+
+void KDxgiDesktopDuplicator::refreshHdrWhiteLevel()
+{
+	if (!m_bHdrOutput || m_strOutputDeviceName.isEmpty())
+		return;
+	const ULONGLONG nNow = GetTickCount64();
+	if (nNow < m_nNextWhiteQuery)
+		return;
+	m_nNextWhiteQuery = nNow + 1000;
+	ULONG nWhiteLevel = 0;
+	const auto strDeviceName = m_strOutputDeviceName.toStdWString();
+	const LONG nError = QueryHdrSdrWhiteLevel(strDeviceName.c_str(), &nWhiteLevel);
+	const bool bChanged = m_hdrWhiteLevel.update(nError, nWhiteLevel);
+	m_fSdrWhiteScale = m_hdrWhiteLevel.scale();
+	if (bChanged || nError != m_nLastWhiteQueryError)
+	{
+		qInfo().noquote() << "HDR white level output=" << m_strOutputDeviceName
+			<< "scale=" << m_fSdrWhiteScale << "nits=" << m_fSdrWhiteScale * 80.0f
+			<< "source=" << (m_hdrWhiteLevel.isMeasured() ? "display_config" : "compatibility_default")
+			<< "query_error=" << nError << "retained=" << (nError != ERROR_SUCCESS);
+	}
+	m_nLastWhiteQueryError = nError;
 }
 
 bool KDxgiDesktopDuplicator::detectHdrOutput(const Microsoft::WRL::ComPtr<IDXGIOutput> &spOutput,
@@ -426,6 +454,12 @@ bool KDxgiDesktopDuplicator::createDuplication(const Microsoft::WRL::ComPtr<IDXG
 		return false;
 	}
 	m_outputRect = outputDesc.DesktopCoordinates;
+	m_strOutputDeviceName = QString::fromWCharArray(outputDesc.DeviceName);
+	m_hdrWhiteLevel = {};
+	m_fSdrWhiteScale = m_hdrWhiteLevel.scale();
+	m_nNextWhiteQuery = 0;
+	m_nLastWhiteQueryError = -1;
+	refreshHdrWhiteLevel();
 
 	Microsoft::WRL::ComPtr<IDXGIOutput5> spOutput5;
 	hr = spOutput.As(&spOutput5);
@@ -493,6 +527,7 @@ IKCaptureSource::CaptureResult KDxgiDesktopDuplicator::captureNextFrame(KCapture
 {
 	if (pFrame == nullptr)
 		return ErrorCaptureResult;
+	refreshHdrWhiteLevel();
 	pFrame->spNativeFrame.reset();
 	const auto path = m_spFramePath ? m_spFramePath->snapshot() : KVideoFramePathState::KSnapshot{};
 	if (path.nGeneration != m_nSourceGeneration)
@@ -1078,12 +1113,13 @@ bool KDxgiDesktopDuplicator::copyTextureToBgraFrame(ID3D11Texture2D *pSourceText
 	if (m_lastLoggedFormat != inputFormat || m_nLastLoggedWidth != sourceDesc.Width
 		|| m_nLastLoggedHeight != sourceDesc.Height)
 	{
-		const QString strPath = QStringLiteral("requested=%1 actual=%2 format=%3 width=%4 height=%5 whiteScale=%6")
+		const QString strPath = QStringLiteral("requested=%1 actual=%2 format=%3 width=%4 height=%5 whiteScale=%6 mapping=%7")
 			.arg(m_hdrMode == AutoHdrConversionMode ? QStringLiteral("auto") : QStringLiteral("cpu"))
 			.arg(spConverted ? QStringLiteral("gpu") : (inputFormat == DXGI_FORMAT_R16G16B16A16_FLOAT
 				? QStringLiteral("cpu") : QStringLiteral("sdr")))
 			.arg(static_cast<unsigned int>(inputFormat)).arg(sourceDesc.Width).arg(sourceDesc.Height)
-			.arg(m_fSdrWhiteScale);
+			.arg(m_fSdrWhiteScale)
+			.arg(spConverted ? QStringLiteral("desktop_reinhard_shoulder") : QStringLiteral("legacy_or_sdr"));
 		qInfo().noquote() << "HDR conversion" << strPath;
 		KSessionTraceLogger::write(QStringLiteral("controlled"), QStringLiteral("capture"),
 			QStringLiteral("hdr_conversion"), -1, strPath);
@@ -1216,10 +1252,10 @@ IKCaptureSource::CaptureResult KDxgiDesktopDuplicator::copyTextureToNativeFrame(
 	if (m_nFrameIndex == 1 || m_nFrameIndex % 300 == 0)
 		KSessionTraceLogger::write(QStringLiteral("controlled"), QStringLiteral("gpu_capture_watch"),
 			QStringLiteral("frame=%1 width=%2 height=%3 captureLuid=%4 readbackBytes=0 cpuConversion=0 pool=%5 "
-				"inputFormat=%6 hdrGpu=%7 sdrWhiteScale=%8")
+				"inputFormat=%6 hdrGpu=%7 sdrWhiteScale=%8 mapping=%9")
 				.arg(m_nFrameIndex).arg(pFrame->nWidth).arg(pFrame->nHeight).arg(m_nAdapterLuid)
 				.arg(m_nativeFrames.size()).arg(static_cast<int>(inputFormat)).arg(spConverted ? 1 : 0)
-				.arg(m_fSdrWhiteScale));
+				.arg(m_fSdrWhiteScale).arg(spConverted ? QStringLiteral("desktop_reinhard_shoulder") : QStringLiteral("sdr")));
 	return CapturedCaptureResult;
 }
 

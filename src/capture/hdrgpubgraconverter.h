@@ -20,6 +20,7 @@ public:
 	HRESULT convert(ID3D11Device *pDevice, ID3D11DeviceContext *pContext,
 		ID3D11Texture2D *pSource, float fWhiteScale, ID3D11Texture2D **ppOutput);
 	void reset();
+	void setDesktopToneMapping(bool bEnabled);
 
 private:
 	HRESULT initialize(ID3D11Device *pDevice);
@@ -37,6 +38,7 @@ private:
 	UINT m_nWidth = 0;
 	UINT m_nHeight = 0;
 	float m_fWhiteScale = 0.0f;
+	bool m_bDesktopToneMapping = true;
 };
 
 #endif // _WINREMOTECONTROL_HDRGPUBGRACONVERTER_H_

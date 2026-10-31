@@ -39,6 +39,7 @@ struct KHdrCaptureTestAccess
 		KHdrConversionMode mode, bool bExpectFallback, bool bExpectDeviceLoss = false)
 	{
 		KDxgiDesktopDuplicator capture(mode);
+		capture.m_hdrConverter.setDesktopToneMapping(false);
 		capture.m_spDevice = pDevice;
 		capture.m_spContext = pContext;
 		D3D11_TEXTURE2D_DESC desc = {};
@@ -331,6 +332,7 @@ int main(int nArgc, char **pArgv)
 	spDevice.As(&spMessages);
 	int nMaxError = 0;
 	KHdrGpuBgraConverter converter;
+	converter.setDesktopToneMapping(false);
 	if (!CheckImage(spDevice.Get(), spContext.Get(), converter, 256, 256, 2.5f, nMaxError)
 		|| !CheckImage(spDevice.Get(), spContext.Get(), converter, 257, 19, 2.5f, nMaxError)
 		|| !CheckImage(spDevice.Get(), spContext.Get(), converter, 127, 61, 2.5f, nMaxError, true)

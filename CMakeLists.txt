@@ -921,6 +921,8 @@ target_link_libraries(wrc_webrtc_adapter PUBLIC
 )
 
 add_library(wrc_windows_capture_adapter STATIC
+	src/capture/hdrdisplayparameters.cpp
+	src/capture/hdrdisplayparameters.h
 	src/capture/dxgidesktopduplicator.cpp
 	src/capture/dxgidesktopduplicator.h
 	src/capture/hdrgpubgraconverter.cpp
@@ -1616,9 +1618,29 @@ if(WRC_BUILD_TESTS)
 	add_test(NAME wrc_native_capture_tests COMMAND wrc_native_capture_tests)
 	set_tests_properties(wrc_native_capture_tests PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 30)
 	add_executable(wrc_hdr_gpu_bgra_tests tests/unit/hdrgpubgratest.cpp)
+	add_executable(wrc_hdr_desktop_mapping_tests tests/unit/hdrdesktopmappingtest.cpp)
+	target_compile_definitions(wrc_hdr_desktop_mapping_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+	target_link_libraries(wrc_hdr_desktop_mapping_tests PRIVATE wrc_windows_capture_adapter)
+	add_test(NAME wrc_hdr_desktop_mapping_tests COMMAND wrc_hdr_desktop_mapping_tests)
+	add_test(NAME wrc_hdr_desktop_mapping_warp_tests COMMAND wrc_hdr_desktop_mapping_tests --warp)
+	set_tests_properties(wrc_hdr_desktop_mapping_tests wrc_hdr_desktop_mapping_warp_tests
+		PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+	# Candidate stays outside the application until desktop color acceptance passes.
+	add_library(wrc_hdr_tonemap_candidate STATIC src/capture/hdrtonemapper.cpp src/capture/hdrtonemapper.h)
+	target_include_directories(wrc_hdr_tonemap_candidate PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+	target_compile_definitions(wrc_hdr_tonemap_candidate PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+	target_link_libraries(wrc_hdr_tonemap_candidate PUBLIC d2d1 d3d11 dxgi dxguid)
+	add_executable(wrc_hdr_tonemap_evaluation tests/unit/hdrtonemaptest.cpp)
+	target_link_libraries(wrc_hdr_tonemap_evaluation PRIVATE wrc_windows_capture_adapter wrc_hdr_tonemap_candidate)
+	add_test(NAME wrc_hdr_tonemap_resource_tests COMMAND wrc_hdr_tonemap_evaluation --resources)
+	set_tests_properties(wrc_hdr_tonemap_resource_tests PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+	add_executable(wrc_hdr_display_parameter_tests tests/unit/hdrdisplayparameterstest.cpp)
+	target_link_libraries(wrc_hdr_display_parameter_tests PRIVATE wrc_windows_capture_adapter)
+	add_test(NAME wrc_hdr_display_parameter_tests COMMAND wrc_hdr_display_parameter_tests)
 	add_executable(wrc_hdr_capture_benchmark tests/performance/hdrcapturebenchmark.cpp)
 	target_compile_definitions(wrc_hdr_capture_benchmark PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 	target_link_libraries(wrc_hdr_capture_benchmark PRIVATE wrc_windows_capture_adapter psapi)
+	target_link_libraries(wrc_hdr_capture_benchmark PRIVATE wrc_hdr_tonemap_candidate)
 	target_compile_definitions(wrc_hdr_gpu_bgra_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 	target_link_libraries(wrc_hdr_gpu_bgra_tests PRIVATE wrc_windows_capture_adapter psapi)
 	add_test(NAME wrc_hdr_gpu_bgra_tests COMMAND wrc_hdr_gpu_bgra_tests)
@@ -1627,6 +1649,7 @@ if(WRC_BUILD_TESTS)
 	set_tests_properties(wrc_hdr_resource_cycle_tests PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 	# Compile injection hooks only into this isolated executable, never the app adapter.
 	add_executable(wrc_hdr_capture_fault_tests
+		src/capture/hdrdisplayparameters.cpp
 		tests/unit/hdrgpubgratest.cpp
 		src/capture/hdrgpubgraconverter.cpp
 		src/capture/dxgidesktopduplicator.cpp)

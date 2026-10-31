@@ -4,6 +4,7 @@
 #include "core/media/capturesource.h"
 #include "core/media/hdrconversionmode.h"
 #include "capture/hdrgpubgraconverter.h"
+#include "capture/hdrdisplayparameters.h"
 #include "capture/d3d11bgraframe.h"
 #include "core/media/videoframepath.h"
 
@@ -35,6 +36,7 @@ public:
 private:
 	friend struct KHdrCaptureTestAccess;
 	bool initializeDevice(QString *pErrorMessage);
+	void refreshHdrWhiteLevel();
 	bool detectHdrOutput(const Microsoft::WRL::ComPtr<IDXGIOutput> &spOutput, QString *pErrorMessage);
 	bool createDuplication(const Microsoft::WRL::ComPtr<IDXGIOutput> &spOutput, QString *pErrorMessage);
 	CaptureResult releaseCapturedFrame(CaptureResult result, QString *pErrorMessage);
@@ -61,6 +63,10 @@ private:
 	DXGI_FORMAT m_captureFormat = DXGI_FORMAT_UNKNOWN;
 	RECT m_outputRect = {};
 	float m_fSdrWhiteScale = 2.5f;
+	KHdrWhiteLevelState m_hdrWhiteLevel;
+	QString m_strOutputDeviceName;
+	ULONGLONG m_nNextWhiteQuery = 0;
+	LONG m_nLastWhiteQueryError = -1;
 	KHdrGpuBgraConverter m_hdrConverter;
 	KHdrConversionMode m_hdrMode = AutoHdrConversionMode;
 	bool m_bHdrGpuFailed = false;
